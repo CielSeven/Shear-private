@@ -1,0 +1,12 @@
+{
+  "listrep": ["sll", 1],
+  "lseg": ["sllseg", 1],
+  "dlistrep_shape": ["dlistrep", 1],
+  "dllseg_shape": ["dllseg", 1],
+  "dllsegR_shape": ["dllsegR", 1],
+  "sll": ["sll", 1],
+  "sllseg": ["sllseg", 1],
+  "dlistrep": ["dlistrep", 1],
+  "dllseg": ["dllseg", 1],
+  "dllsegR": ["dllsegR", 1]
+}

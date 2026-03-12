@@ -1,0 +1,22 @@
+# Generated output and logs
+output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Environment / secrets
+.env
+CONFIGURE
+
+# Editors / OS
+.DS_Store
+.pytest_cache/
+CLAUDE.md
+GEMINI.md
+.claude/
+
+# dataset
+dataset/
