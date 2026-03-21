@@ -1,4 +1,5 @@
 # guardgen/predicates/__init__.py
-# Importing these modules has the side effect of registering predicates.
-from .sll import *          # noqa: F401,F403
-from .tree import *         # noqa: F401,F403
+# Load built-in predicates from JSON configuration in GenMonads/data.
+from ..registry import load_predicates_from_json
+
+load_predicates_from_json()

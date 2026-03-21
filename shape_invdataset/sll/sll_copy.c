@@ -1,18 +1,8 @@
 #include "verification_stdlib.h"
 #include "verification_list.h"
 #include "sll_shape_def.h"
+#include "sll_runtime_def.h"
 
-struct list* malloc_list(int data)
-/*@ With data0 
-    Require data == data0 && emp
-    Ensure __return != 0 && __return -> data == data0 && __return -> next == 0
-*/;
-
-void free_list(struct list * x)
-/*@ With d n 
-    Require x -> data == d && x -> next == n
-    Ensure emp
-*/;
 
 struct list * sll_copy(struct list * x)
 /*@ Require listrep(x)
@@ -33,4 +23,3 @@ struct list * sll_copy(struct list * x)
     free_list(t);
     return y;
 }
-

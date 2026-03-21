@@ -2,11 +2,6 @@
 #include "verification_list.h"
 #include "dll_shape_def.h"
 
-struct list* malloc_dlist(int data)
-/*@ With data0 
-    Require data == data0 && emp
-    Ensure __return != 0 && __return -> data == data0 && __return -> next == 0 && __return -> prev == 0
-*/;
 
 struct list * dll_copy(struct list * x)
 /*@ Require dlistrep_shape(x, 0)

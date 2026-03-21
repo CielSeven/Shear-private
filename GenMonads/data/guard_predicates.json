@@ -1,0 +1,42 @@
+{
+  "sll": {
+    "kind": "root",
+    "arity": 2,
+    "payload": {
+      "ptr": 0,
+      "abs": 1
+    },
+    "abs_names": ["abs"],
+    "root_null": {
+      "eq": "{abs} = []",
+      "ne": "{abs} <> []"
+    }
+  },
+  "sllseg": {
+    "kind": "segment",
+    "arity": 3,
+    "payload": {
+      "start": 0,
+      "end": 1,
+      "seg_abs": 2
+    },
+    "abs_names": ["seg_abs"],
+    "segment_eq": {
+      "eq": "{seg_abs} = []",
+      "ne": "{seg_abs} <> []"
+    }
+  },
+  "store_tree": {
+    "kind": "root",
+    "arity": 2,
+    "payload": {
+      "ptr": 0,
+      "abs": 1
+    },
+    "abs_names": ["abs"],
+    "root_null": {
+      "eq": "{abs} = empty",
+      "ne": "{abs} <> empty"
+    }
+  }
+}

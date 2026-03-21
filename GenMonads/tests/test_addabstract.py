@@ -105,19 +105,19 @@ class TestFuncSpecSafeExec:
 
     def test_add_safeexec_to_require_basic(self):
         result = add_safeexec_to_require("sll(x, ?l1)", ['?l1'], "sll_copy_M")
-        assert result == "safeExec(ATrue, sll_copy_M(?l1), X) && sll(x, ?l1)"
+        assert result == "exists l1, safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)"
 
     def test_add_safeexec_to_require_multiple_vars(self):
         result = add_safeexec_to_require("sll(x, ?l1) * sll(y, ?l2)", ['?l1', '?l2'], "sll_append_M")
-        assert "safeExec(ATrue, sll_append_M(?l1, ?l2), X)" in result
+        assert "exists l1 l2, safeExec(ATrue, sll_append_M(l1, l2), X)" in result
 
     def test_add_safeexec_to_ensure_basic(self):
         result = add_safeexec_to_ensure("sll(__return, ?l2) * sll(x, ?l3)", ['?l2', '?l3'])
-        assert result == "safeExec(ATrue, return(?l2, ?l3), X) && sll(__return, ?l2) * sll(x, ?l3)"
+        assert result == "exists l2 l3, safeExec(ATrue, return(maketuple(l2, l3)), X) && sll(__return, l2) * sll(x, l3)"
 
     def test_add_safeexec_to_ensure_single_var(self):
         result = add_safeexec_to_ensure("sll(__return, ?l1)", ['?l1'])
-        assert "safeExec(ATrue, return(?l1), X)" in result
+        assert "exists l1, safeExec(ATrue, return(l1), X)" in result
 
     def test_process_funcspec_complete(self):
         funcspec = {
@@ -127,9 +127,9 @@ class TestFuncSpecSafeExec:
         }
         result = process_funcspec_with_safeexec(funcspec, "sll_copy_M")
         assert result['with']['original'] is None
-        assert result['with']['translated'] == 'X'
-        assert 'safeExec(ATrue, sll_copy_M(?l1), X)' in result['require']['with_safeexec']
-        assert 'safeExec(ATrue, return(?l2, ?l3), X)' in result['ensure']['with_safeexec']
+        assert result['with']['translated'] == 'X l1'
+        assert result['require']['with_safeexec'] == 'safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)'
+        assert 'exists l2 l3, safeExec(ATrue, return(maketuple(l2, l3)), X)' in result['ensure']['with_safeexec']
 
     def test_funcspec_with_existing_with(self):
         funcspec = {

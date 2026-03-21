@@ -60,10 +60,17 @@ class Parser:
     def parse_atomic_cond(self) -> AtomCond:
         """
         Accept a bare identifier "p" as sugar for "p != null".
-        The translation layer will validate that 'p' is a spatial root pointer.
+        Also accept "p->field" as a compound pointer name (sugar for "p->field != null").
+        The translation layer will validate that the pointer is a spatial root pointer.
         """
         left_tok = self.eat("ID")
         left = left_tok.text
+
+        # Handle field dereference: p->next becomes compound name "p->next"
+        if self.peek() and self.peek().kind == "ARROW":
+            self.eat("ARROW")
+            field_tok = self.eat("ID")
+            left = f"{left}->{field_tok.text}"
 
         op = self.peek()
         # If no operator (or boundary), treat "p" as "p != null"

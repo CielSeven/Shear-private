@@ -12,6 +12,7 @@ _TOKEN_REGEX = re.compile(
         (?P<LPAREN>\()|
         (?P<RPAREN>\))|
         (?P<EQ>==)|
+        (?P<ARROW>->)|
         (?P<ID>[A-Za-z_][A-Za-z0-9_]*)|
         (?P<NUM>0)
     """, re.VERBOSE

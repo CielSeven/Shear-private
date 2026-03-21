@@ -12,3 +12,15 @@ struct list {
 /*@ Import Coq Require Import dll_shape_lib */
 
 /*@ include strategies "dll_shape.strategies" */
+
+struct list* malloc_dlist(int data)
+/*@ With data0 
+    Require data == data0 && emp
+    Ensure __return != 0 && __return -> data == data0 && __return -> next == 0 && __return -> prev == 0
+*/;
+
+void free_dlist(struct list * x)
+/*@ With d n p
+    Require x -> data == d && x -> next == n && x -> prev == p
+    Ensure emp
+*/;

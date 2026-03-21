@@ -210,6 +210,8 @@ def add_safeexec_to_require(
     """
     Add safeExec predicate to a translated Require assertion.
 
+    Strips ? prefix from variables, wraps with exists quantifier.
+
     Args:
         translated_require: Translated require assertion, e.g., "sll(x, ?l1)"
         generated_vars: List of generated variables, e.g., ['?l1']
@@ -218,27 +220,41 @@ def add_safeexec_to_require(
         postcondition: Postcondition for safeExec (default: "X")
 
     Returns:
-        Require assertion with safeExec added, e.g.,
-        "safeExec(ATrue, sll_copy_M(?l1), X) && sll(x, ?l1)"
+        Require assertion with exists and safeExec added, e.g.,
+        "exists l1, safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)"
 
     Example:
         Input:  "sll(x, ?l1)", ['?l1'], "sll_copy_M"
-        Output: "safeExec(ATrue, sll_copy_M(?l1), X) && sll(x, ?l1)"
+        Output: "exists l1, safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)"
     """
-    # Build the program call with variables
-    if generated_vars:
-        # Keep the ? prefix for require variables
-        var_args = ', '.join(generated_vars)
+    # Strip ? prefix from variables
+    clean_vars = [v.lstrip('?') for v in generated_vars]
+
+    # Build the program call with clean variables
+    if clean_vars:
+        var_args = ', '.join(clean_vars)
         program_call = f"{program}({var_args})"
     else:
-        # No variables - no parentheses
         program_call = program
 
     # Build the safeExec predicate
     safeexec_pred = f"safeExec({precondition}, {program_call}, {postcondition})"
 
+    # Replace ?-prefixed vars in the assertion body
+    body = translated_require
+    for var in generated_vars:
+        if var.startswith('?'):
+            body = body.replace(var, var[1:])
+
     # Combine with the original assertion
-    result = f"{safeexec_pred} && {translated_require}"
+    combined = f"{safeexec_pred} && {body}"
+
+    # Wrap with exists if there are variables
+    if clean_vars:
+        exists_vars = ' '.join(clean_vars)
+        result = f"exists {exists_vars}, {combined}"
+    else:
+        result = combined
 
     return result
 
@@ -252,6 +268,8 @@ def add_safeexec_to_ensure(
     """
     Add safeExec predicate to a translated Ensure assertion.
 
+    Strips ? prefix from variables, wraps with exists quantifier.
+
     Args:
         translated_ensure: Translated ensure assertion, e.g., "sll(__return, ?l2) * sll(x, ?l3)"
         generated_vars: List of generated variables, e.g., ['?l2', '?l3']
@@ -259,27 +277,43 @@ def add_safeexec_to_ensure(
         postcondition: Postcondition for safeExec (default: "X")
 
     Returns:
-        Ensure assertion with safeExec added, e.g.,
-        "safeExec(ATrue, return(?l2, ?l3), X) && sll(__return, ?l2) * sll(x, ?l3)"
+        Ensure assertion with exists and safeExec added, e.g.,
+        "exists l2 l3, safeExec(ATrue, return(l2, l3), X) && sll(__return, l2) * sll(x, l3)"
 
     Example:
         Input:  "sll(__return, ?l2) * sll(x, ?l3)", ['?l2', '?l3']
-        Output: "safeExec(ATrue, return(?l2, ?l3), X) && sll(__return, ?l2) * sll(x, ?l3)"
+        Output: "exists l2 l3, safeExec(ATrue, return(l2, l3), X) && sll(__return, l2) * sll(x, l3)"
     """
-    # Build the return call with variables
-    if generated_vars:
-        # Keep the ? prefix for ensure variables
-        var_args = ', '.join(generated_vars)
-        return_call = f"return({var_args})"
+    # Strip ? prefix from variables
+    clean_vars = [v.lstrip('?') for v in generated_vars]
+
+    # Build the return call with clean variables
+    if len(clean_vars) > 1:
+        var_args = ', '.join(clean_vars)
+        return_call = f"return(maketuple({var_args}))"
+    elif len(clean_vars) == 1:
+        return_call = f"return({clean_vars[0]})"
     else:
-        # No variables - no parentheses
         return_call = "return"
 
     # Build the safeExec predicate
     safeexec_pred = f"safeExec({precondition}, {return_call}, {postcondition})"
 
+    # Replace ?-prefixed vars in the assertion body
+    body = translated_ensure
+    for var in generated_vars:
+        if var.startswith('?'):
+            body = body.replace(var, var[1:])
+
     # Combine with the original assertion
-    result = f"{safeexec_pred} && {translated_ensure}"
+    combined = f"{safeexec_pred} && {body}"
+
+    # Wrap with exists if there are variables
+    if clean_vars:
+        exists_vars = ' '.join(clean_vars)
+        result = f"exists {exists_vars}, {combined}"
+    else:
+        result = combined
 
     return result
 
@@ -311,20 +345,22 @@ def process_funcspec_with_safeexec(
              'ensure': {'translated': 'sll(__return, ?l2) * sll(x, ?l3)'}}
 
         Output:
-            {'with': {'original': None, 'translated': 'X'},
-             'require': {'with_safeexec': 'safeExec(ATrue, sll_copy_M(?l1), X) && sll(x, ?l1)', ...},
-             'ensure': {'with_safeexec': 'safeExec(ATrue, return(?l2, ?l3), X) && sll(__return, ?l2) * sll(x, ?l3)', ...}}
+            {'with': {'original': None, 'translated': 'X l1'},
+             'require': {'with_safeexec': 'safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)', ...},
+             'ensure': {'with_safeexec': 'exists l2 l3, safeExec(ATrue, return(l2, l3), X) && ...', ...}}
     """
     # First add the With parameter
     result = add_with_parameter(funcspec, parameter)
 
-    # Process Require
+    # Process Require — produces exists-wrapped result, then lift exists into With
+    require_clean_vars = []
     if result.get('require') and result['require'].get('translated'):
         require = result['require'].copy()
         translated = require['translated']
 
         # Extract variables from the translated assertion
         require_vars = extract_variables_from_assertion(translated)
+        require_clean_vars = [v.lstrip('?') for v in require_vars]
 
         require['with_safeexec'] = add_safeexec_to_require(
             translated,
@@ -333,9 +369,21 @@ def process_funcspec_with_safeexec(
             precondition,
             parameter  # postcondition is the parameter (X)
         )
+
+        # Strip the exists wrapper — those vars go into With instead
+        if require_clean_vars:
+            exists_prefix = f"exists {' '.join(require_clean_vars)}, "
+            if require['with_safeexec'].startswith(exists_prefix):
+                require['with_safeexec'] = require['with_safeexec'][len(exists_prefix):]
+
         result['require'] = require
 
-    # Process Ensure
+    # Lift Require's existential vars into the With clause
+    if require_clean_vars and result.get('with'):
+        current_with = result['with']['translated']
+        result['with']['translated'] = f"{current_with} {' '.join(require_clean_vars)}"
+
+    # Process Ensure — keeps exists wrapper
     if result.get('ensure') and result['ensure'].get('translated'):
         ensure = result['ensure'].copy()
         translated = ensure['translated']

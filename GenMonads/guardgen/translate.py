@@ -1,10 +1,22 @@
 # guardgen/translate.py
-from .parsing.invariant import normalize_inv, parse_invariant
+from .parsing.invariant import normalize_inv, parse_invariant, extract_pure_aliases
 from .cond.parser import parse_cond_full
 from .cond.ast import BoolNode, AtomKind
 from .parsing.invariant import ShAtom
 
-def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom]) -> str:
+def _normalize_ptr(name: str) -> str:
+    """Normalize pointer names: strip spaces around '->' for consistent lookup.
+
+    Invariant annotations may have 'u -> next' (with spaces) while
+    condition expressions produce 'u->next' (no spaces). This ensures
+    they match when used as dictionary keys.
+    """
+    import re
+    return re.sub(r'\s*->\s*', '->', name)
+
+
+def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
+                      aliases: dict[str, str] | None = None) -> str:
     """
     Translation with two important behaviors:
       1) Bare 'p' is parsed as 'p == null', and '! p' as 'p != null'.
@@ -25,18 +37,32 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom]) -> str:
             ptr = a.payload.get("ptr")
             if not isinstance(ptr, str):
                 raise ValueError(f"Root predicate '{a.spec.name}' must provide 'ptr' in payload")
-            roots_by_ptr[ptr] = a
+            roots_by_ptr[_normalize_ptr(ptr)] = a
         elif a.spec.kind == "segment":
             segs.append(a)
             st, ed = a.payload.get("start"), a.payload.get("end")
-            if isinstance(st, str): seg_ptrs.add(st)
-            if isinstance(ed, str): seg_ptrs.add(ed)
+            if isinstance(st, str): seg_ptrs.add(_normalize_ptr(st))
+            if isinstance(ed, str): seg_ptrs.add(_normalize_ptr(ed))
+
+    def _resolve_ptr(ptr: str) -> str:
+        """Resolve a pointer name through aliases if not directly in roots/segs."""
+        nptr = _normalize_ptr(ptr)
+        if nptr in roots_by_ptr or nptr in seg_ptrs:
+            return nptr
+        if aliases:
+            alias = aliases.get(nptr)
+            if alias and _normalize_ptr(alias) in roots_by_ptr:
+                return _normalize_ptr(alias)
+            if alias and _normalize_ptr(alias) in seg_ptrs:
+                return _normalize_ptr(alias)
+        return nptr
 
     def _render_root_null(ptr: str, is_eq: bool) -> str:
-        root_atom = roots_by_ptr.get(ptr)
+        resolved = _resolve_ptr(ptr)
+        root_atom = roots_by_ptr.get(resolved)
         if root_atom is None:
             # Improve diagnostics depending on spatial occurrence
-            if ptr in seg_ptrs:
+            if resolved in seg_ptrs:
                 raise ValueError(
                     f"Null-check for '{ptr}' is unsupported: '{ptr}' appears only in segment predicates; "
                     f"add a root predicate (e.g., sll({ptr}, ...)) if you need to relate it to null."
@@ -53,11 +79,14 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom]) -> str:
     def _render_seg_eq(x: str, y: str, is_eq: bool) -> str:
         hit = None
         reversed_match = False
+        nx, ny = _resolve_ptr(x), _resolve_ptr(y)
         for seg in segs:
             st, ed = seg.payload.get("start"), seg.payload.get("end")
-            if st == x and ed == y:
+            nst = _normalize_ptr(st) if isinstance(st, str) else st
+            ned = _normalize_ptr(ed) if isinstance(ed, str) else ed
+            if nst == nx and ned == ny:
                 hit = seg; reversed_match = False; break
-            if st == y and ed == x:
+            if nst == ny and ned == nx:
                 hit = seg; reversed_match = True; break
         if hit is None:
             raise ValueError(f"No segment predicate for ({x},{y}) found in invariant")
@@ -109,6 +138,7 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom]) -> str:
 def gen_coq_guard(inv: str, cond: str) -> str:
     inv_norm = normalize_inv(inv)
     atoms = parse_invariant(inv_norm)
+    pure_aliases = extract_pure_aliases(inv)
 
     # Normalize (void *)0 to 0 before parsing
     # This handles C null pointer literal: (void *)0 == null
@@ -116,7 +146,7 @@ def gen_coq_guard(inv: str, cond: str) -> str:
     cond_normalized = re.sub(r'\(\s*void\s*\*\s*\)\s*0', '0', cond)
 
     ast = parse_cond_full(cond_normalized)
-    body = gen_coq_from_bool(ast, atoms)
+    body = gen_coq_from_bool(ast, atoms, aliases=pure_aliases)
 
     # Bind abstract names in INV order
     abs_names: list[str] = []

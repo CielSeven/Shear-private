@@ -2,11 +2,6 @@
 #include "verification_list.h"
 #include "dll_shape_def.h"
 
-struct list *merge(struct list *x , struct list *y)
-/*@ With x_prev 
-    Require dlistrep_shape(x,x_prev) * dlistrep_shape(y,0)
-    Ensure  dlistrep_shape(__return,x_prev)
- */;
 
 struct list *dll_multi_merge(struct list *x , struct list *y, struct list *z)
 /*@ Require dlistrep_shape(x,0) * dlistrep_shape(y,0) * dlistrep_shape(z,0)

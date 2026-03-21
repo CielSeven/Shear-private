@@ -42,6 +42,15 @@ class FieldAccess:
 
 
 @dataclass
+class Deref:
+    """Pointer dereference (e.g., *head)."""
+    expr: 'Expr'
+
+    def __repr__(self):
+        return f"Deref({self.expr})"
+
+
+@dataclass
 class Predicate:
     """Shape predicate (e.g., listrep(x), lseg(x,y))."""
     name: str
@@ -80,7 +89,7 @@ class Exists:
 
 
 # Type aliases for clarity
-Expr = Union[Var, BinOp, FieldAccess, int]
+Expr = Union[Var, BinOp, FieldAccess, Deref, int]
 Formula = Union[BinOp, Predicate, SepConj, AndConj, Exists]
 
 
@@ -140,6 +149,10 @@ class AssertionParser:
     def parse_expr(self) -> Expr:
         """Parse an expression (variable, number, or field access)."""
         self.skip_whitespace()
+
+        # Unary pointer dereference
+        if self.consume('*'):
+            return Deref(self.parse_expr())
 
         # Try to parse number
         num = self.parse_number()
@@ -394,6 +407,9 @@ def recover_expr(expr: Expr) -> str:
     elif isinstance(expr, FieldAccess):
         obj_str = recover_expr(expr.obj)
         return f"{obj_str} -> {expr.field}"
+    elif isinstance(expr, Deref):
+        inner = recover_expr(expr.expr)
+        return f"*{inner}"
     elif isinstance(expr, BinOp):
         left_str = recover_expr(expr.left)
         right_str = recover_expr(expr.right)

@@ -11,11 +11,13 @@ source "$CONFIG_FILE"
 START_DIR="$REPO_ROOT"
 
 # --- Parse CLI overrides
+FILE_ARG=""
 for arg in "$@"; do
   case $arg in
     -C_DIR=*|--C_DIR=*)         C_DIR="${arg#*=}";;
     -LOGDIR=*|--LOGDIR=*)       LOGDIR="${arg#*=}";;
     -OUTPUT_PATH=*|--OUTPUT_PATH=*) OUTPUT_PATH="${arg#*=}";;
+    -FILE=*|--FILE=*)           FILE_ARG="${arg#*=}";;
     *) echo "Unknown arg: $arg";;
   esac
 done
@@ -31,10 +33,18 @@ C_DIR_ABS="$(abspath "$C_DIR")"
 LOGDIR_ABS="$(abspath "$LOGDIR")"
 OUTPUT_ABS="$(abspath "$OUTPUT_PATH")"
 
-[ -d "$C_DIR_ABS" ] || { echo "C_DIR not a directory: $C_DIR_ABS"; exit 1; }
-
 count=0
-for f in "$C_DIR_ABS"/*.c; do
+
+if [ -n "$FILE_ARG" ]; then
+  file_abs="$(abspath "$FILE_ARG")"
+  [ -f "$file_abs" ] || { echo "FILE not found: $file_abs"; exit 1; }
+  FILES=("$file_abs")
+else
+  [ -d "$C_DIR_ABS" ] || { echo "C_DIR not a directory: $C_DIR_ABS"; exit 1; }
+  FILES=("$C_DIR_ABS"/*.c)
+fi
+
+for f in "${FILES[@]}"; do
   [ -f "$f" ] || continue
   base="$(basename "${f%.c}")"
   for target in \
@@ -50,4 +60,8 @@ for f in "$C_DIR_ABS"/*.c; do
   done
 done
 
-echo "Removed $count files for C_DIR=$C_DIR_ABS"
+if [ -n "$FILE_ARG" ]; then
+  echo "Removed $count files for FILE=$FILE_ARG"
+else
+  echo "Removed $count files for C_DIR=$C_DIR_ABS"
+fi
