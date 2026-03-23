@@ -1,0 +1,15 @@
+{
+  "id": "sll_reverse",
+  "version": 1,
+  "pattern": "reversal",
+  "functional_spec": "result = rev(input)",
+  "selection_tags": [
+    "single-loop",
+    "reversal",
+    "accumulator",
+    "single-return"
+  ],
+  "notes": "Canonical accumulator-style singly linked list reversal example.",
+  "author": "human",
+  "reviewed": true
+}

@@ -1,0 +1,17 @@
+-Q /Users/cielseven/Projects/LLM4PV/output/gen/libs ""
+-Q /Users/cielseven/Projects/LLM4PV/output/gen/vcs ""
+-Q /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/examples ""
+-Q /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/Examples/QCPexample/VC/strategy_proof ""
+
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/sets SetsClass
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/unifysl Logic
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/compcert_lib compcert.lib
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/auxlibs AUXLib
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/EncRelSeq EncRelSeq
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/Language LangLib
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/Examples Examples
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/fixedpoints FP
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/monadlib MonadLib
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/SeparationLogic SimpleC.SL
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/examples SimpleC.EE
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/StrategyLib SimpleC.StrategyLib

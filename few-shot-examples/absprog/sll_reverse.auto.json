@@ -1,0 +1,49 @@
+{
+  "id": "sll_reverse",
+  "version": 1,
+  "source": {
+    "c_file": "shape_invdataset/sll/sll_reverse.c"
+  },
+  "predicate_family": "sll",
+  "summary": {
+    "func_name": "sll_reverse"
+  },
+  "features": {
+    "loop_count": 1,
+    "require_var_count": 1,
+    "inv_var_count": 2,
+    "ensure_var_count": 1,
+    "has_seg_predicate": false,
+    "has_multi_return": false
+  },
+  "prompt_context": {
+    "c_source": "struct list* sll_reverse(struct list* head)\n/*@\n      Require listrep(head)\n      Ensure listrep(__return)\n*/\n{\n    struct list* prev = (void *)0;\n    struct list* curr = head;\n    /*@ Inv listrep(prev) * listrep(curr)\n      */\n    while (curr != (void *) 0) {\n        struct list* next = curr->next;\n        curr->next = prev;\n        prev = curr;\n        curr = next;\n    }\n    return prev;\n}",
+    "with_clause": "X l1",
+    "require_with_safeexec": "safeExec(ATrue, sll_reverse_M(l1), X) && sll(head, l1)",
+    "ensure_with_safeexec": "exists l2, safeExec(ATrue, return(l2), X) && sll(__return, l2)",
+    "loop_invariant_with_safeexec": "exists l1 l2, safeExec(ATrue, bind(sll_reverse_M_loop(l1,l2), sll_reverse_M_loop_end), X) && sll(prev, l1) * sll(curr, l2)",
+    "loop_condition": "curr != (void *) 0",
+    "guard_coq": "fun a =>\n  let '(l1, l2) := a in\n  l2 <> []"
+  },
+  "signatures": {
+    "M_loop_before": "list Z -> MONAD (list Z * list Z)",
+    "M_1": "(list Z * list Z) -> MONAD MretTy",
+    "M_2": "(list Z * list Z) -> MONAD (list Z * list Z)",
+    "M_loop_end": "MretTy -> MONAD (list Z)",
+    "M": "list Z -> MONAD (list Z)"
+  },
+  "gold": {
+    "rel_lib_file": "few-shot-examples/absprog/sll_reverse_rel_lib.v",
+    "MretTy": "list Z",
+    "components": {
+      "M_loop_before": "Definition sll_reverse_M_loop_before : list Z -> MONAD (list Z * list Z) :=\n  fun l => return (nil, l).",
+      "M_1": "Definition sll_reverse_M_loop_M1 : (list Z * list Z) -> MONAD MretTy:=\n fun '(l1,l2) => return l1.",
+      "M_2": "Definition sll_reverse_M_loop_M2 : (list Z * list Z) -> MONAD (list Z * list Z) :=\n  fun '(l1,l2) =>\n    match l2 with\n    | nil => return (l1,l2) (* impossible *)\n    | v :: l2' => return (v :: l1, l2')\n    end.",
+      "M_loop_end": "Definition sll_reverse_M_loop_end : MretTy -> MONAD (list Z):=\n  fun l => return l."
+    }
+  },
+  "verification": {
+    "coqc_checked": false,
+    "status": "unchecked"
+  }
+}
