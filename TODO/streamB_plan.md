@@ -185,11 +185,7 @@ Curate  canonical examples with known-correct abstract programs:
 
 | Pattern | Example | Key M_2 (continue) | M_1 (break) |
 |---------|---------|---------------------|-------------|
-|  |               |                                            |                |
 | **reversal** | `sll_reverse` | `(l1, h::t) ↦ (h::l1, t)` — prepend to acc | `(l1, []) ↦ l1 |
-|              |               |                                            |                |
-|              |               |                                            |                |
-|              |               |                                            |                |
 
 These examples will be stored as structured data in `few-shot-examples/absprog`.
 
@@ -206,31 +202,63 @@ Before calling the LLM, classify the function into a pattern category to select 
 Extend the existing pipeline to collect all information needed for the LLM prompt.
 
 #### Task 1.3.1: `collect_synthesis_context()` function
-New function in `GenMonads/absprog/context.py` that takes a C file path and returns a structured dict:
+Implemented in `GenMonads/absprog/context.py`.
+
+Current API:
+- `collect_synthesis_context(c_file, func_name=None) -> Dict`
+- `collect_all_synthesis_contexts(c_file) -> List[Dict]`
+- `write_synthesis_context(c_file, output_path, func_name=None) -> Dict`
+
+Behavior:
+- For single-function files, `collect_synthesis_context()` can be called with just the C file path.
+- For multi-function files, `collect_synthesis_context()` requires `func_name`.
+- `collect_all_synthesis_contexts()` returns one context per synthesizable function and skips helper functions with no loop invariants.
+- Directory batch generation is exposed via `uv run llm4pv-context <input-file-or-dir> <output-file-or-dir>`.
+
+Current structured output shape:
 
 ```python
 {
-    "func_name": "sll_copy",
-    "c_source": "struct list * sll_copy(...) { ... }",
-    "require": {"original": "listrep(x)", "translated": "sll(x, l1)", "vars": ["l1"]},
-    "ensure": {"original": "...", "translated": "sll(__return, l2) * sll(x, l3)", "vars": ["l2", "l3"]},
-    "invariants": [{
-        "translated": "sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3)",
-        "vars": ["l1", "l2", "l3"],
-        "pure_conditions": ["t != 0", "t -> next == 0", "t -> data == 0"]
-    }],
-    "loop_condition": "p",
-    "guard_coq": "fun l2 => match l2 with nil => false | _ => true end",
-    "extern_coq": "...",
+    "id": "sll_copy",
+    "version": 1,
+    "source": {
+        "c_file": "shape_invdataset/sll/sll_copy.c"
+    },
+    "predicate_family": "sllseg",
+    "summary": {
+        "func_name": "sll_copy"
+    },
+    "features": {
+        "loop_count": 1,
+        "require_var_count": 1,
+        "inv_var_count": 3,
+        "ensure_var_count": 2,
+        "has_seg_predicate": True,
+        "has_multi_return": True
+    },
+    "prompt_context": {
+        "c_source": "struct list * sll_copy(...) { ... }",
+        "with_clause": "X l1",
+        "require_with_safeexec": "safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)",
+        "ensure_with_safeexec": "exists l2 l3, safeExec(ATrue, return(maketuple(l2, l3)), X) && sll(__return, l2) * sll(x, l3)",
+        "loop_invariant_with_safeexec": "exists l1 l2 l3, safeExec(ATrue, bind(sll_copy_M_loop(l1,l2,l3), sll_copy_M_loop_end), X) && t != 0 && t -> next == 0 && t -> data == 0 && sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3)",
+        "loop_condition": "p",
+        "guard_coq": "fun a =>\n  let '(l1, l2, l3) := a in\n  l2 <> []"
+    },
     "signatures": {
-        "M": "list Z -> program unit (list Z)",
-        "M_loop": "list Z -> list Z -> list Z -> program unit MretTy",
-        "M_loop_end": "MretTy -> program unit (list Z)"
+        "M_loop_before": "list Z -> MONAD (list Z * list Z * list Z)",
+        "M_1": "(list Z * list Z * list Z) -> MONAD MretTy",
+        "M_2": "(list Z * list Z * list Z) -> MONAD (list Z * list Z * list Z)",
+        "M_loop_end": "MretTy -> MONAD ((list Z * list Z))",
+        "M": "list Z -> MONAD ((list Z * list Z))"
     }
 }
 ```
 
-This reuses existing pipeline stages (TransShape, GuardGen, AddAbstract) but stops before writing the `_rel.c` and instead collects the intermediate artifacts.
+Notes:
+- `id` is the C basename for single-function files, and the function name for multi-function files.
+- The context currently stores prompt-oriented safeExec-transformed clauses rather than raw `require` / `ensure` / invariant AST fragments.
+- The implementation reuses TransShape, GuardGen, AddAbstract, and `translate_c_file.py:collect_func_extern_info()` but stops before writing `_rel.c`.
 
 #### Task 1.3.2: Integrate with existing pipeline
 - Reuse `translate_c_file.py`'s per-function processing to get translated specs

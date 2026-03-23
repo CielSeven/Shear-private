@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from typing import Dict, List, Optional
@@ -53,6 +54,14 @@ def _collect_functions(result: Dict) -> List[Dict]:
     return [result]
 
 
+def _make_context_id(c_file: str, result: Dict, func_data: Dict) -> str:
+    basename = os.path.splitext(os.path.basename(c_file))[0]
+    functions = _collect_functions(result)
+    if len(functions) > 1:
+        return func_data["function"]
+    return basename
+
+
 def _select_function(result: Dict, func_name: Optional[str]) -> Dict:
     functions = _collect_functions(result)
     if func_name:
@@ -74,16 +83,31 @@ def _extract_function_source(file_path: str, func_name: str) -> str:
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    match = re.search(rf"\b{re.escape(func_name)}\s*\(", content)
-    if not match:
+    matches = re.finditer(rf"\b{re.escape(func_name)}\s*\(", content)
+    for match in matches:
+        # Only consider top-level signatures so we skip call sites inside bodies.
+        depth = 0
+        for ch in content[:match.start()]:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+        if depth != 0:
+            continue
+
+        brace_start = content.find("{", match.end())
+        if brace_start == -1:
+            continue
+
+        semicolon = content.find(";", match.end())
+        if semicolon != -1 and semicolon < brace_start:
+            continue
+
+        start = content.rfind("\n", 0, match.start())
+        start = 0 if start == -1 else start + 1
+        break
+    else:
         raise ValueError(f"Could not find function signature for '{func_name}' in {file_path}")
-
-    start = content.rfind("\n", 0, match.start())
-    start = 0 if start == -1 else start + 1
-
-    brace_start = content.find("{", match.end())
-    if brace_start == -1:
-        raise ValueError(f"Could not find function body start for '{func_name}' in {file_path}")
 
     depth = 0
     end = None
@@ -104,7 +128,7 @@ def _extract_function_source(file_path: str, func_name: str) -> str:
 
 
 def _infer_predicate_family(*texts: str) -> Optional[str]:
-    predicate_order = ["sllseg", "dllseg", "lseg", "sll", "dll", "tree", "store_tree"]
+    predicate_order = ["sllseg", "dllseg", "lseg", "sll", "dll", "store_tree", "tree"]
     for predicate in predicate_order:
         needle = predicate + "("
         if any(needle in text for text in texts if text):
@@ -123,6 +147,12 @@ def _has_segment_predicate(*texts: str) -> bool:
 
 def collect_synthesis_context(c_file: str, func_name: Optional[str] = None) -> Dict:
     result = process_and_translate_file(c_file, generate_guards=True)
+    return _collect_synthesis_context_from_result(c_file, result, func_name)
+
+
+def _collect_synthesis_context_from_result(
+    c_file: str, result: Dict, func_name: Optional[str] = None
+) -> Dict:
     if "error" in result:
         raise ValueError(result["error"])
 
@@ -160,7 +190,7 @@ def collect_synthesis_context(c_file: str, func_name: Optional[str] = None) -> D
         )
 
     return {
-        "id": os.path.splitext(os.path.basename(c_file))[0],
+        "id": _make_context_id(c_file, result, func_data),
         "version": 1,
         "source": {
             "c_file": c_file,
@@ -202,3 +232,29 @@ def collect_synthesis_context(c_file: str, func_name: Optional[str] = None) -> D
             "M": f"{_curried_type(require_types)}MONAD ({return_type})",
         },
     }
+
+
+def collect_all_synthesis_contexts(c_file: str) -> List[Dict]:
+    result = process_and_translate_file(c_file, generate_guards=True)
+    functions = _collect_functions(result)
+    contexts = []
+    for func_data in functions:
+        if collect_func_extern_info(func_data) is None:
+            continue
+        contexts.append(
+            _collect_synthesis_context_from_result(c_file, result, func_data["function"])
+        )
+    return contexts
+
+
+def write_synthesis_context(
+    c_file: str, output_path: str, func_name: Optional[str] = None
+) -> Dict:
+    context = collect_synthesis_context(c_file, func_name=func_name)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(context, f, indent=2)
+        f.write("\n")
+    return context

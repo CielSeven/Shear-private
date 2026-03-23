@@ -8,6 +8,7 @@ requires-python = ">=3.9"
 llm4pv = "GenMonads.translate_c_file:main"
 llm4pv-guard = "GenMonads.guardgen.cli:main"
 llm4pv-rellib = "GenMonads.absprog.cli:main"
+llm4pv-context = "GenMonads.absprog.context_cli:main"
 
 [project.optional-dependencies]
 test = ["pytest"]
