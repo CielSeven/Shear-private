@@ -124,28 +124,67 @@ These are assembled into `MretTy`, `{func}_M_loop`, `{func}_M_loop_end`, and `{f
 Create a prompt template system in `GenMonads/absprog/` (new module):
 
 #### Task 1.2.1: Core prompt template
-Design a structured prompt that presents:
+Design a structured prompt around the actual context JSON emitted by `GenMonads/absprog/context.py`.
+
+The template should consume these fields directly:
+- `summary.func_name`
+- `predicate_family`
+- `features.loop_count`
+- `features.require_var_count`
+- `features.inv_var_count`
+- `features.ensure_var_count`
+- `features.has_seg_predicate`
+- `features.has_multi_return`
+- `prompt_context.c_source`
+- `prompt_context.with_clause`
+- `prompt_context.require_with_safeexec`
+- `prompt_context.ensure_with_safeexec`
+- `prompt_context.loop_invariant_with_safeexec`
+- `prompt_context.loop_condition`
+- `prompt_context.guard_coq`
+- `signatures.M_loop_before`
+- `signatures.M_1`
+- `signatures.M_2`
+- `signatures.M_loop_end`
+- `signatures.M`
+
+Suggested prompt shape:
 
 ```
 You are generating Coq monadic abstract programs for formal verification.
 
-## C Function
-{c_source}
+For now, only consider C functions with exactly one loop.
 
-## Data Annotations (translated)
-Require: {require_annotation}
-Ensure: {ensure_annotation}
-Loop Invariant: {loop_invariant}
-Loop Condition: {loop_condition}
+## Function Summary
+Function: {summary.func_name}
+Predicate family: {predicate_family}
+Loop count: {features.loop_count}
+Require vars: {features.require_var_count}
+Invariant vars: {features.inv_var_count}
+Ensure vars: {features.ensure_var_count}
+Has segment predicate: {features.has_seg_predicate}
+Has multi return: {features.has_multi_return}
 
-## Abstract Program Signatures
-{extern_coq_block}
+## C Source
+{prompt_context.c_source}
+
+## Prompt Context
+With clause: {prompt_context.with_clause}
+Require with safeExec: {prompt_context.require_with_safeexec}
+Ensure with safeExec: {prompt_context.ensure_with_safeexec}
+Loop invariant with safeExec: {prompt_context.loop_invariant_with_safeexec}
+Loop condition: {prompt_context.loop_condition}
 
 ## Guard Function
-{guard_coq}
+{prompt_context.guard_coq}
 
-## Functional Specification
-{func_spec}  (* e.g., "The output list equals the input list" *)
+## Required Signatures
+M_loop_before: {signatures.M_loop_before}
+M_1: {signatures.M_1}
+M_2: {signatures.M_2}
+M_loop_end: {signatures.M_loop_end}
+M: {signatures.M}
+
 
 ## QCP Monad Primitives
 - `return v` / `ret v`: return value v (monadic return)
@@ -163,22 +202,41 @@ The loop model uses `repeat_break` with two branches:
 - **M_1 (break)**: when guard is false, produce final result `S → M(R)`
 
 The full program composes:
-  f_M_loop_before → f_M_loop (repeat_break with M_1, M_2, guard) → f_M_loop_end
+  M_loop_before → M_loop (repeat_break with M_1, M_2, guard) → M_loop_end 
+
+
+```
+f_M(l1, ..., lm) =
+  s₀ ← M_loop_before(l1, ..., lm);;
+  r  ← M_loop(s₀);;
+  M_loop_end(r)
+```
 
 ## Instructions
-Generate the 4 non-guard components:
-1. **f_M_loop_before**: How do the Require variables map to the initial invariant
-   state? (e.g., for sll_reverse: `?l1 ↦ ([], ?l1)` — prev starts empty, curr gets full list)
+Generate `MretTy` and the 4 non-guard components such that the composed abstract program simulates the c source file:
+
+0. **MretTy**: define the loop result type used between `M_1` and `M_loop_end`.
+1. **M_loop_before**: map the Require variables to the initial invariant state.
 2. **M_2 (continue branch)**: What does one C loop iteration do to the abstract list
-   state? (e.g., for sll_reverse: `(l1, h::t) ↦ (h::l1, t)` — move head to accumulator)
+   state?
 3. **M_1 (break branch)**: When the loop exits, how is the final result packaged?
-   (e.g., for sll_reverse: `(l1, []) ↦ l1` — return the accumulated list)
-4. **f_M_loop_end**: How does the loop result map to the Ensure variables?
-   (e.g., for sll_reverse: `r ↦ (r)` — identity mapping)
+4. **M_loop_end**: map the loop result to the Ensure variables.
+
+
+Return Coq definitions only for:
+- `MretTy`
+- `{summary.func_name}_M_loop_before`
+- `{summary.func_name}_M_loop_M1`
+- `{summary.func_name}_M_loop_M2`
+- `{summary.func_name}_M_loop_end`
 
 ## Examples
 {few_shot_examples}
 ```
+
+Notes:
+- The current context payload does not include a separate `extern_coq` block or raw `require` / `ensure` / invariant records; the prompt should use `signatures` and `prompt_context` instead.
+- If a higher-level functional spec is available from metadata or example annotations, it can be added as an optional extra section, but it is not part of the current auto-generated context schema.
 
 #### Task 1.2.2: Few-shot example library
 Curate  canonical examples with known-correct abstract programs:
@@ -272,10 +330,10 @@ Notes:
 - Render the prompt template with context + selected few-shot examples
 - Call Claude API (or configurable LLM endpoint)
 - Parse the response to extract Coq definitions
-- Return structured output: `{M_loop_before, M_1, M_2, M_loop_end}` (the 4 non-guard components)
+- Return structured output: `{MretTy, M_loop_before, M_1, M_2, M_loop_end}`
 
 #### Task 1.4.2: Response parser (`GenMonads/absprog/parse_coq.py`)
-- Extract Coq `Definition` blocks from LLM response (may be in markdown code fences)
+- Extract `Definition MretTy` and the Coq `Definition` blocks from LLM response (may be in markdown code fences)
 - Validate basic structure: correct function names, correct argument counts
 - Validate types match signatures from `Extern Coq` block
 

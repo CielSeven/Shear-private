@@ -43,7 +43,7 @@
     }
   },
   "verification": {
-    "coqc_checked": false,
-    "status": "unchecked"
+    "coqc_checked": true,
+    "status": "checked"
   }
 }

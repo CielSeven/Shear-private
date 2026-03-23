@@ -4,3 +4,4 @@ from GenMonads.absprog.context import (
     collect_synthesis_context,
     write_synthesis_context,
 )
+from GenMonads.absprog.synthesize import run_synthesis_pipeline
