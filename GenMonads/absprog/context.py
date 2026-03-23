@@ -11,23 +11,6 @@ def _normalize_block(text: str) -> str:
     lines = [line.rstrip() for line in text.strip().splitlines()]
     return "\n".join(lines)
 
-
-def _state_type(k: int) -> str:
-    if k == 1:
-        return "list Z"
-    return "(" + " * ".join(["list Z"] * k) + ")"
-
-
-def _curried_args(n: int) -> str:
-    if n == 0:
-        return ""
-    return " -> ".join(["list Z"] * n) + " -> "
-
-
-def _return_type(ensure_var_count: int) -> str:
-    return _state_type(ensure_var_count) if ensure_var_count > 1 else "list Z"
-
-
 def _tuple_type(types: List[str]) -> str:
     if len(types) == 1:
         return types[0]
@@ -38,6 +21,30 @@ def _curried_type(types: List[str]) -> str:
     if not types:
         return ""
     return " -> ".join(types) + " -> "
+
+
+def _return_type_from_types(types: List[str]) -> str:
+    if not types:
+        return "unit"
+    return _tuple_type(types)
+
+
+def _require_var_types(info: Dict, key: str, count_key: str) -> List[str]:
+    count = info[count_key]
+    if count == 0:
+        return []
+
+    var_types = info.get(key)
+    if var_types is None:
+        raise ValueError(
+            f"Missing {key} for function '{info.get('func_name', '<unknown>')}' with {count} generated variable(s)"
+        )
+    if len(var_types) != count:
+        raise ValueError(
+            f"{key} length mismatch for function '{info.get('func_name', '<unknown>')}': "
+            f"expected {count}, got {len(var_types)}"
+        )
+    return list(var_types)
 
 
 def _collect_functions(result: Dict) -> List[Dict]:
@@ -132,11 +139,11 @@ def collect_synthesis_context(c_file: str, func_name: Optional[str] = None) -> D
     program_loop_end = f"{func_data['function']}_M_loop_end"
     processed_funcspec = process_funcspec_with_safeexec(funcspec, program) if funcspec else {}
 
-    require_types = info.get("require_var_types") or ["list Z"] * info["require_var_count"]
-    inv_types = info.get("inv_var_types") or ["list Z"] * info["inv_var_count"]
-    ensure_types = info.get("ensure_var_types") or ["list Z"] * info.get("ensure_var_count", 1)
+    require_types = _require_var_types(info, "require_var_types", "require_var_count")
+    inv_types = _require_var_types(info, "inv_var_types", "inv_var_count")
+    ensure_types = _require_var_types(info, "ensure_var_types", "ensure_var_count")
     state_type = _tuple_type(inv_types)
-    return_type = _tuple_type(ensure_types)
+    return_type = _return_type_from_types(ensure_types)
 
     require_translated = funcspec.get("require", {}).get("translated", "")
     ensure_translated = funcspec.get("ensure", {}).get("translated", "")

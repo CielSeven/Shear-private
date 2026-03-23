@@ -151,7 +151,15 @@ class TestSafeexecInclude:
 
 class TestCoqBlocks:
     def test_generate_single_function(self):
-        infos = [{'func_name': 'sll_copy', 'require_var_count': 1, 'inv_var_count': 3, 'ensure_var_count': 2}]
+        infos = [{
+            'func_name': 'sll_copy',
+            'require_var_count': 1,
+            'require_var_types': ['list Z'],
+            'inv_var_count': 3,
+            'inv_var_types': ['list Z', 'list Z', 'list Z'],
+            'ensure_var_count': 2,
+            'ensure_var_types': ['list Z', 'list Z'],
+        }]
         result = generate_coq_blocks('sll_copy', infos)
         assert '/*@ Import Coq Require Import sll_copy_rel_lib */' in result
         assert '/*@ Extern Coq (MretTy :: *) */' in result
@@ -160,15 +168,80 @@ class TestCoqBlocks:
         assert '(sll_copy_M_loop_end: MretTy -> program unit (list Z * list Z))' in result
 
     def test_generate_two_require_vars(self):
-        infos = [{'func_name': 'sll_append', 'require_var_count': 2, 'inv_var_count': 3}]
+        infos = [{
+            'func_name': 'sll_append',
+            'require_var_count': 2,
+            'require_var_types': ['list Z', 'list Z'],
+            'inv_var_count': 3,
+            'inv_var_types': ['list Z', 'list Z', 'list Z'],
+            'ensure_var_count': 1,
+            'ensure_var_types': ['list Z'],
+        }]
         result = generate_coq_blocks('sll_append', infos)
         assert '(sll_append_M: list Z -> list Z -> program unit (list Z))' in result
 
     def test_generate_maketuple_when_needed(self):
-        infos = [{'func_name': 'sll_copy', 'require_var_count': 1, 'inv_var_count': 3, 'ensure_var_count': 2}]
+        infos = [{
+            'func_name': 'sll_copy',
+            'require_var_count': 1,
+            'require_var_types': ['list Z'],
+            'inv_var_count': 3,
+            'inv_var_types': ['list Z', 'list Z', 'list Z'],
+            'ensure_var_count': 2,
+            'ensure_var_types': ['list Z', 'list Z'],
+        }]
         result = generate_coq_blocks('sll_copy', infos, needs_maketuple=True)
         assert '(maketuple: {A} {B} -> A -> B -> (A * B))' in result
         assert '(sll_copy_M: list Z -> program unit (list Z * list Z))' in result
+
+    def test_generate_uses_explicit_variable_types(self):
+        infos = [{
+            'func_name': 'typed_demo',
+            'require_var_count': 2,
+            'require_var_types': ['list Z', 'Z'],
+            'inv_var_count': 2,
+            'inv_var_types': ['list Z', 'bool'],
+            'ensure_var_count': 2,
+            'ensure_var_types': ['nat', 'list Z'],
+        }]
+        result = generate_coq_blocks('typed_demo', infos)
+        assert '(typed_demo_M: list Z -> Z -> program unit (nat * list Z))' in result
+        assert '(typed_demo_M_loop: list Z -> bool -> program unit MretTy)' in result
+        assert '(typed_demo_M_loop_end: MretTy -> program unit (nat * list Z))' in result
+
+    def test_generate_uses_non_list_only_variable_types(self):
+        infos = [{
+            'func_name': 'scalar_demo',
+            'require_var_count': 2,
+            'require_var_types': ['Z', 'bool'],
+            'inv_var_count': 2,
+            'inv_var_types': ['nat', 'bool'],
+            'ensure_var_count': 1,
+            'ensure_var_types': ['Z'],
+        }]
+        result = generate_coq_blocks('scalar_demo', infos)
+        assert '(scalar_demo_M: Z -> bool -> program unit (Z))' in result
+        assert '(scalar_demo_M_loop: nat -> bool -> program unit MretTy)' in result
+        assert '(scalar_demo_M_loop_end: MretTy -> program unit (Z))' in result
+
+    def test_generate_requires_explicit_variable_types(self):
+        infos = [{'func_name': 'missing_types', 'require_var_count': 1, 'inv_var_count': 1, 'ensure_var_count': 1}]
+        with pytest.raises(ValueError, match='Missing variable types'):
+            generate_coq_blocks('missing_types', infos)
+
+    def test_generate_uses_unit_for_no_ensure_variables(self):
+        infos = [{
+            'func_name': 'dll_free',
+            'require_var_count': 1,
+            'require_var_types': ['list Z'],
+            'inv_var_count': 1,
+            'inv_var_types': ['list Z'],
+            'ensure_var_count': 0,
+            'ensure_var_types': [],
+        }]
+        result = generate_coq_blocks('dll_free', infos)
+        assert '(dll_free_M: list Z -> program unit unit)' in result
+        assert '(dll_free_M_loop_end: MretTy -> program unit unit)' in result
 
     def test_empty_func_infos(self):
         assert generate_coq_blocks('foo', []) == ''
@@ -214,9 +287,25 @@ class TestCollectFuncExternInfo:
     def test_with_inner_assertions(self):
         func_data = {
             'function': 'sll_copy',
-            'funcspec': {'require': {'translated': 'sll(x, ?l1)'}, 'ensure': {'translated': 'sll(__return, ?l2)'}},
+            'funcspec': {
+                'require': {
+                    'translated': 'sll(x, ?l1)',
+                    'variables': ['?l1'],
+                    'variable_types': ['list Z'],
+                },
+                'ensure': {
+                    'translated': 'sll(__return, ?l2)',
+                    'variables': ['?l2'],
+                    'variable_types': ['list Z'],
+                }
+            },
             'inner_assertions': [
-                {'type': 'Inv', 'translated': 'exists l1 l2 l3, ...', 'variables': ['l1', 'l2', 'l3']}
+                {
+                    'type': 'Inv',
+                    'translated': 'exists l1 l2 l3, ...',
+                    'variables': ['l1', 'l2', 'l3'],
+                    'variable_types': ['list Z', 'list Z', 'list Z'],
+                }
             ]
         }
         info = collect_func_extern_info(func_data)
@@ -224,3 +313,6 @@ class TestCollectFuncExternInfo:
         assert info['func_name'] == 'sll_copy'
         assert info['require_var_count'] == 1
         assert info['inv_var_count'] == 3
+        assert info['require_var_types'] == ['list Z']
+        assert info['inv_var_types'] == ['list Z', 'list Z', 'list Z']
+        assert info['ensure_var_types'] == ['list Z']

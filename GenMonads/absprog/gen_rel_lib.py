@@ -39,23 +39,39 @@ Local Open Scope monad.
 """
 
 
-def _state_type(k: int) -> str:
-    """Build the state type for k invariant list variables.
+def _normalize_var_types(var_types: Optional[List[str]], count: int) -> List[str]:
+    if count == 0:
+        return []
+    if var_types is None:
+        raise ValueError(f"Missing variable types for {count} generated variable(s)")
 
-    k=1: list Z
-    k=2: (list Z * list Z)
-    k=3: (list Z * list Z * list Z)
-    """
-    if k == 1:
-        return "list Z"
-    return "(" + " * ".join(["list Z"] * k) + ")"
+    normalized = list(var_types)
+    if len(normalized) != count:
+        raise ValueError(
+            f"Variable type count mismatch: expected {count}, got {len(normalized)}"
+        )
+    return normalized
 
 
-def _curried_args(n: int) -> str:
-    """Build curried argument types: list Z -> list Z -> ... ->"""
-    if n == 0:
+def _tuple_type(types: List[str]) -> str:
+    if not types:
+        raise ValueError("Expected at least one type")
+    if len(types) == 1:
+        return types[0]
+    return "(" + " * ".join(types) + ")"
+
+
+def _return_type(types: List[str]) -> str:
+    if not types:
+        return "unit"
+    return _tuple_type(types)
+
+
+def _curried_args(types: List[str]) -> str:
+    """Build curried argument types from a list of Coq types."""
+    if not types:
         return ""
-    return " -> ".join(["list Z"] * n) + " -> "
+    return " -> ".join(types) + " -> "
 
 
 def _lambda_vars(k: int) -> str:
@@ -72,13 +88,19 @@ def _tuple_vars(k: int) -> str:
 
 def generate_func_block(func_name: str, require_var_count: int,
                         inv_var_count: int, ensure_var_count: int = 1,
+                        require_var_types: Optional[List[str]] = None,
+                        inv_var_types: Optional[List[str]] = None,
+                        ensure_var_types: Optional[List[str]] = None,
                         coq_guard: Optional[str] = None) -> str:
     """Generate the abstract program skeleton for one function."""
     fn = func_name
     k = inv_var_count
     m = require_var_count
-    st = _state_type(k)
-    ret = _state_type(ensure_var_count) if ensure_var_count > 1 else "list Z"
+    req_types = _normalize_var_types(require_var_types, require_var_count)
+    inv_types = _normalize_var_types(inv_var_types, inv_var_count)
+    ens_types = _normalize_var_types(ensure_var_types, ensure_var_count)
+    st = _tuple_type(inv_types)
+    ret = _return_type(ens_types)
     guard_name = f"{fn}_guardP"
 
     lines = []
@@ -121,13 +143,13 @@ def generate_func_block(func_name: str, require_var_count: int,
     # Curried wrapper
     lam = _lambda_vars(k)
     tup = _tuple_vars(k)
-    curried = _curried_args(k)
+    curried = _curried_args(inv_types)
     lines.append(f"Definition {fn}_M_loop : {curried}program unit MretTy :=")
     lines.append(f"  fun {lam} => {fn}_M_loop_aux {tup}.")
     lines.append("")
 
     # loop_before: Parameter (maps Require vars to initial invariant state)
-    m_curried = _curried_args(m)
+    m_curried = _curried_args(req_types)
     lines.append(f"Parameter {fn}_M_loop_before : {m_curried}MONAD {st}.")
     lines.append("")
 
@@ -185,6 +207,9 @@ def generate_rel_lib(basename: str, func_infos: List[Dict]) -> str:
             info['require_var_count'],
             info['inv_var_count'],
             info.get('ensure_var_count', 1),
+            info.get('require_var_types'),
+            info.get('inv_var_types'),
+            info.get('ensure_var_types'),
             info.get('coq_guard'),
         ))
 

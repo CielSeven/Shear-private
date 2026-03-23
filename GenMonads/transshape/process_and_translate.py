@@ -48,11 +48,17 @@ class AssertionProcessor:
         if funcspec['require']:
             try:
                 translated, vars = self.translator.translate_assertion(funcspec['require'], reset=True)
+                var_types = self.translator.last_generated_var_types[:]
                 result['require'] = {
                     'original': funcspec['require'],
                     'translated': translated,
+                    'variables': vars,
+                    'variable_types': var_types,
                 }
                 all_variables.extend(vars)
+                all_variable_types = result.get('variable_types', [])
+                all_variable_types.extend(var_types)
+                result['variable_types'] = all_variable_types
             except Exception as e:
                 result['require'] = {'original': funcspec['require'], 'error': str(e)}
 
@@ -60,11 +66,17 @@ class AssertionProcessor:
         if funcspec['ensure']:
             try:
                 translated, vars = self.translator.translate_assertion(funcspec['ensure'], reset=False)
+                var_types = self.translator.last_generated_var_types[:]
                 result['ensure'] = {
                     'original': funcspec['ensure'],
                     'translated': translated,
+                    'variables': vars,
+                    'variable_types': var_types,
                 }
                 all_variables.extend(vars)
+                all_variable_types = result.get('variable_types', [])
+                all_variable_types.extend(var_types)
+                result['variable_types'] = all_variable_types
             except Exception as e:
                 result['ensure'] = {'original': funcspec['ensure'], 'error': str(e)}
 
@@ -102,6 +114,7 @@ class AssertionProcessor:
                     'original': assertion['content'],
                     'translated': translated,
                     'variables': vars,
+                    'variable_types': self.translator.last_generated_var_types[:],
                     'position': assertion.get('position')
                 }
 

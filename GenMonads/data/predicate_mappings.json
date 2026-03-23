@@ -1,12 +1,42 @@
 {
-  "listrep": ["sll", 1],
-  "lseg": ["sllseg", 1],
-  "dlistrep_shape": ["dlistrep", 1],
-  "dllseg_shape": ["dllseg", 1],
-  "dllsegR_shape": ["dllsegR", 1],
-  "sll": ["sll", 1],
-  "sllseg": ["sllseg", 1],
-  "dlistrep": ["dlistrep", 1],
-  "dllseg": ["dllseg", 1],
-  "dllsegR": ["dllsegR", 1]
+  "listrep": {
+    "data_name": "sll",
+    "shape_arity": 1,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  },
+  "lseg": {
+    "data_name": "sllseg",
+    "shape_arity": 2,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  },
+  "dlistrep_shape": {
+    "data_name": "dlistrep",
+    "shape_arity": 2,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  },
+  "dllseg_shape": {
+    "data_name": "dllseg",
+    "shape_arity": 4,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  },
+  "dllsegR_shape": {
+    "data_name": "dllsegR",
+    "shape_arity": 4,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  }
 }

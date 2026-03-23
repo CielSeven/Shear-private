@@ -32,33 +32,84 @@ def collect_func_extern_info(func_data: Dict) -> Optional[Dict]:
     funcspec = func_data.get('funcspec')
     require_var_count = 0
     require_var_names = []
+    require_var_types: List[str] = []
     if funcspec and funcspec.get('require') and funcspec['require'].get('translated'):
-        require_vars = extract_variables_from_assertion(funcspec['require']['translated'])
+        require_vars, require_var_types = _extract_generated_var_info(funcspec['require'])
         require_var_count = len(require_vars)
         require_var_names = [v.lstrip('?') for v in require_vars]
 
     ensure_var_count = 0
+    ensure_var_types: List[str] = []
     if funcspec and funcspec.get('ensure') and funcspec['ensure'].get('translated'):
-        ensure_vars = extract_variables_from_assertion(funcspec['ensure']['translated'])
-        # Only count vars NOT already in Require (those are reused, not returned)
-        ensure_only = [v for v in ensure_vars if v.lstrip('?') not in require_var_names]
+        ensure_vars, raw_ensure_types = _extract_generated_var_info(funcspec['ensure'])
+        # Only count vars NOT already in Require (those are reused, not returned).
+        ensure_only = [
+            (name, var_type)
+            for name, var_type in zip(ensure_vars, raw_ensure_types)
+            if name.lstrip('?') not in require_var_names
+        ]
         ensure_var_count = len(ensure_only)
+        ensure_var_types = [var_type for _, var_type in ensure_only]
 
-    inv_var_count = max(len(a['variables']) for a in inv_assertions)
+    inv_source = max(inv_assertions, key=lambda a: len(a.get('variables', [])))
+    inv_var_count = len(inv_source.get('variables', []))
+    inv_var_types = _normalize_var_types(inv_source.get('variable_types'), inv_var_count)
 
     return {
         'func_name': func_data['function'],
         'require_var_count': require_var_count,
+        'require_var_types': require_var_types,
         'inv_var_count': inv_var_count,
+        'inv_var_types': inv_var_types,
         'ensure_var_count': ensure_var_count,
+        'ensure_var_types': ensure_var_types,
     }
 
 
-def _return_type(n: int) -> str:
-    """Build return type from ensure var count: 1 -> (list Z), 2 -> (list Z * list Z), etc."""
-    if n <= 1:
-        return "(list Z)"
-    return "(" + " * ".join(["list Z"] * n) + ")"
+def _normalize_var_types(var_types: Optional[List[str]], count: int) -> List[str]:
+    """Return a type list of exactly count entries, requiring explicit types."""
+    if count == 0:
+        return []
+    if var_types is None:
+        raise ValueError(f"Missing variable types for {count} generated variable(s)")
+
+    normalized = list(var_types)
+    if len(normalized) != count:
+        raise ValueError(
+            f"Variable type count mismatch: expected {count}, got {len(normalized)}"
+        )
+    return normalized
+
+
+def _extract_generated_var_info(assertion_dict: Dict) -> tuple[List[str], List[str]]:
+    """Extract generated variable names and their inferred types from a clause."""
+    names = assertion_dict.get('variables') or extract_variables_from_assertion(assertion_dict['translated'])
+    return names, _normalize_var_types(assertion_dict.get('variable_types'), len(names))
+
+
+def _tuple_type(types: List[str]) -> str:
+    """Build a Coq tuple type from a non-empty list of element types."""
+    if not types:
+        raise ValueError("Expected at least one type")
+    if len(types) == 1:
+        return types[0]
+    return "(" + " * ".join(types) + ")"
+
+
+def _curried_type(types: List[str]) -> str:
+    """Build curried argument types."""
+    if not types:
+        return ""
+    return " -> ".join(types) + " -> "
+
+
+def _return_type(types: List[str], count: int) -> str:
+    """Build return type from inferred ensure variable types."""
+    if count == 0:
+        return "unit"
+    if count <= 1:
+        return f"({_tuple_type(types)})"
+    return _tuple_type(types)
 
 
 def insert_safeexec_include(content: str) -> str:
@@ -106,17 +157,20 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
         req_count = info['require_var_count']
         inv_count = info['inv_var_count']
         ens_count = info.get('ensure_var_count', 1)
-        ret_type = _return_type(ens_count)
+        req_types = _normalize_var_types(info.get('require_var_types'), req_count)
+        inv_types = _normalize_var_types(info.get('inv_var_types'), inv_count)
+        ens_types = _normalize_var_types(info.get('ensure_var_types'), ens_count)
+        ret_type = _return_type(ens_types, ens_count)
 
-        # {func}_M: list Z -> ... -> program unit (list Z [* list Z ...])
-        req_args = ' '.join(['list Z ->'] * req_count) + ' ' if req_count else ''
+        # {func}_M: t1 -> ... -> program unit (r1 [* r2 ...])
+        req_args = _curried_type(req_types)
         decl_lines.append(f'({fn}_M: {req_args}program unit {ret_type})')
 
-        # {func}_M_loop: list Z -> ... -> program unit MretTy
-        inv_args = ' '.join(['list Z ->'] * inv_count) + ' ' if inv_count else ''
+        # {func}_M_loop: t1 -> ... -> program unit MretTy
+        inv_args = _curried_type(inv_types)
         decl_lines.append(f'({fn}_M_loop: {inv_args}program unit MretTy)')
 
-        # {func}_M_loop_end: MretTy -> program unit (list Z [* list Z ...])
+        # {func}_M_loop_end: MretTy -> program unit (r1 [* r2 ...])
         decl_lines.append(f'({fn}_M_loop_end: MretTy -> program unit {ret_type})')
 
     # Format multi-line Extern Coq block

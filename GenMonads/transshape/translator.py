@@ -1,18 +1,18 @@
 """
 Translator for shape predicates to data predicates.
 
-This module provides functionality to translate shape predicates by adding
-existential list variables according to a predefined mapping.
+This module translates mapped shape predicates by appending augmented data
+variables according to the predicate mapping schema.
 """
 
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, List, Tuple
 from .parser import (
     Formula, Expr, Predicate, SepConj, AndConj, Exists, BinOp,
     Var, FieldAccess, parse_assertion, recover_assertion
 )
 import copy
 
-from GenMonads.predicate_mapping import get_predicate_mappings
+from GenMonads.predicate_mapping import PredicateMapping, get_predicate_mappings
 
 
 class ShapeTranslator:
@@ -20,36 +20,46 @@ class ShapeTranslator:
 
     def __init__(self):
         """Initialize the translator with predicate mappings."""
-        self.predicate_name_mapping: Dict[str, Tuple[str, int]] = get_predicate_mappings()
+        self.predicate_mappings: Dict[str, PredicateMapping] = get_predicate_mappings()
         self.var_counter = 0
         self.generated_vars: List[str] = []
+        self.generated_var_types: List[str] = []
+        self.last_generated_var_types: List[str] = []
         self.var_prefix = ""  # For nested loops like ?l_outer1, ?l_inner1
 
     def reset_var_counter(self, start_from: int = 0, prefix: str = ""):
         """Reset the variable counter and set prefix."""
         self.var_counter = start_from
         self.generated_vars = []
+        self.generated_var_types = []
+        self.last_generated_var_types = []
         self.var_prefix = prefix
 
-    def generate_list_var(self) -> str:
-        """Generate a unique existential list variable."""
+    def generate_list_var(self, var_type: str = "list Z") -> str:
+        """Generate a unique existential variable for an augmented data argument."""
         self.var_counter += 1
         prefix_sep = "_" if self.var_prefix else ""
         var_name = f"?l{self.var_prefix}{prefix_sep}{self.var_counter}"
         self.generated_vars.append(var_name)
+        self.generated_var_types.append(var_type)
         return var_name
 
     def translate_expr(self, expr: Expr) -> Expr:
         return copy.deepcopy(expr)
 
     def translate_predicate(self, pred: Predicate) -> Predicate:
-        if pred.name in self.predicate_name_mapping:
-            data_name, num_lists = self.predicate_name_mapping[pred.name]
+        if pred.name in self.predicate_mappings:
+            mapping = self.predicate_mappings[pred.name]
+            if mapping.shape_arity >= 0 and len(pred.args) != mapping.shape_arity:
+                raise ValueError(
+                    f"Predicate {pred.name} expected {mapping.shape_arity} shape args, "
+                    f"got {len(pred.args)}"
+                )
             new_args = [self.translate_expr(arg) for arg in pred.args]
-            for _ in range(num_lists):
-                list_var = self.generate_list_var()
+            for var_type in mapping.data_var_types:
+                list_var = self.generate_list_var(var_type)
                 new_args.append(Var(list_var))
-            return Predicate(data_name, new_args)
+            return Predicate(mapping.data_name, new_args)
         else:
             return Predicate(pred.name, [self.translate_expr(arg) for arg in pred.args])
 
@@ -75,13 +85,17 @@ class ShapeTranslator:
     def translate_assertion(self, assertion: str, reset: bool = True, prefix: str = "") -> Tuple[str, List[str]]:
         """Translate an assertion string."""
         vars_before = len(self.generated_vars)
+        types_before = len(self.generated_var_types)
         if reset:
             self.reset_var_counter(prefix=prefix)
+            vars_before = 0
+            types_before = 0
         
         ast = parse_assertion(assertion)
         translated_ast = self.translate_formula(ast)
         translated_str = recover_assertion(translated_ast)
         new_vars = self.generated_vars[vars_before:]
+        self.last_generated_var_types = self.generated_var_types[types_before:]
         return translated_str, new_vars
 
     def translate_assertion_with_exists(self, assertion: str, prefix: str = "") -> Tuple[str, List[str]]:
@@ -104,6 +118,7 @@ class ShapeTranslator:
                 new_ast = translated_ast
 
         translated_str = recover_assertion(new_ast)
+        self.last_generated_var_types = self.generated_var_types[:]
         for var in generated_vars:
             var_without_question = var[1:]
             translated_str = translated_str.replace(var, var_without_question)

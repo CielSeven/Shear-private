@@ -9,8 +9,10 @@ Tests:
 """
 
 import os
+import json
 import pytest
 
+import GenMonads.predicate_mapping as predicate_mapping
 from GenMonads.transshape.preprocess import AnnotationExtractor
 from GenMonads.transshape.translator import ShapeTranslator
 from GenMonads.transshape.process_and_translate import (
@@ -78,6 +80,41 @@ class TestTranslator:
 
         all_vars = req_vars + ens_vars
         assert all_vars == ['?l1', '?l2', '?l3']
+
+    def test_generated_variable_types_follow_mapping(self):
+        translated, vars = self.translator.translate_assertion("listrep(x) * lseg(y, z)")
+
+        assert translated == "sll(x, ?l1) * sllseg(y, z, ?l2)"
+        assert vars == ["?l1", "?l2"]
+        assert self.translator.last_generated_var_types == ["list Z", "list Z"]
+
+    def test_generated_variable_types_support_non_list_data(self, tmp_path, monkeypatch):
+        config_dir = tmp_path / "data"
+        config_dir.mkdir()
+        config_file = config_dir / "predicate_mappings.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "boxed_int_shape": {
+                        "data_name": "boxed_int",
+                        "shape_arity": 1,
+                        "data_arity": 2,
+                        "data_var_types": ["Z", "bool"],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(predicate_mapping, "_CONFIG_DIR", str(config_dir))
+        monkeypatch.setattr(predicate_mapping, "_CONFIG_FILE", str(config_file))
+
+        translator = ShapeTranslator()
+        translated, vars = translator.translate_assertion("boxed_int_shape(x)")
+
+        assert translated == "boxed_int(x, ?l1, ?l2)"
+        assert vars == ["?l1", "?l2"]
+        assert translator.last_generated_var_types == ["Z", "bool"]
 
     def test_inv_exists_wrapping_no_existing(self):
         self.translator.reset_var_counter()
