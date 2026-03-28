@@ -404,6 +404,38 @@ struct list * myfunc(struct list * x) {
         assert 'safeExec' in result
         assert 'myfunc_M' in result
 
+    def test_replace_funcspec_emits_helper_low_level_specs(self):
+        content = """struct list * sll_merge(struct list * x, struct list * y)
+/*@ Require listrep(x) * listrep(y)
+    Ensure listrep(__return)
+ */;
+"""
+        funcspec = {
+            'require': {
+                'translated': 'sll(x, ?l1) * sll(y, ?l2)',
+                'variables': ['?l1', '?l2'],
+                'variable_types': ['list Z', 'list Z'],
+            },
+            'ensure': {
+                'translated': 'sll(__return, ?l3)',
+                'variables': ['?l3'],
+                'variable_types': ['list Z'],
+            },
+        }
+        result = replace_funcspec(
+            content,
+            "sll_merge",
+            funcspec,
+            "sll_merge_M",
+            is_callee_funcspec=True,
+        )
+        assert result.count('struct list * sll_merge(struct list * x, struct list * y)') == 2
+        assert '/*@ low_level_spec' in result
+        assert '/*@ low_level_spec_aux <= low_level_spec' in result
+        assert 'With {B} (cont: (list Z) -> program unit B) X l1 l2' in result
+        assert 'Require safeExec(ATrue, bind(sll_merge_M(l1, l2), cont), X)' in result
+        assert 'Ensure exists l3, safeExec(ATrue, bind(return(l3), cont), X)' in result
+
     def test_replace_inner_assertions_for_func(self):
         """Only the target function's Inv should be replaced."""
         content = """void func_a(int x) {

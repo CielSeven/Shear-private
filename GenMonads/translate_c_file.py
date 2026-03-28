@@ -12,24 +12,32 @@ import re
 import sys
 from typing import Dict, Optional, List
 
+from GenMonads.early_return import detect_early_return_shape
 from GenMonads.transshape.process_and_translate import process_and_translate_file
 from GenMonads.addabstract import add_safeexec_predicate, process_funcspec_with_safeexec
 from GenMonads.addabstract.addexec import extract_variables_from_assertion
 from GenMonads.header_mapping import translate_headers
 
 
-def collect_func_extern_info(func_data: Dict) -> Optional[Dict]:
+def collect_func_extern_info(
+    func_data: Dict,
+    include_helpers: bool = False,
+    function_source: Optional[str] = None,
+) -> Optional[Dict]:
     """Collect variable counts needed for Extern Coq declarations.
 
-    Returns None if the function has no inner assertions (loop invariants),
-    meaning it doesn't need Extern Coq entries (e.g. helper functions).
+    By default, only functions with loop invariants are included so callers that
+    build loop-oriented artifacts keep the previous behavior. When
+    ``include_helpers`` is True, functions with translated funcspecs but no loop
+    invariants are also returned so their ``{func}_M`` signature can be emitted.
     """
     inner = func_data.get('inner_assertions', [])
     inv_assertions = [a for a in inner if a.get('type') == 'Inv' and 'variables' in a]
-    if not inv_assertions:
-        return None
-
     funcspec = func_data.get('funcspec')
+    if not inv_assertions and not include_helpers:
+        return None
+    if not funcspec:
+        return None
     require_var_count = 0
     require_var_names = []
     require_var_types: List[str] = []
@@ -51,18 +59,36 @@ def collect_func_extern_info(func_data: Dict) -> Optional[Dict]:
         ensure_var_count = len(ensure_only)
         ensure_var_types = [var_type for _, var_type in ensure_only]
 
-    inv_source = max(inv_assertions, key=lambda a: len(a.get('variables', [])))
-    inv_var_count = len(inv_source.get('variables', []))
-    inv_var_types = _normalize_var_types(inv_source.get('variable_types'), inv_var_count)
+    has_loop_program = bool(inv_assertions)
+    inv_var_count = 0
+    inv_var_types: List[str] = []
+    if inv_assertions:
+        inv_source = max(inv_assertions, key=lambda a: len(a.get('variables', [])))
+        inv_var_count = len(inv_source.get('variables', []))
+        inv_var_types = _normalize_var_types(inv_source.get('variable_types'), inv_var_count)
+
+    early_return_shape = {
+        'has_top_level_loop': False,
+        'has_pre_loop_early_return': False,
+        'has_loop_body_early_return': False,
+        'needs_early_result': False,
+    }
+    if function_source:
+        early_return_shape = detect_early_return_shape(function_source)
 
     return {
         'func_name': func_data['function'],
+        'has_loop_program': has_loop_program,
         'require_var_count': require_var_count,
         'require_var_types': require_var_types,
         'inv_var_count': inv_var_count,
         'inv_var_types': inv_var_types,
         'ensure_var_count': ensure_var_count,
         'ensure_var_types': ensure_var_types,
+        'has_top_level_loop': early_return_shape['has_top_level_loop'],
+        'has_pre_loop_early_return': early_return_shape['has_pre_loop_early_return'],
+        'has_loop_body_early_return': early_return_shape['has_loop_body_early_return'],
+        'needs_early_result': early_return_shape['needs_early_result'],
     }
 
 
@@ -112,6 +138,38 @@ def _return_type(types: List[str], count: int) -> str:
     return _tuple_type(types)
 
 
+def _extract_funcspec_return_info(funcspec: Dict) -> tuple[List[str], int]:
+    """Infer the abstract program return type from translated Require/Ensure clauses."""
+    require_var_names = []
+    if funcspec.get('require') and funcspec['require'].get('translated'):
+        require_vars, _ = _extract_generated_var_info(funcspec['require'])
+        require_var_names = [v.lstrip('?') for v in require_vars]
+
+    ensure_var_types: List[str] = []
+    ensure_var_count = 0
+    if funcspec.get('ensure') and funcspec['ensure'].get('translated'):
+        ensure_vars, raw_ensure_types = _extract_generated_var_info(funcspec['ensure'])
+        ensure_only = [
+            (name, var_type)
+            for name, var_type in zip(ensure_vars, raw_ensure_types)
+            if name.lstrip('?') not in require_var_names
+        ]
+        ensure_var_count = len(ensure_only)
+        ensure_var_types = [var_type for _, var_type in ensure_only]
+
+    return ensure_var_types, ensure_var_count
+
+
+def _build_return_call(clean_vars: List[str]) -> str:
+    """Build the abstract return program for Ensure clauses."""
+    if len(clean_vars) > 1:
+        var_args = ', '.join(clean_vars)
+        return f"return(maketuple({var_args}))"
+    if len(clean_vars) == 1:
+        return f"return({clean_vars[0]})"
+    return "return"
+
+
 def insert_safeexec_include(content: str) -> str:
     """Insert #include "safeexec_def.h" after the last #include line, if not already present."""
     if 'safeexec_def.h' in content:
@@ -126,6 +184,193 @@ def insert_safeexec_include(content: str) -> str:
     if last_include_idx >= 0:
         lines.insert(last_include_idx + 1, '#include "safeexec_def.h"')
     return '\n'.join(lines)
+
+
+def _strip_c_comments(text: str) -> str:
+    """Remove block and line comments before lightweight call scanning."""
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
+    return re.sub(r'//.*', '', text)
+
+
+def _extract_function_body(content: str, func_name: str) -> Optional[str]:
+    """Return the body text for a function definition, if present."""
+    pattern = (
+        rf'(?:[a-zA-Z_][a-zA-Z0-9_\s\*]*?)\b{re.escape(func_name)}\s*\([^)]*\)\s*'
+        rf'(?:/\*@.*?\*/\s*)?\{{'
+    )
+    match = re.search(pattern, content, re.DOTALL)
+    if not match:
+        return None
+
+    start = match.end()
+    brace_count = 1
+    pos = start
+    while pos < len(content) and brace_count > 0:
+        if content[pos] == '{':
+            brace_count += 1
+        elif content[pos] == '}':
+            brace_count -= 1
+        pos += 1
+
+    if brace_count != 0:
+        return None
+    return content[start:pos - 1]
+
+
+def _extract_function_source(file_path: str, func_name: str) -> str:
+    """Extract the full source text for one function definition from a C file."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    matches = re.finditer(rf"\b{re.escape(func_name)}\s*\(", content)
+    for match in matches:
+        depth = 0
+        for ch in content[:match.start()]:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+        if depth != 0:
+            continue
+
+        brace_start = content.find("{", match.end())
+        if brace_start == -1:
+            continue
+
+        semicolon = content.find(";", match.end())
+        if semicolon != -1 and semicolon < brace_start:
+            continue
+
+        start = content.rfind("\n", 0, match.start())
+        start = 0 if start == -1 else start + 1
+        break
+    else:
+        raise ValueError(f"Could not find function signature for '{func_name}' in {file_path}")
+
+    depth = 0
+    end = None
+    for idx in range(brace_start, len(content)):
+        ch = content[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = idx + 1
+                break
+
+    if end is None:
+        raise ValueError(f"Could not find function body end for '{func_name}' in {file_path}")
+
+    return content[start:end]
+
+
+def collect_callee_functions(content: str, functions: List[Dict]) -> set[str]:
+    """Collect functions that are called by another function or by themselves."""
+    function_names = []
+    seen = set()
+    for func in functions:
+        name = func.get('function')
+        if name and name not in seen:
+            seen.add(name)
+            function_names.append(name)
+
+    callees = set()
+    for caller in function_names:
+        body = _extract_function_body(content, caller)
+        if body is None:
+            continue
+        stripped_body = _strip_c_comments(body)
+        for callee in function_names:
+            if re.search(rf'\b{re.escape(callee)}\s*\(', stripped_body):
+                callees.add(callee)
+
+    return callees
+
+
+def _format_funcspec_comment(parts: List[str], header: Optional[str] = None) -> str:
+    """Render one annotation comment from a header label and clause lines."""
+    lines = []
+    if header:
+        lines.append(f"/*@ {header}")
+    else:
+        lines.append("/*@")
+
+    if parts:
+        lines.extend(f"    {part}" for part in parts)
+    lines.append(" */")
+    return "\n".join(lines)
+
+
+def _build_funcspec_parts(processed: Dict) -> List[str]:
+    """Convert a processed funcspec dict into formatted clause lines."""
+    parts = []
+    if 'with' in processed and processed['with']:
+        parts.append(f"With {processed['with']['translated']}")
+    if 'require' in processed and processed['require']:
+        req = processed['require']
+        parts.append(f"Require {req.get('with_safeexec', req.get('translated', ''))}")
+    if 'ensure' in processed and processed['ensure']:
+        ens = processed['ensure']
+        parts.append(f"Ensure {ens.get('with_safeexec', ens.get('translated', ''))}")
+    return parts
+
+
+def _build_helper_aux_funcspec(processed: Dict, funcspec: Dict, program: str) -> str:
+    """Build the derived continuation-passing helper specification."""
+    ret_types, ret_count = _extract_funcspec_return_info(funcspec)
+    ret_type = _return_type(ret_types, ret_count)
+    base_with = processed.get('with', {}).get('translated', '').strip()
+    with_prefix = f"{{B}} (cont: {ret_type} -> program unit B)"
+    with_clause = f"{with_prefix} {base_with}".strip()
+
+    require_text = ""
+    if processed.get('require'):
+        require_text = processed['require'].get('with_safeexec', processed['require'].get('translated', ''))
+        require_text = require_text.replace(
+            f"safeExec(ATrue, {program}",
+            f"safeExec(ATrue, bind({program}",
+            1,
+        )
+        if "bind(" in require_text:
+            require_text = require_text.replace(", X)", ", cont), X)", 1)
+
+    ensure_text = ""
+    if processed.get('ensure'):
+        ensure_text = processed['ensure'].get('with_safeexec', processed['ensure'].get('translated', ''))
+        ensure_vars = processed['ensure'].get('variables') or extract_variables_from_assertion(
+            processed['ensure'].get('translated', '')
+        )
+        return_expr = _build_return_call([v.lstrip('?') for v in ensure_vars])
+        ensure_text = ensure_text.replace(
+            f"safeExec(ATrue, {return_expr}, X)",
+            f"safeExec(ATrue, bind({return_expr}, cont), X)",
+            1,
+        )
+
+    return _format_funcspec_comment(
+        [
+            f"With {with_clause}",
+            f"Require {require_text}",
+            f"Ensure {ensure_text}",
+        ],
+        header="low_level_spec_aux <= low_level_spec",
+    )
+
+
+def _early_result_type(left_type: str, right_type: str) -> str:
+    return f"early_result {left_type} {right_type}"
+
+
+def _render_helper_funcspec_declarations(header_decl: str, primary_spec: str, aux_spec: str) -> str:
+    """Repeat a helper declaration so each named spec gets its own prototype."""
+    normalized_header = header_decl.rstrip()
+    return (
+        f"{normalized_header}\n"
+        f"{primary_spec};\n"
+        f"{normalized_header}\n"
+        f"{aux_spec}"
+    )
 
 
 def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: bool = False) -> str:
@@ -144,8 +389,15 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
     # Import Coq
     lines.append(f'/*@ Import Coq Require Import {basename}_rel_lib */')
 
-    # Extern Coq (MretTy :: *)
+    # Extern Coq type constructors
     lines.append('/*@ Extern Coq (MretTy :: *) */')
+    if any(
+        info.get('needs_early_result', False)
+        or info.get('has_pre_loop_early_return', False)
+        or info.get('has_loop_body_early_return', False)
+        for info in func_infos
+    ):
+        lines.append('/*@ Extern Coq (early_result :: * => * => *) */')
 
     # Extern Coq with program declarations
     decl_lines = []
@@ -154,6 +406,9 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
 
     for info in func_infos:
         fn = info['func_name']
+        has_loop_program = info.get('has_loop_program', info['inv_var_count'] > 0)
+        has_pre_loop_early_return = info.get('has_pre_loop_early_return', False)
+        has_loop_body_early_return = info.get('has_loop_body_early_return', False)
         req_count = info['require_var_count']
         inv_count = info['inv_var_count']
         ens_count = info.get('ensure_var_count', 1)
@@ -161,17 +416,31 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
         inv_types = _normalize_var_types(info.get('inv_var_types'), inv_count)
         ens_types = _normalize_var_types(info.get('ensure_var_types'), ens_count)
         ret_type = _return_type(ens_types, ens_count)
+        state_type = _tuple_type(inv_types) if inv_types else "unit"
 
         # {func}_M: t1 -> ... -> program unit (r1 [* r2 ...])
         req_args = _curried_type(req_types)
         decl_lines.append(f'({fn}_M: {req_args}program unit {ret_type})')
 
-        # {func}_M_loop: t1 -> ... -> program unit MretTy
-        inv_args = _curried_type(inv_types)
-        decl_lines.append(f'({fn}_M_loop: {inv_args}program unit MretTy)')
+        if has_loop_program:
+            # {func}_M_loop: t1 -> ... -> program unit MretTy
+            inv_args = _curried_type(inv_types)
+            if has_loop_body_early_return:
+                loop_ret_type = _early_result_type("MretTy", ret_type)
+                decl_lines.append(f'({fn}_M_loop: {inv_args}program unit ({loop_ret_type}))')
+            else:
+                decl_lines.append(f'({fn}_M_loop: {inv_args}program unit MretTy)')
 
-        # {func}_M_loop_end: MretTy -> program unit (r1 [* r2 ...])
-        decl_lines.append(f'({fn}_M_loop_end: MretTy -> program unit {ret_type})')
+            # {func}_M_loop_end: MretTy -> program unit (r1 [* r2 ...])
+            decl_lines.append(f'({fn}_M_loop_end: MretTy -> program unit {ret_type})')
+            if has_loop_body_early_return:
+                decl_lines.append(
+                    f'({fn}_M_after_loop: {_early_result_type("MretTy", ret_type)} -> program unit {ret_type})'
+                )
+            if has_pre_loop_early_return:
+                decl_lines.append(
+                    f'({fn}_M_loop_before: {req_args}program unit ({_early_result_type(state_type, ret_type)}))'
+                )
 
     # Format multi-line Extern Coq block
     padding = '               '
@@ -229,14 +498,32 @@ def translate_c_file(input_path: str, output_path: str) -> bool:
 
     # If we have multiple functions (new logic), process each
     if 'functions' in result and result['functions']:
+        callee_functions = collect_callee_functions(content, result['functions'])
         for func_data in result['functions']:
             func_name = func_data['function']
             program = f"{func_name}_M"
             program_loop = f"{func_name}_M_loop"
             program_loop_end = f"{func_name}_M_loop_end"
+            program_after_loop = f"{func_name}_M_after_loop"
+            try:
+                func_source = _extract_function_source(input_path, func_name)
+            except Exception:
+                func_source = None
+            early_shape = detect_early_return_shape(func_source) if func_source else {
+                'has_top_level_loop': False,
+                'has_pre_loop_early_return': False,
+                'has_loop_body_early_return': False,
+                'needs_early_result': False,
+            }
 
             # 1. Replace Specs
-            content = replace_funcspec(content, func_name, func_data.get('funcspec'), program)
+            content = replace_funcspec(
+                content,
+                func_name,
+                func_data.get('funcspec'),
+                program,
+                is_callee_funcspec=func_name in callee_functions,
+            )
 
             # 2. Replace Inners
             content = replace_inner_assertions_for_func(
@@ -244,11 +531,15 @@ def translate_c_file(input_path: str, output_path: str) -> bool:
                 func_name,
                 func_data.get('inner_assertions', []),
                 program_loop,
-                program_loop_end
+                program_after_loop if early_shape['has_loop_body_early_return'] else program_loop_end
             )
 
             # 3. Collect extern info
-            info = collect_func_extern_info(func_data)
+            info = collect_func_extern_info(
+                func_data,
+                include_helpers=True,
+                function_source=func_source,
+            )
             if info:
                 func_infos.append(info)
     else:
@@ -257,17 +548,39 @@ def translate_c_file(input_path: str, output_path: str) -> bool:
         program = f"{func_name}_M"
         program_loop = f"{func_name}_M_loop"
         program_loop_end = f"{func_name}_M_loop_end"
-        content = replace_funcspec(content, func_name, result.get('funcspec'), program)
+        program_after_loop = f"{func_name}_M_after_loop"
+        callee_functions = collect_callee_functions(content, [{'function': func_name}])
+        try:
+            func_source = _extract_function_source(input_path, func_name)
+        except Exception:
+            func_source = None
+        early_shape = detect_early_return_shape(func_source) if func_source else {
+            'has_top_level_loop': False,
+            'has_pre_loop_early_return': False,
+            'has_loop_body_early_return': False,
+            'needs_early_result': False,
+        }
+        content = replace_funcspec(
+            content,
+            func_name,
+            result.get('funcspec'),
+            program,
+            is_callee_funcspec=func_name in callee_functions,
+        )
         content = replace_inner_assertions_original(
             content,
             func_name,
             result.get('inner_assertions', []),
             program_loop,
-            program_loop_end
+            program_after_loop if early_shape['has_loop_body_early_return'] else program_loop_end
         )
 
         # Collect extern info for single-function mode
-        info = collect_func_extern_info(result)
+        info = collect_func_extern_info(
+            result,
+            include_helpers=True,
+            function_source=func_source,
+        )
         if info:
             func_infos.append(info)
 
@@ -298,34 +611,46 @@ def translate_c_file(input_path: str, output_path: str) -> bool:
         return False
 
 
-def replace_funcspec(content: str, func_name: str, funcspec: Optional[Dict], program: str) -> str:
+def replace_funcspec(
+    content: str,
+    func_name: str,
+    funcspec: Optional[Dict],
+    program: str,
+    is_callee_funcspec: bool = False,
+) -> str:
     if not funcspec:
         return content
 
     processed = process_funcspec_with_safeexec(funcspec, program)
 
+    spec_comments = [_format_funcspec_comment(_build_funcspec_parts(processed))]
+    if is_callee_funcspec:
+        spec_comments = [
+            _format_funcspec_comment(_build_funcspec_parts(processed), header="low_level_spec"),
+            _build_helper_aux_funcspec(processed, funcspec, program),
+        ]
+    rendered_spec = "\n".join(spec_comments)
+
     # Simplified but robust pattern: find function name, then the annotation block before or after it
     # The original tests expect the spec to be replaced correctly.
     
     # Original pattern from the codebase (re-implemented robustly)
-    func_pattern = rf'(\b{re.escape(func_name)}\s*\([^)]*\)\s*/\*@)(.*?)(\*/)'
+    func_pattern = (
+        rf'((?:[a-zA-Z_][a-zA-Z0-9_\s\*]*?)\b{re.escape(func_name)}\s*\([^)]*\)\s*)'
+        rf'(/\*@.*?\*/)'
+    )
     
     # If it matches func(...) /*@ ... */
     if re.search(func_pattern, content, re.DOTALL):
         def replace_spec(match):
-            prefix = match.group(1)
-            suffix = match.group(3)
-            new_parts = []
-            if 'with' in processed and processed['with']:
-                new_parts.append(f" With {processed['with']['translated']}")
-            if 'require' in processed and processed['require']:
-                req = processed['require']
-                new_parts.append(f" Require {req.get('with_safeexec', req.get('translated', ''))}")
-            if 'ensure' in processed and processed['ensure']:
-                ens = processed['ensure']
-                new_parts.append(f" Ensure {ens.get('with_safeexec', ens.get('translated', ''))}")
-            new_spec = '\n   '.join(new_parts)
-            return f"{prefix}\n   {new_spec}\n {suffix}"
+            header_prefix = match.group(1)
+            if is_callee_funcspec:
+                return _render_helper_funcspec_declarations(
+                    header_prefix,
+                    spec_comments[0],
+                    spec_comments[1],
+                )
+            return f"{header_prefix}{rendered_spec}"
         return re.sub(func_pattern, replace_spec, content, flags=re.DOTALL)
     
     # Try the case where /*@ ... */ is BEFORE func(...)
@@ -338,22 +663,17 @@ def replace_funcspec(content: str, func_name: str, funcspec: Optional[Dict], pro
     if match:
         spec_comment = match.group(1)
         func_header = match.group(2)
-        
-        # Strip /*@ and */
-        inner_content = spec_comment[3:-2].strip()
-        
-        new_parts = []
-        if 'with' in processed and processed['with']:
-            new_parts.append(f" With {processed['with']['translated']}")
-        if 'require' in processed and processed['require']:
-            req = processed['require']
-            new_parts.append(f" Require {req.get('with_safeexec', req.get('translated', ''))}")
-        if 'ensure' in processed and processed['ensure']:
-            ens = processed['ensure']
-            new_parts.append(f" Ensure {ens.get('with_safeexec', ens.get('translated', ''))}")
-        
-        new_spec = '/*@ ' + '\n   '.join(new_parts) + '\n */'
-        return content.replace(spec_comment + func_header, new_spec + func_header)
+        if is_callee_funcspec:
+            stripped_header = func_header.strip()
+            if stripped_header.endswith(';'):
+                header_decl = stripped_header[:-1].rstrip()
+                repeated = _render_helper_funcspec_declarations(
+                    header_decl,
+                    spec_comments[0],
+                    spec_comments[1],
+                )
+                return content.replace(spec_comment + func_header, repeated + ";")
+        return content.replace(spec_comment + func_header, rendered_spec + func_header)
 
     return content
 

@@ -1,8 +1,22 @@
 {
   "id": "sll_reverse",
-  "version": 1,
+  "version": 2,
   "source": {
-    "c_file": "shape_invdataset/sll/sll_reverse.c"
+    "c_file": "shape_invdataset/sll/sll_reverse.c",
+    "file_id": "sll_reverse"
+  },
+  "file_overview": {
+    "targets": [
+      "sll_reverse"
+    ],
+    "functions": [
+      {
+        "func_name": "sll_reverse",
+        "should_synthesize": true,
+        "calls": [],
+        "called_by": []
+      }
+    ]
   },
   "predicate_family": "sll",
   "summary": {
@@ -23,7 +37,30 @@
     "ensure_with_safeexec": "exists l2, safeExec(ATrue, return(l2), X) && sll(__return, l2)",
     "loop_invariant_with_safeexec": "exists l1 l2, safeExec(ATrue, bind(sll_reverse_M_loop(l1,l2), sll_reverse_M_loop_end), X) && sll(prev, l1) * sll(curr, l2)",
     "loop_condition": "curr != (void *) 0",
-    "guard_coq": "fun a =>\n  let '(l1, l2) := a in\n  l2 <> []"
+    "guard_coq": "fun a =>\n  let '(l1, l2) := a in\n  l2 <> []",
+    "control_flow": {
+      "template_case": "none",
+      "has_pre_loop_early_return": false,
+      "has_loop_body_early_return": false,
+      "needs_early_result": false,
+      "state_type": "(list Z * list Z)",
+      "return_type": "list Z",
+      "prompt_signatures": {
+        "M_loop_before": "list Z -> MONAD (list Z * list Z)",
+        "M_loop_body": "(list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy)",
+        "M_loop": "list Z -> list Z -> program unit (MretTy)",
+        "M_loop_M1": "(list Z * list Z) -> MONAD MretTy",
+        "M_loop_M2": "(list Z * list Z) -> MONAD (list Z * list Z)",
+        "M_loop_end": "MretTy -> MONAD (list Z)",
+        "M_after_loop": "",
+        "M": "list Z -> MONAD (list Z)"
+      },
+      "template": {
+        "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
+        "after_loop_definition": ""
+      },
+      "has_top_level_loop": true
+    }
   },
   "signatures": {
     "M_loop_before": "list Z -> MONAD (list Z * list Z)",
@@ -31,6 +68,125 @@
     "M_2": "(list Z * list Z) -> MONAD (list Z * list Z)",
     "M_loop_end": "MretTy -> MONAD (list Z)",
     "M": "list Z -> MONAD (list Z)"
+  },
+  "control_flow": {
+    "template_case": "none",
+    "has_pre_loop_early_return": false,
+    "has_loop_body_early_return": false,
+    "needs_early_result": false,
+    "state_type": "(list Z * list Z)",
+    "return_type": "list Z",
+    "prompt_signatures": {
+      "M_loop_before": "list Z -> MONAD (list Z * list Z)",
+      "M_loop_body": "(list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy)",
+      "M_loop": "list Z -> list Z -> program unit (MretTy)",
+      "M_loop_M1": "(list Z * list Z) -> MONAD MretTy",
+      "M_loop_M2": "(list Z * list Z) -> MONAD (list Z * list Z)",
+      "M_loop_end": "MretTy -> MONAD (list Z)",
+      "M_after_loop": "",
+      "M": "list Z -> MONAD (list Z)"
+    },
+    "template": {
+      "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
+      "after_loop_definition": ""
+    },
+    "has_top_level_loop": true
+  },
+  "target": {
+    "func_name": "sll_reverse",
+    "has_body": true,
+    "has_loop_invariants": true,
+    "is_recursive": false,
+    "called_by": [],
+    "calls": [],
+    "should_synthesize": true,
+    "c_source": "struct list* sll_reverse(struct list* head)\n/*@\n      Require listrep(head)\n      Ensure listrep(__return)\n*/\n{\n    struct list* prev = (void *)0;\n    struct list* curr = head;\n    /*@ Inv listrep(prev) * listrep(curr)\n      */\n    while (curr != (void *) 0) {\n        struct list* next = curr->next;\n        curr->next = prev;\n        prev = curr;\n        curr = next;\n    }\n    return prev;\n}",
+    "predicate_family": "sll",
+    "summary": {
+      "func_name": "sll_reverse"
+    },
+    "features": {
+      "loop_count": 1,
+      "require_var_count": 1,
+      "inv_var_count": 2,
+      "ensure_var_count": 1,
+      "has_seg_predicate": false,
+      "has_multi_return": false
+    },
+    "prompt_context": {
+      "c_source": "struct list* sll_reverse(struct list* head)\n/*@\n      Require listrep(head)\n      Ensure listrep(__return)\n*/\n{\n    struct list* prev = (void *)0;\n    struct list* curr = head;\n    /*@ Inv listrep(prev) * listrep(curr)\n      */\n    while (curr != (void *) 0) {\n        struct list* next = curr->next;\n        curr->next = prev;\n        prev = curr;\n        curr = next;\n    }\n    return prev;\n}",
+      "with_clause": "X l1",
+      "require_with_safeexec": "safeExec(ATrue, sll_reverse_M(l1), X) && sll(head, l1)",
+      "ensure_with_safeexec": "exists l2, safeExec(ATrue, return(l2), X) && sll(__return, l2)",
+      "loop_invariant_with_safeexec": "exists l1 l2, safeExec(ATrue, bind(sll_reverse_M_loop(l1,l2), sll_reverse_M_loop_end), X) && sll(prev, l1) * sll(curr, l2)",
+      "loop_condition": "curr != (void *) 0",
+      "guard_coq": "fun a =>\n  let '(l1, l2) := a in\n  l2 <> []",
+      "control_flow": {
+        "template_case": "none",
+        "has_pre_loop_early_return": false,
+        "has_loop_body_early_return": false,
+        "needs_early_result": false,
+        "state_type": "(list Z * list Z)",
+        "return_type": "list Z",
+        "prompt_signatures": {
+          "M_loop_before": "list Z -> MONAD (list Z * list Z)",
+          "M_loop_body": "(list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy)",
+          "M_loop": "list Z -> list Z -> program unit (MretTy)",
+          "M_loop_M1": "(list Z * list Z) -> MONAD MretTy",
+          "M_loop_M2": "(list Z * list Z) -> MONAD (list Z * list Z)",
+          "M_loop_end": "MretTy -> MONAD (list Z)",
+          "M_after_loop": "",
+          "M": "list Z -> MONAD (list Z)"
+        },
+        "template": {
+          "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
+          "after_loop_definition": ""
+        },
+        "has_top_level_loop": true
+      }
+    },
+    "signatures": {
+      "M_loop_before": "list Z -> MONAD (list Z * list Z)",
+      "M_1": "(list Z * list Z) -> MONAD MretTy",
+      "M_2": "(list Z * list Z) -> MONAD (list Z * list Z)",
+      "M_loop_end": "MretTy -> MONAD (list Z)",
+      "M": "list Z -> MONAD (list Z)"
+    },
+    "control_flow": {
+      "template_case": "none",
+      "has_pre_loop_early_return": false,
+      "has_loop_body_early_return": false,
+      "needs_early_result": false,
+      "state_type": "(list Z * list Z)",
+      "return_type": "list Z",
+      "prompt_signatures": {
+        "M_loop_before": "list Z -> MONAD (list Z * list Z)",
+        "M_loop_body": "(list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy)",
+        "M_loop": "list Z -> list Z -> program unit (MretTy)",
+        "M_loop_M1": "(list Z * list Z) -> MONAD MretTy",
+        "M_loop_M2": "(list Z * list Z) -> MONAD (list Z * list Z)",
+        "M_loop_end": "MretTy -> MONAD (list Z)",
+        "M_after_loop": "",
+        "M": "list Z -> MONAD (list Z)"
+      },
+      "template": {
+        "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
+        "after_loop_definition": ""
+      },
+      "has_top_level_loop": true
+    }
+  },
+  "available_callees": [],
+  "opaque_call_obligations": [],
+  "generation_policy": {
+    "must_define": [
+      "MretTy",
+      "sll_reverse_M_loop_before",
+      "sll_reverse_M_loop_M1",
+      "sll_reverse_M_loop_M2",
+      "sll_reverse_M_loop_end"
+    ],
+    "opaque_external_programs": []
   },
   "gold": {
     "rel_lib_file": "few-shot-examples/absprog/sll_reverse_rel_lib.v",

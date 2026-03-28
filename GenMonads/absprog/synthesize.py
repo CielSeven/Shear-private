@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
@@ -151,6 +152,43 @@ def _default_check_result() -> Dict:
     }
 
 
+def _validate_opaque_callee_usage(context: Dict, response_text: str) -> None:
+    required_programs = context.get("generation_policy", {}).get("opaque_external_programs", [])
+    missing = []
+    for name in required_programs:
+        if name not in response_text:
+            missing.append(name)
+
+    if missing:
+        obligations = context.get("opaque_call_obligations", [])
+        detail_lines = [
+            "Missing required opaque callee program(s) in synthesized response:",
+            ", ".join(missing),
+        ]
+        if obligations:
+            detail_lines.append("Required opaque call obligations:")
+            for obligation in obligations:
+                if obligation["callee"] in missing:
+                    detail_lines.append(
+                        f"- {obligation['call_site']} -> {obligation['callee']}"
+                    )
+        raise ValueError("\n".join(detail_lines))
+
+
+def _validate_early_return_scaffold(context: Dict, response_text: str) -> None:
+    control_flow = context.get("control_flow") or context.get("target", {}).get("control_flow", {})
+    if not control_flow.get("needs_early_result"):
+        return
+
+    if "early_result" not in response_text:
+        detail_lines = [
+            "Missing early-return-aware scaffold in synthesized response.",
+            f"Template case: {control_flow.get('template_case', 'unknown')}",
+            "Expected the generated definitions to mention `early_result`.",
+        ]
+        raise ValueError("\n".join(detail_lines))
+
+
 def _attempt_dir(output_dir: str, attempt_index: int) -> str:
     return os.path.join(output_dir, f"attempt-{attempt_index}")
 
@@ -161,6 +199,40 @@ def _attempt_file(attempt_dir: str, context_id: str, suffix: str) -> str:
 
 def _root_file(output_dir: str, context_id: str, suffix: str) -> str:
     return os.path.join(output_dir, f"{context_id}.{suffix}")
+
+
+def _default_coq_lib_dir() -> str:
+    env = os.environ.get("COQ_LIB_DIR")
+    if env:
+        return env
+
+    configure = os.path.join(os.path.dirname(__file__), "..", "..", "CONFIGURE")
+    configure = os.path.normpath(configure)
+    if os.path.isfile(configure):
+        with open(configure, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("COQ_LIB_DIR="):
+                    value = line.split(":-", 1)[-1].rstrip('}"')
+                    if value:
+                        return value
+    return os.path.join("output", "gen", "libs")
+
+
+def _promote_rel_lib_if_accepted(assembled_file: str, context_id: str, status: str) -> str:
+    if status != "passed" or not assembled_file or not os.path.isfile(assembled_file):
+        return ""
+
+    target_dir = _default_coq_lib_dir()
+    os.makedirs(target_dir, exist_ok=True)
+    source_root, _ = os.path.splitext(assembled_file)
+    target_root = os.path.join(target_dir, f"{context_id}_rel_lib")
+    for ext in [".v", ".vo", ".vok", ".vos", ".glob"]:
+        source = f"{source_root}{ext}"
+        if os.path.isfile(source):
+            shutil.copyfile(source, f"{target_root}{ext}")
+    target_path = f"{target_root}.v"
+    return target_path
 
 
 def _final_status_from_attempt(attempt: Dict) -> str:
@@ -314,6 +386,24 @@ def run_synthesis_pipeline(
         _write_text(response_out_file, response_text)
 
         try:
+            _validate_opaque_callee_usage(context, response_text)
+            _validate_early_return_scaffold(context, response_text)
+        except Exception as exc:
+            failure_kind = "validation"
+            failure_message = str(exc)
+            attempt_summary = _build_attempt_summary(
+                attempt_index, files, status, failure_kind, failure_message, check_result
+            )
+            attempt_summary_file = _attempt_file(attempt_dir, context["id"], "summary.json")
+            _write_json(attempt_summary_file, attempt_summary)
+            attempt_summary["files"]["summary"] = attempt_summary_file
+            attempts.append(attempt_summary)
+            previous_response = response_text
+            previous_failure_kind = failure_kind
+            previous_failure_message = failure_message
+            continue
+
+        try:
             blocks = parse_synthesized_components(response_text, context["summary"]["func_name"])
             _write_json(parsed_file, blocks)
             files["parsed"] = parsed_file
@@ -365,6 +455,11 @@ def run_synthesis_pipeline(
                 "check": check_result,
                 "status": status,
             }
+            promoted_path = _promote_rel_lib_if_accepted(
+                attempt_summary["files"].get("assembled_rel_lib", ""), context["id"], status
+            )
+            if promoted_path:
+                summary["files"]["promoted_rel_lib"] = promoted_path
             summary_file = _root_file(output_dir, context["id"], "summary.json")
             _write_json(summary_file, summary)
             summary["files"]["summary"] = summary_file
@@ -397,6 +492,11 @@ def run_synthesis_pipeline(
         "check": final_attempt["check"],
         "status": _final_status_from_attempt(final_attempt),
     }
+    promoted_path = _promote_rel_lib_if_accepted(
+        final_attempt["files"].get("assembled_rel_lib", ""), context["id"], summary["status"]
+    )
+    if promoted_path:
+        summary["files"]["promoted_rel_lib"] = promoted_path
     summary_file = _root_file(output_dir, context["id"], "summary.json")
     _write_json(summary_file, summary)
     summary["files"]["summary"] = summary_file

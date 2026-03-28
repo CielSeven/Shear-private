@@ -135,7 +135,7 @@ The template should consume these fields directly:
 - `features.ensure_var_count`
 - `features.has_seg_predicate`
 - `features.has_multi_return`
-- `prompt_context.c_source`
+- `target.c_source` (or `prompt_context.c_source` as fallback)
 - `prompt_context.with_clause`
 - `prompt_context.require_with_safeexec`
 - `prompt_context.ensure_with_safeexec`
@@ -147,6 +147,10 @@ The template should consume these fields directly:
 - `signatures.M_2`
 - `signatures.M_loop_end`
 - `signatures.M`
+- `available_callees`
+- `opaque_call_obligations`
+- `generation_policy.must_define`
+- `generation_policy.opaque_external_programs`
 
 Suggested prompt shape:
 
@@ -166,7 +170,7 @@ Has segment predicate: {features.has_seg_predicate}
 Has multi return: {features.has_multi_return}
 
 ## C Source
-{prompt_context.c_source}
+{target.c_source}
 
 ## Prompt Context
 With clause: {prompt_context.with_clause}
@@ -185,12 +189,31 @@ M_2: {signatures.M_2}
 M_loop_end: {signatures.M_loop_end}
 M: {signatures.M}
 
+## Available Callees
+Treat the following same-file callees as opaque abstract programs.
+{for callee in available_callees}
+- `{callee.func_name}_M: {callee.externals.M}`
+  Base Require: `{callee.spec.require}`
+  Base Ensure: `{callee.spec.ensure}`
+{for site in callee.call_sites}
+  Call site: `{site}`
+{end for}
+{end for}
+
+## Opaque Call Obligations
+Every listed helper call is mandatory.
+You must model it using the listed opaque abstract program.
+Do not replace helper-call results with `any`.
+{for obligation in opaque_call_obligations}
+- `{obligation.call_site}` must use `{obligation.callee}`
+{end for}
 
 ## QCP Monad Primitives
 - `return v` / `ret v`: return value v (monadic return)
 - `bind m f` / `m >>= f`: sequence m then f
 - `program unit T`: monadic program returning T (StateRelMonad)
-- `assume P` : enforce the condition P of type Prop holds and returns the unit value tt
+- `assume!! P`: lift a pure Coq proposition `P : Prop` into the monadic assumption form. Use this for branch conditions and pure facts such as `x <= y`, `l2 = nil`, or guard checks.
+- `assume P`: use this only when `P` is already in the library's expected state-predicate form. For these synthesis tasks, prefer `assume!!` over bare `assume`.
 - `any A` : return an value v of type A
 - `choice m1 m2` : nondeterministic branching
 - `repeat_break`: loop construct with break and continue branch
@@ -221,6 +244,9 @@ Generate `MretTy` and the 4 non-guard components such that the composed abstract
    state?
 3. **M_1 (break branch)**: When the loop exits, how is the final result packaged?
 4. **M_loop_end**: map the loop result to the Ensure variables.
+
+When the C code calls an opaque same-file callee, you must model that step using the corresponding opaque abstract program listed in `available_callees`.
+Do not replace required opaque callee calls with `any`.
 
 
 Return Coq definitions only for:

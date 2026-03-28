@@ -24,6 +24,7 @@ for arg in "$@"; do
     -SYMEXEC=*|--SYMEXEC=*)     SYMEXEC="${arg#*=}";;
     -SYMEXEC_INCLUDE_DIRS=*|--SYMEXEC_INCLUDE_DIRS=*) SYMEXEC_INCLUDE_DIRS="${arg#*=}";;
     -SYMEXEC_HEADER_DIR=*|--SYMEXEC_HEADER_DIR=*) SYMEXEC_INCLUDE_DIRS="${arg#*=}";;
+    -SYMEXEC_STRATEGY_PATHS=*|--SYMEXEC_STRATEGY_PATHS=*) SYMEXEC_STRATEGY_PATHS="${arg#*=}";;
     -OUTPUT_PATH=*|--OUTPUT_PATH=*) OUTPUT_PATH="${arg#*=}";;
     -FILE=*|--FILE=*)           FILE_ARG="${arg#*=}";;
     *) echo "⚠️  Unknown arg: $arg";;
@@ -41,10 +42,16 @@ done
 START_DIR="$REPO_ROOT"
 
 abspath() {
-  case "$1" in
-    /*) printf '%s\n' "$1" ;;
-    *)  printf '%s\n' "$START_DIR/$1" ;;
+  local input_path="$1"
+  local target_path
+
+  case "$input_path" in
+    /*) target_path="$input_path" ;;
+    *)  target_path="$START_DIR/${input_path#./}" ;;
   esac
+
+  [ "$target_path" = "/" ] || target_path="${target_path%/}"
+  printf '%s\n' "${target_path//\/.\//\/}"
 }
 
 C_DIR_ABS="$(abspath "$C_DIR")"
@@ -63,6 +70,41 @@ for include_dir in "${SYMEXEC_INCLUDE_DIR_LIST[@]}"; do
   INCLUDE_FLAGS+=("-I$include_dir_abs")
 done
 [ "${#INCLUDE_FLAGS[@]}" -gt 0 ] || { echo "❌ No valid symexec include directories configured"; exit 1; }
+
+SLP_FLAGS=()
+STRATEGY_PATHS_DISPLAY=()
+if [ -n "${SYMEXEC_STRATEGY_PATHS:-}" ]; then
+  IFS=':' read -r -a SYMEXEC_STRATEGY_PATH_LIST <<< "$SYMEXEC_STRATEGY_PATHS"
+  for strategy_entry in "${SYMEXEC_STRATEGY_PATH_LIST[@]}"; do
+    [ -n "$strategy_entry" ] || continue
+
+    case "$strategy_entry" in
+      *,*)
+        strategy_physical="${strategy_entry%%,*}"
+        strategy_logic="${strategy_entry#*,}"
+        ;;
+      *)
+        echo "❌ Invalid SYMEXEC_STRATEGY_PATHS entry: $strategy_entry"
+        echo "   Expected format: /physical/path,Logic.Module"
+        exit 1
+        ;;
+    esac
+
+    if [ "$strategy_logic" = '""' ] || [ "$strategy_logic" = "''" ]; then
+      strategy_logic=""
+    fi
+
+    strategy_physical_abs="$(abspath "$strategy_physical")"
+    [ -d "$strategy_physical_abs" ] || { echo "❌ symexec strategy directory not found: $strategy_physical_abs"; exit 1; }
+
+    if [ -n "$strategy_logic" ]; then
+      STRATEGY_PATHS_DISPLAY+=("$strategy_physical_abs -> $strategy_logic")
+    else
+      STRATEGY_PATHS_DISPLAY+=("$strategy_physical_abs -> \"\"")
+    fi
+    SLP_FLAGS+=("-slp" "$strategy_physical_abs" "$strategy_logic")
+  done
+fi
 
 mkdir -p "$LOGDIR_ABS" "$OUTPUT_ABS"
 [ -x "$SYMEXEC_ABS" ] || { echo "❌ symexec executable not found: $SYMEXEC_ABS"; exit 1; }
@@ -83,6 +125,7 @@ else
   echo "  OUTPUT_PATH  = $OUTPUT_ABS"
   echo "  SYMEXEC      = $SYMEXEC_ABS"
   echo "  INCLUDE_DIRS = ${INCLUDE_DIRS_ABS[*]}"
+  [ "${#STRATEGY_PATHS_DISPLAY[@]}" -gt 0 ] && echo "  STRATEGY_MAP = ${STRATEGY_PATHS_DISPLAY[*]}"
   echo
   cd "$C_DIR_ABS" || { echo "❌ Cannot enter $C_DIR_ABS"; exit 1; }
   FILES=(*.c)
@@ -100,6 +143,7 @@ for f in "${FILES[@]}"; do
     echo "== $(date '+%F %T') : $f =="
     "$SYMEXEC_ABS" \
       "${INCLUDE_FLAGS[@]}" \
+      "${SLP_FLAGS[@]}" \
       --input-file="$f" \
       --goal-file="$goal_out" \
       --proof-auto-file="$auto_out" \

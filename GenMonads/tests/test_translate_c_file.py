@@ -11,6 +11,7 @@ import pytest
 from GenMonads.translate_c_file import (
     translate_c_file, translate_directory,
     insert_safeexec_include, generate_coq_blocks, collect_func_extern_info,
+    collect_callee_functions,
 )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -119,6 +120,32 @@ class TestOutputVerification:
         assert 'sll(' in translated
         assert 'sllseg(' in translated
 
+    def test_multi_merge_output_declares_helper_program_signature(self):
+        input_path = os.path.join(SLL_DIR, 'sll_multi_merge.c')
+        if not os.path.exists(input_path):
+            pytest.skip("sll_multi_merge.c not found")
+
+        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_multi_merge_rel.c')
+        assert translate_c_file(input_path, output_path)
+
+        with open(output_path, 'r') as f:
+            content = f.read()
+
+        assert '/*@ Extern Coq (early_result :: * => * => *) */' in content
+        assert '(sll_merge_M: list Z -> list Z -> program unit (list Z))' in content
+        assert '(sll_multi_merge_M: list Z -> list Z -> list Z -> program unit (list Z))' in content
+        assert '(sll_multi_merge_M_loop_before: list Z -> list Z -> list Z -> program unit (early_result (list Z * list Z * list Z * list Z) (list Z)))' in content
+        assert '(sll_multi_merge_M_loop: list Z -> list Z -> list Z -> list Z -> program unit (early_result MretTy (list Z)))' in content
+        assert '(sll_multi_merge_M_after_loop: early_result MretTy (list Z) -> program unit (list Z))' in content
+        assert 'sll_merge_M_loop' not in content
+        assert content.count('struct list * sll_merge(struct list * x, struct list * y)') == 2
+        assert '/*@ low_level_spec' in content
+        assert '/*@ low_level_spec_aux <= low_level_spec' in content
+        assert 'With {B} (cont: (list Z) -> program unit B) X l1 l2' in content
+        assert 'Require safeExec(ATrue, bind(sll_merge_M(l1, l2), cont), X)' in content
+        assert 'Ensure exists l3, safeExec(ATrue, bind(return(l3), cont), X)' in content
+        assert 'bind(sll_multi_merge_M_loop(l1,l2,l3,l4), sll_multi_merge_M_after_loop)' in content
+
 
 # ============================================================================
 # safeexec_def.h Include Tests
@@ -163,6 +190,7 @@ class TestCoqBlocks:
         result = generate_coq_blocks('sll_copy', infos)
         assert '/*@ Import Coq Require Import sll_copy_rel_lib */' in result
         assert '/*@ Extern Coq (MretTy :: *) */' in result
+        assert '/*@ Extern Coq (early_result :: * => * => *) */' not in result
         assert '(sll_copy_M: list Z -> program unit (list Z * list Z))' in result
         assert '(sll_copy_M_loop: list Z -> list Z -> list Z -> program unit MretTy)' in result
         assert '(sll_copy_M_loop_end: MretTy -> program unit (list Z * list Z))' in result
@@ -224,6 +252,26 @@ class TestCoqBlocks:
         assert '(scalar_demo_M_loop: nat -> bool -> program unit MretTy)' in result
         assert '(scalar_demo_M_loop_end: MretTy -> program unit (Z))' in result
 
+    def test_generate_uses_early_return_signatures_when_needed(self):
+        infos = [{
+            'func_name': 'early_demo',
+            'require_var_count': 1,
+            'require_var_types': ['list Z'],
+            'inv_var_count': 2,
+            'inv_var_types': ['list Z', 'list Z'],
+            'ensure_var_count': 1,
+            'ensure_var_types': ['list Z'],
+            'has_loop_program': True,
+            'has_pre_loop_early_return': True,
+            'has_loop_body_early_return': True,
+        }]
+        result = generate_coq_blocks('early_demo', infos)
+        assert '/*@ Extern Coq (early_result :: * => * => *) */' in result
+        assert '(early_demo_M_loop_before: list Z -> program unit (early_result (list Z * list Z) (list Z)))' in result
+        assert '(early_demo_M_loop: list Z -> list Z -> program unit (early_result MretTy (list Z)))' in result
+        assert '(early_demo_M_after_loop: early_result MretTy (list Z) -> program unit (list Z))' in result
+        assert '(early_demo_M_loop_end: MretTy -> program unit (list Z))' in result
+
     def test_generate_requires_explicit_variable_types(self):
         infos = [{'func_name': 'missing_types', 'require_var_count': 1, 'inv_var_count': 1, 'ensure_var_count': 1}]
         with pytest.raises(ValueError, match='Missing variable types'):
@@ -232,6 +280,7 @@ class TestCoqBlocks:
     def test_generate_uses_unit_for_no_ensure_variables(self):
         infos = [{
             'func_name': 'dll_free',
+            'has_loop_program': True,
             'require_var_count': 1,
             'require_var_types': ['list Z'],
             'inv_var_count': 1,
@@ -242,6 +291,22 @@ class TestCoqBlocks:
         result = generate_coq_blocks('dll_free', infos)
         assert '(dll_free_M: list Z -> program unit unit)' in result
         assert '(dll_free_M_loop_end: MretTy -> program unit unit)' in result
+
+    def test_generate_helper_function_without_loop_program(self):
+        infos = [{
+            'func_name': 'sll_merge',
+            'has_loop_program': False,
+            'require_var_count': 2,
+            'require_var_types': ['list Z', 'list Z'],
+            'inv_var_count': 0,
+            'inv_var_types': [],
+            'ensure_var_count': 1,
+            'ensure_var_types': ['list Z'],
+        }]
+        result = generate_coq_blocks('sll_multi_merge', infos)
+        assert '(sll_merge_M: list Z -> list Z -> program unit (list Z))' in result
+        assert 'sll_merge_M_loop' not in result
+        assert 'sll_merge_M_loop_end' not in result
 
     def test_empty_func_infos(self):
         assert generate_coq_blocks('foo', []) == ''
@@ -316,3 +381,96 @@ class TestCollectFuncExternInfo:
         assert info['require_var_types'] == ['list Z']
         assert info['inv_var_types'] == ['list Z', 'list Z', 'list Z']
         assert info['ensure_var_types'] == ['list Z']
+
+    def test_helper_function_can_be_included_for_translation(self):
+        func_data = {
+            'function': 'sll_merge',
+            'funcspec': {
+                'require': {
+                    'translated': 'sll(x, ?l1) * sll(y, ?l2)',
+                    'variables': ['?l1', '?l2'],
+                    'variable_types': ['list Z', 'list Z'],
+                },
+                'ensure': {
+                    'translated': 'sll(__return, ?l3)',
+                    'variables': ['?l3'],
+                    'variable_types': ['list Z'],
+                }
+            },
+            'inner_assertions': []
+        }
+        info = collect_func_extern_info(func_data, include_helpers=True)
+        assert info is not None
+        assert info['func_name'] == 'sll_merge'
+        assert info['has_loop_program'] is False
+        assert info['require_var_count'] == 2
+        assert info['inv_var_count'] == 0
+        assert info['ensure_var_types'] == ['list Z']
+
+    def test_detects_early_return_shape_when_source_is_available(self):
+        func_data = {
+            'function': 'demo',
+            'funcspec': {
+                'require': {
+                    'translated': 'sll(x, ?l1)',
+                    'variables': ['?l1'],
+                    'variable_types': ['list Z'],
+                },
+                'ensure': {
+                    'translated': 'sll(__return, ?l2)',
+                    'variables': ['?l2'],
+                    'variable_types': ['list Z'],
+                }
+            },
+            'inner_assertions': [
+                {
+                    'type': 'Inv',
+                    'translated': 'exists l1, ...',
+                    'variables': ['l1'],
+                    'variable_types': ['list Z'],
+                }
+            ]
+        }
+        source = """struct list *demo(struct list *x) {
+    if (x == 0) {
+        return x;
+    }
+    while (x) {
+        if (x->next == 0) {
+            return x;
+        }
+        x = x->next;
+    }
+    return x;
+}
+"""
+        info = collect_func_extern_info(func_data, function_source=source)
+        assert info is not None
+        assert info['has_top_level_loop'] is True
+        assert info['has_pre_loop_early_return'] is True
+        assert info['has_loop_body_early_return'] is True
+        assert info['needs_early_result'] is True
+
+
+class TestCollectCalleeFunctions:
+    def test_collects_same_file_callees(self):
+        content = """int helper(void);
+
+int target(void) {
+    return helper();
+}
+"""
+        callees = collect_callee_functions(content, [
+            {'function': 'helper'},
+            {'function': 'target'},
+        ])
+        assert callees == {'helper'}
+
+    def test_collects_recursive_functions(self):
+        content = """int recur(int n) {
+    if (n <= 0) return 0;
+    return recur(n - 1);
+}
+"""
+        callees = collect_callee_functions(content, [{'function': 'recur'}])
+        assert callees == {'recur'}

@@ -161,6 +161,8 @@ def test_collect_synthesis_context_matches_sll_reverse_fixture():
     assert "bind(sll_reverse_M_loop(l1,l2), sll_reverse_M_loop_end)" in ctx["prompt_context"][
         "loop_invariant_with_safeexec"
     ]
+    assert ctx["control_flow"]["template_case"] == "none"
+    assert ctx["control_flow"]["has_top_level_loop"] is True
     assert ctx["signatures"] == {
         "M_loop_before": "list Z -> MONAD (list Z * list Z)",
         "M_1": "(list Z * list Z) -> MONAD MretTy",
@@ -202,6 +204,52 @@ def test_collect_synthesis_context_requires_function_name_for_multifunction_file
     assert right["id"] == "sll_rotate_right"
     assert right["summary"]["func_name"] == "sll_rotate_right"
     assert right["features"]["inv_var_count"] == 3
+
+
+def test_collect_file_synthesis_manifest_tracks_targets_and_callees():
+    manifest = context_mod.collect_file_synthesis_manifest("shape_invdataset/sll/sll_multi_merge.c")
+
+    assert manifest["file_id"] == "sll_multi_merge"
+    assert manifest["targets"] == ["sll_multi_merge"]
+    funcs = {entry["func_name"]: entry for entry in manifest["functions"]}
+
+    assert funcs["sll_merge"]["should_synthesize"] is False
+    assert funcs["sll_merge"]["called_by"] == ["sll_multi_merge"]
+    assert funcs["sll_merge"]["externals"]["M"] == "list Z -> list Z -> MONAD (list Z)"
+    assert funcs["sll_multi_merge"]["should_synthesize"] is True
+    assert funcs["sll_multi_merge"]["calls"] == ["sll_merge"]
+    assert funcs["sll_multi_merge"]["summary"]["func_name"] == "sll_multi_merge"
+
+
+def test_collect_synthesis_context_includes_available_callees_for_target():
+    ctx = context_mod.collect_synthesis_context(
+        "shape_invdataset/sll/sll_multi_merge.c",
+        func_name="sll_multi_merge",
+    )
+
+    assert ctx["target"]["func_name"] == "sll_multi_merge"
+    assert ctx["file_overview"]["targets"] == ["sll_multi_merge"]
+    assert ctx["available_callees"][0]["func_name"] == "sll_merge"
+    assert ctx["available_callees"][0]["externals"]["M"] == "list Z -> list Z -> MONAD (list Z)"
+    assert ctx["available_callees"][0]["should_synthesize_elsewhere"] is False
+    assert "sll_merge(y, z)" in " ".join(ctx["available_callees"][0]["call_sites"])
+    assert ctx["generation_policy"]["opaque_external_programs"] == ["sll_merge_M"]
+    assert ctx["generation_policy"]["generated_scaffolding"] == ["sll_multi_merge_M_after_loop"]
+    assert ctx["opaque_call_obligations"][0]["callee"] == "sll_merge_M"
+    assert ctx["opaque_call_obligations"][0]["must_use_placeholder"] is True
+    assert ctx["control_flow"]["template_case"] == "both"
+    assert ctx["control_flow"]["has_pre_loop_early_return"] is True
+    assert ctx["control_flow"]["has_loop_body_early_return"] is True
+    assert ctx["control_flow"]["prompt_signatures"]["M_loop_M1"] == (
+        "(list Z * list Z * list Z * list Z) -> MONAD MretTy"
+    )
+    assert ctx["control_flow"]["prompt_signatures"]["M_loop_M2"] == (
+        "(list Z * list Z * list Z * list Z) -> MONAD (early_result (list Z * list Z * list Z * list Z) (list Z))"
+    )
+    assert "break (Continue r)" in ctx["control_flow"]["template"]["loop_body_definition"]
+    assert "| ReturnNow r' => break (ReturnNow r')" in ctx["control_flow"]["template"]["loop_body_definition"]
+    assert "sll_multi_merge_M_after_loop" in ctx["prompt_context"]["loop_invariant_with_safeexec"]
+    assert "match e with" in ctx["control_flow"]["template"]["top_level"]
 
 
 def test_collect_synthesis_context_raises_pipeline_error(monkeypatch):

@@ -1,6 +1,73 @@
 from typing import Dict, Iterable, List, Optional
 
 
+def _default_scaffold(func_name: str) -> str:
+    return "\n".join([
+        "```coq",
+        f"Definition {func_name}_M : ReqArgs -> MONAD Ret :=",
+        "  fun ... =>",
+        f"    s0 <- {func_name}_M_loop_before ...;;",
+        f"    r <- {func_name}_M_loop ...;;",
+        f"    {func_name}_M_loop_end r.",
+        "```",
+    ])
+
+
+def _render_scaffold(context: Dict) -> str:
+    target = context.get("target", {})
+    summary = context.get("summary", target.get("summary", {}))
+    control_flow = context.get("control_flow", target.get("control_flow", {}))
+    template = control_flow.get("template", {})
+    loop_body = template.get("loop_body_definition")
+    top_level = template.get("top_level")
+    if loop_body or top_level:
+        blocks = ["```coq"]
+        if loop_body:
+            blocks.append(loop_body)
+        after_loop = template.get("after_loop_definition")
+        if after_loop:
+            blocks.extend(["", after_loop])
+        if top_level:
+            blocks.extend(["", top_level])
+        blocks.append("```")
+        return "\n".join(blocks)
+    return _default_scaffold(summary["func_name"])
+
+
+def _render_signature_lines(context: Dict) -> List[str]:
+    target = context.get("target", {})
+    summary = context.get("summary", target.get("summary", {}))
+    signatures = context.get("signatures", target.get("signatures", {}))
+    control_flow = context.get("control_flow", target.get("control_flow", {}))
+    prompt_signatures = control_flow.get("prompt_signatures", {})
+
+    if prompt_signatures:
+        order = [
+            "M_loop_before",
+            "M_loop_body",
+            "M_loop",
+            "M_loop_M1",
+            "M_loop_M2",
+            "M_after_loop",
+            "M_loop_end",
+            "M",
+        ]
+        lines = []
+        for key in order:
+            value = prompt_signatures.get(key)
+            if value:
+                lines.append(f"{key}: {value}")
+        return lines
+
+    return [
+        f"M_loop_before: {signatures['M_loop_before']}",
+        f"M_1: {signatures['M_1']}",
+        f"M_2: {signatures['M_2']}",
+        f"M_loop_end: {signatures['M_loop_end']}",
+        f"M: {signatures['M']}",
+    ]
+
+
 def _format_example(example: Dict) -> str:
     func_name = example["summary"]["func_name"]
     features = example["features"]
@@ -41,10 +108,15 @@ def _format_example(example: Dict) -> str:
 
 def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = None) -> str:
     few_shot_examples = list(few_shot_examples or [])
-    summary = context["summary"]
-    features = context["features"]
-    prompt_context = context["prompt_context"]
-    signatures = context["signatures"]
+    target = context.get("target", {})
+    summary = context.get("summary", target.get("summary", {}))
+    features = context.get("features", target.get("features", {}))
+    prompt_context = context.get("prompt_context", target.get("prompt_context", {}))
+    signatures = context.get("signatures", target.get("signatures", {}))
+    control_flow = context.get("control_flow", target.get("control_flow", {}))
+    available_callees = context.get("available_callees", [])
+    opaque_call_obligations = context.get("opaque_call_obligations", [])
+    generation_policy = context.get("generation_policy", {})
 
     lines: List[str] = [
         "You are generating Coq monadic abstract programs for formal verification.",
@@ -62,7 +134,7 @@ def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = N
         f"Has multi return: {features['has_multi_return']}",
         "",
         "## C Source",
-        prompt_context["c_source"],
+        target.get("c_source", prompt_context["c_source"]),
         "",
         "## Prompt Context",
         f"With clause: {prompt_context['with_clause']}",
@@ -74,47 +146,80 @@ def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = N
         "## Guard Function",
         prompt_context["guard_coq"],
         "",
+        "## Selected Scaffold",
+        f"Template case: {control_flow.get('template_case', 'none')}",
+        f"Pre-loop early return: {control_flow.get('has_pre_loop_early_return', False)}",
+        f"Loop-body early return: {control_flow.get('has_loop_body_early_return', False)}",
+        _render_scaffold(context),
+        "",
         "## Required Signatures",
-        f"M_loop_before: {signatures['M_loop_before']}",
-        f"M_1: {signatures['M_1']}",
-        f"M_2: {signatures['M_2']}",
-        f"M_loop_end: {signatures['M_loop_end']}",
-        f"M: {signatures['M']}",
+        *(_render_signature_lines(context)),
         "",
         "## QCP Monad Primitives",
         "- `return v` / `ret v`: return value v (monadic return)",
         "- `bind m f` / `m >>= f`: sequence m then f",
         "- `program unit T`: monadic program returning T (StateRelMonad)",
-        "- `assume P`: enforce the condition P of type Prop and return unit",
+        "- `assume!! P`: lift a pure Coq proposition `P : Prop` into the monadic assumption form. Use this for branch conditions and pure facts such as `x <= y`, `l2 = nil`, or guard checks.",
+        "- `assume P`: use this only when `P` is already in the library's expected state-predicate form. For these synthesis tasks, prefer `assume!!` over bare `assume`.",
         "- `any A`: return an arbitrary value of type A",
         "- `choice m1 m2`: nondeterministic branching",
         "- `repeat_break`: loop construct with break and continue branch",
         "- List operations: `app` (`++`), `cons` (`::`), `nil`, `length`, etc.",
         "",
-        "## Abstract Program Decomposition",
-        "The loop model uses `repeat_break` with two branches:",
-        "- `M_2` (continue): when guard is true, one iteration step `S -> M(S)`",
-        "- `M_1` (break): when guard is false, produce final result `S -> M(R)`",
-        "",
-        "The full program composes:",
-        "  M_loop_before -> M_loop (repeat_break with M_1, M_2, guard) -> M_loop_end",
-        "",
-        "```coq",
-        "f_M(l1, ..., lm) :=",
-        "  s0 <- M_loop_before(l1, ..., lm);;",
-        "  r <- M_loop(s0);;",
-        "  M_loop_end(r)",
-        "```",
-        "",
+    ]
+
+    if available_callees:
+        lines.extend([
+            "## Available Callees",
+            "Treat the following same-file callees as opaque abstract programs.",
+        ])
+        for callee in available_callees:
+            lines.append(f"- `{callee['opaque_program']}`: {callee.get('externals', {}).get('M', '')}")
+            spec = callee.get("spec", {})
+            if spec.get("require"):
+                lines.append(f"  Base Require: `{spec['require']}`")
+            if spec.get("ensure"):
+                lines.append(f"  Base Ensure: `{spec['ensure']}`")
+            for site in callee.get("call_sites", []):
+                lines.append(f"  Call site: `{site}`")
+        lines.append("")
+
+    if opaque_call_obligations:
+        lines.extend([
+            "## Opaque Call Obligations",
+            "Every listed helper call is mandatory.",
+            "You must model it using the listed opaque abstract program.",
+            "Do not replace helper-call results with `any`.",
+        ])
+        for obligation in opaque_call_obligations:
+            lines.append(
+                f"- `{obligation['call_site']}` must use `{obligation['callee']}`"
+            )
+        lines.append("")
+
+    lines.extend([
         "## Instructions",
+        "Use the Selected Scaffold above as the authoritative composition rule for this target.",
         "Generate `MretTy` and the 4 non-guard components so the composed abstract program simulates the C source.",
+    ])
+    if generation_policy.get("generated_scaffolding"):
+        lines.append(
+            "The following definitions are already generated by the scaffold. Do not redefine them: "
+            + ", ".join(generation_policy["generated_scaffolding"])
+        )
+    if generation_policy.get("opaque_external_programs"):
+        lines.append(
+            "Use opaque callee placeholders when modeling same-file calls: "
+            + ", ".join(generation_policy["opaque_external_programs"])
+        )
+    lines.extend([
         "Return Coq definitions only for:",
         "- `MretTy`",
         f"- `{summary['func_name']}_M_loop_before`",
         f"- `{summary['func_name']}_M_loop_M1`",
         f"- `{summary['func_name']}_M_loop_M2`",
         f"- `{summary['func_name']}_M_loop_end`",
-    ]
+    ])
 
     if few_shot_examples:
         lines.extend(["", "## Examples"])

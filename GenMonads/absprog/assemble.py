@@ -3,12 +3,13 @@ import re
 from typing import Dict, List, Optional
 
 from GenMonads.absprog.gen_rel_lib import generate_rel_lib
+from GenMonads.absprog.gen_rel_lib import collect_early_return_shape_for_function
 from GenMonads.transshape.process_and_translate import process_and_translate_file
-from GenMonads.translate_c_file import collect_func_extern_info
+from GenMonads.translate_c_file import collect_callee_functions, collect_func_extern_info
 
 
-def _collect_func_info_with_guard(func_data: Dict) -> Optional[Dict]:
-    info = collect_func_extern_info(func_data)
+def _collect_func_info_with_guard(func_data: Dict, include_helpers: bool = False) -> Optional[Dict]:
+    info = collect_func_extern_info(func_data, include_helpers=include_helpers)
     if info is None:
         return None
 
@@ -29,18 +30,32 @@ def generate_rel_lib_skeleton_for_file(input_path: str) -> str:
         raise ValueError(result["error"])
 
     func_infos: List[Dict] = []
+    with open(input_path, "r", encoding="utf-8") as f:
+        content = f.read()
     if result.get("functions"):
+        callee_functions = collect_callee_functions(content, result["functions"])
         for func_data in result["functions"]:
-            info = _collect_func_info_with_guard(func_data)
+            include_helpers = (
+                not func_data.get("inner_assertions")
+                and func_data["function"] in callee_functions
+            )
+            info = _collect_func_info_with_guard(func_data, include_helpers=include_helpers)
             if info:
+                info.update(collect_early_return_shape_for_function(content, info["func_name"]))
                 func_infos.append(info)
     else:
-        info = _collect_func_info_with_guard(result)
+        callee_functions = collect_callee_functions(content, [{"function": result["function"]}])
+        include_helpers = (
+            not result.get("inner_assertions")
+            and result["function"] in callee_functions
+        )
+        info = _collect_func_info_with_guard(result, include_helpers=include_helpers)
         if info:
+            info.update(collect_early_return_shape_for_function(content, info["func_name"]))
             func_infos.append(info)
 
     if not func_infos:
-        raise ValueError(f"No functions with loop invariants found in {input_path}")
+        raise ValueError(f"No abstract program signatures found in {input_path}")
 
     basename = os.path.splitext(os.path.basename(input_path))[0]
     return generate_rel_lib(basename, func_infos)

@@ -42,12 +42,14 @@ Primary role:
 - Batch-run symbolic execution over C sources.
 
 Inputs:
-- `C_DIR`, `LOGDIR`, `SYMEXEC`, `SYMEXEC_INCLUDE_DIRS`, `OUTPUT_PATH`, and optional `FILE`
+- `C_DIR`, `LOGDIR`, `SYMEXEC`, `SYMEXEC_INCLUDE_DIRS`, `OUTPUT_PATH`, optional `SYMEXEC_STRATEGY_PATHS`, and optional `FILE`
 
 Behavior:
 - Supports both single-file and directory-wide runs
 - Passes one `-I...` flag per entry in `SYMEXEC_INCLUDE_DIRS`
+- Passes one `-slp physical_path rocq_logic_path` triple per entry in `SYMEXEC_STRATEGY_PATHS`
 - `SYMEXEC_INCLUDE_DIRS` is a colon-separated list of include directories
+- `SYMEXEC_STRATEGY_PATHS` is a colon-separated list of `physical_path,rocq_logic_path` pairs
 - Produces `${base}_goal.v`, `${base}_auto.v`, `${base}_manual.v`, and matching logs
 - Uses the same argument shape as `loopinv_c.sh`, which keeps the workflows parallel
 
@@ -57,6 +59,7 @@ Example commands:
 scripts/symexec.sh
 scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c
 scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c --SYMEXEC_INCLUDE_DIRS=./shape_invdataset/sll:/Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/QCP_examples:/Users/cielseven/Projects/QCP/sac_c_parser/examples
+scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c --SYMEXEC_STRATEGY_PATHS=/Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/QCP_examples,SimpleC.EE
 scripts/symexec.sh --C_DIR=./output/gen/rel/sll --OUTPUT_PATH=./output/gen/vcs/ --LOGDIR=./output/gen/logs/
 scripts/symexec.sh --C_DIR=./shape_invdataset/dll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
 ```

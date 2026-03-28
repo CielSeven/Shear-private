@@ -13,10 +13,12 @@ The generated file provides:
 """
 
 import os
+import re
 from typing import Dict, List, Optional
 
+from GenMonads.early_return import detect_early_return_shape
 from GenMonads.transshape.process_and_translate import process_and_translate_file
-from GenMonads.translate_c_file import collect_func_extern_info
+from GenMonads.translate_c_file import collect_func_extern_info, collect_callee_functions
 
 
 COQ_IMPORTS = """\
@@ -67,6 +69,18 @@ def _return_type(types: List[str]) -> str:
     return _tuple_type(types)
 
 
+def _type_arg(type_expr: str) -> str:
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", type_expr):
+        return type_expr
+    if type_expr.startswith("(") and type_expr.endswith(")"):
+        return type_expr
+    return f"({type_expr})"
+
+
+def _early_result_type(state_type: str, return_type: str) -> str:
+    return f"early_result {_type_arg(state_type)} {_type_arg(return_type)}"
+
+
 def _curried_args(types: List[str]) -> str:
     """Build curried argument types from a list of Coq types."""
     if not types:
@@ -86,12 +100,93 @@ def _tuple_vars(k: int) -> str:
     return "(" + ", ".join(f"l{i}" for i in range(1, k + 1)) + ")"
 
 
+def _extract_function_source(content: str, func_name: str) -> str:
+    matches = re.finditer(rf"\b{re.escape(func_name)}\s*\(", content)
+    for match in matches:
+        depth = 0
+        for ch in content[:match.start()]:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+        if depth != 0:
+            continue
+
+        brace_start = content.find("{", match.end())
+        if brace_start == -1:
+            continue
+
+        semicolon = content.find(";", match.end())
+        if semicolon != -1 and semicolon < brace_start:
+            continue
+
+        start = content.rfind("\n", 0, match.start())
+        start = 0 if start == -1 else start + 1
+        break
+    else:
+        raise ValueError(f"Could not find function signature for '{func_name}'")
+
+    depth = 0
+    end = None
+    for idx in range(brace_start, len(content)):
+        ch = content[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = idx + 1
+                break
+
+    if end is None:
+        raise ValueError(f"Could not find function body end for '{func_name}'")
+
+    return content[start:end]
+
+
+def collect_early_return_shape_for_function(content: str, func_name: str) -> Dict[str, bool]:
+    """Detect whether a function has early-return points around its first loop."""
+    try:
+        source = _extract_function_source(content, func_name)
+    except ValueError:
+        return {
+            "has_top_level_loop": False,
+            "has_pre_loop_early_return": False,
+            "has_loop_body_early_return": False,
+            "needs_early_result": False,
+        }
+    return detect_early_return_shape(source)
+
+
+def _enrich_func_info_with_early_return_shape(content: str, info: Dict) -> Dict:
+    enriched = dict(info)
+    func_name = enriched["func_name"]
+    shape = collect_early_return_shape_for_function(content, func_name)
+    enriched.update(shape)
+
+    inv_var_types = enriched.get("inv_var_types", [])
+    ensure_var_types = enriched.get("ensure_var_types", [])
+    state_type = _tuple_type(inv_var_types) if inv_var_types else "unit"
+    return_type = _return_type(ensure_var_types)
+    enriched["state_type"] = state_type
+    enriched["return_type"] = return_type
+    enriched["loop_result_type"] = (
+        _early_result_type("MretTy", return_type)
+        if shape.get("has_loop_body_early_return")
+        else "MretTy"
+    )
+    enriched["needs_early_result"] = shape.get("needs_early_result", False)
+    return enriched
+
+
 def generate_func_block(func_name: str, require_var_count: int,
                         inv_var_count: int, ensure_var_count: int = 1,
                         require_var_types: Optional[List[str]] = None,
                         inv_var_types: Optional[List[str]] = None,
                         ensure_var_types: Optional[List[str]] = None,
-                        coq_guard: Optional[str] = None) -> str:
+                        coq_guard: Optional[str] = None,
+                        has_pre_loop_early_return: bool = False,
+                        has_loop_body_early_return: bool = False) -> str:
     """Generate the abstract program skeleton for one function."""
     fn = func_name
     k = inv_var_count
@@ -101,6 +196,9 @@ def generate_func_block(func_name: str, require_var_count: int,
     ens_types = _normalize_var_types(ensure_var_types, ensure_var_count)
     st = _tuple_type(inv_types)
     ret = _return_type(ens_types)
+    before_result = _early_result_type(st, ret) if has_pre_loop_early_return else st
+    loop_result = _early_result_type("MretTy", ret) if has_loop_body_early_return else "MretTy"
+    m2_result = _early_result_type(st, ret) if has_loop_body_early_return else st
     guard_name = f"{fn}_guardP"
 
     lines = []
@@ -109,7 +207,10 @@ def generate_func_block(func_name: str, require_var_count: int,
 
     # Parameters: M1, M2, loop_end (LLM-generated components)
     lines.append(f"Parameter {fn}_M_loop_M1 : {st} -> MONAD MretTy.")
-    lines.append(f"Parameter {fn}_M_loop_M2 : {st} -> MONAD {st}.")
+    if has_loop_body_early_return:
+        lines.append(f"Parameter {fn}_M_loop_M2 : {st} -> MONAD ({m2_result}).")
+    else:
+        lines.append(f"Parameter {fn}_M_loop_M2 : {st} -> MONAD {st}.")
     lines.append("")
 
     # Function-scoped guard: concrete Definition from GuardGen, or Parameter as fallback
@@ -129,11 +230,36 @@ def generate_func_block(func_name: str, require_var_count: int,
     lines.append(f"Parameter {fn}_M_loop_end : MretTy -> MONAD ({ret}).")
     lines.append("")
 
+    if has_loop_body_early_return:
+        lines.append(f"Definition {fn}_M_after_loop : ({loop_result}) -> MONAD ({ret}) :=")
+        lines.append(f"  fun re =>")
+        lines.append(f"    match re with")
+        lines.append(f"    | Continue r => {fn}_M_loop_end r")
+        lines.append(f"    | ReturnNow r => return r")
+        lines.append(f"    end.")
+        lines.append("")
+
     # Concrete scaffolding: loop_body using choice/assume/break/continue
-    lines.append(f"Definition {fn}_M_loop_body : {st} -> MONAD (CntOrBrk {st} MretTy) :=")
+    if has_loop_body_early_return:
+        lines.append(
+            f"Definition {fn}_M_loop_body : {st} -> MONAD (CntOrBrk {st} ({loop_result})) :="
+        )
+    else:
+        lines.append(f"Definition {fn}_M_loop_body : {st} -> MONAD (CntOrBrk {st} MretTy) :=")
     lines.append(f"  fun a =>")
-    lines.append(f"    choice (assume!! (~ ({guard_name} a));; r <- {fn}_M_loop_M1 a ;; break r)")
-    lines.append(f"           (assume!! (({guard_name} a));; a' <- {fn}_M_loop_M2 a ;; continue a').")
+    if has_loop_body_early_return:
+        lines.append(
+            f"    choice (assume!! (~ ({guard_name} a));; r <- {fn}_M_loop_M1 a ;; break (Continue r))"
+        )
+        lines.append(f"           (assume!! (({guard_name} a));;")
+        lines.append(f"            a' <- {fn}_M_loop_M2 a ;;")
+        lines.append(f"            match a' with")
+        lines.append(f"            | Continue a'' => continue a''")
+        lines.append(f"            | ReturnNow r' => break (ReturnNow r')")
+        lines.append(f"            end).")
+    else:
+        lines.append(f"    choice (assume!! (~ ({guard_name} a));; r <- {fn}_M_loop_M1 a ;; break r)")
+        lines.append(f"           (assume!! (({guard_name} a));; a' <- {fn}_M_loop_M2 a ;; continue a').")
     lines.append("")
 
     lines.append(f"Definition {fn}_M_loop_aux :=")
@@ -144,30 +270,72 @@ def generate_func_block(func_name: str, require_var_count: int,
     lam = _lambda_vars(k)
     tup = _tuple_vars(k)
     curried = _curried_args(inv_types)
-    lines.append(f"Definition {fn}_M_loop : {curried}program unit MretTy :=")
+    if has_loop_body_early_return:
+        lines.append(f"Definition {fn}_M_loop : {curried}program unit ({loop_result}) :=")
+    else:
+        lines.append(f"Definition {fn}_M_loop : {curried}program unit MretTy :=")
     lines.append(f"  fun {lam} => {fn}_M_loop_aux {tup}.")
     lines.append("")
 
     # loop_before: Parameter (maps Require vars to initial invariant state)
     m_curried = _curried_args(req_types)
-    lines.append(f"Parameter {fn}_M_loop_before : {m_curried}MONAD {st}.")
+    if has_pre_loop_early_return:
+        lines.append(f"Parameter {fn}_M_loop_before : {m_curried}MONAD ({before_result}).")
+    else:
+        lines.append(f"Parameter {fn}_M_loop_before : {m_curried}MONAD {st}.")
     lines.append("")
 
     # M: concrete composition of loop_before → loop → loop_end
     m_lam = _lambda_vars(m)
     lines.append(f"Definition {fn}_M : {m_curried}MONAD ({ret}) :=")
     lines.append(f"  fun {m_lam} =>")
-    lines.append(f"    s0 <- {fn}_M_loop_before {m_lam};;")
-    lines.append(f"    r <- {fn}_M_loop_aux s0;;")
-    lines.append(f"    {fn}_M_loop_end r.")
+    if has_pre_loop_early_return:
+        lines.append(f"    e <- {fn}_M_loop_before {m_lam};;")
+        lines.append(f"    match e with")
+        lines.append(f"    | Continue s =>")
+        lines.append(f"        re <- {fn}_M_loop_aux s;;")
+        if has_loop_body_early_return:
+            lines.append(f"        {fn}_M_after_loop re")
+        else:
+            lines.append(f"        {fn}_M_loop_end re")
+        lines.append(f"    | ReturnNow r =>")
+        lines.append(f"        return r")
+        lines.append(f"    end.")
+    else:
+        lines.append(f"    s0 <- {fn}_M_loop_before {m_lam};;")
+        lines.append(f"    re <- {fn}_M_loop_aux s0;;")
+        if has_loop_body_early_return:
+            lines.append(f"    {fn}_M_after_loop re.")
+        else:
+            lines.append(f"    {fn}_M_loop_end re.")
     lines.append("")
 
     return "\n".join(lines)
 
 
-def _collect_func_info_with_guard(func_data: Dict) -> Optional[Dict]:
+def generate_simple_func_block(func_name: str,
+                               require_var_count: int,
+                               ensure_var_count: int = 1,
+                               require_var_types: Optional[List[str]] = None,
+                               ensure_var_types: Optional[List[str]] = None) -> str:
+    """Generate a lightweight abstract-program declaration for callee-only functions."""
+    fn = func_name
+    req_types = _normalize_var_types(require_var_types, require_var_count)
+    ens_types = _normalize_var_types(ensure_var_types, ensure_var_count)
+    ret = _return_type(ens_types)
+    m_curried = _curried_args(req_types)
+
+    lines = []
+    lines.append(f"(* ---- Abstract program declaration for {fn} ---- *)")
+    lines.append("")
+    lines.append(f"Parameter {fn}_M : {m_curried}MONAD ({ret}).")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _collect_func_info_with_guard(func_data: Dict, include_helpers: bool = False) -> Optional[Dict]:
     """Like collect_func_extern_info but also extracts coq_guard."""
-    info = collect_func_extern_info(func_data)
+    info = collect_func_extern_info(func_data, include_helpers=include_helpers)
     if info is None:
         return None
 
@@ -200,18 +368,43 @@ def generate_rel_lib(basename: str, func_infos: List[Dict]) -> str:
         parts.append("")
     parts.append("Parameter MretTy : Type.")
     parts.append("")
+    if any(
+        info.get("needs_early_result")
+        or info.get("has_pre_loop_early_return")
+        or info.get("has_loop_body_early_return")
+        for info in func_infos
+    ):
+        parts.append(
+            "Inductive early_result (S Ret : Type) :=\n"
+            "| Continue : S -> early_result S Ret\n"
+            "| ReturnNow : Ret -> early_result S Ret."
+        )
+        parts.append("Arguments Continue {S Ret} _.")
+        parts.append("Arguments ReturnNow {S Ret} _.")
+        parts.append("")
 
     for info in func_infos:
-        parts.append(generate_func_block(
-            info['func_name'],
-            info['require_var_count'],
-            info['inv_var_count'],
-            info.get('ensure_var_count', 1),
-            info.get('require_var_types'),
-            info.get('inv_var_types'),
-            info.get('ensure_var_types'),
-            info.get('coq_guard'),
-        ))
+        if info.get('has_loop_program', info['inv_var_count'] > 0):
+            parts.append(generate_func_block(
+                info['func_name'],
+                info['require_var_count'],
+                info['inv_var_count'],
+                info.get('ensure_var_count', 1),
+                info.get('require_var_types'),
+                info.get('inv_var_types'),
+                info.get('ensure_var_types'),
+                info.get('coq_guard'),
+                has_pre_loop_early_return=info.get('has_pre_loop_early_return', False),
+                has_loop_body_early_return=info.get('has_loop_body_early_return', False),
+            ))
+        else:
+            parts.append(generate_simple_func_block(
+                info['func_name'],
+                info['require_var_count'],
+                info.get('ensure_var_count', 1),
+                info.get('require_var_types'),
+                info.get('ensure_var_types'),
+            ))
 
     return "\n".join(parts)
 
@@ -237,18 +430,38 @@ def generate_rel_lib_for_file(input_path: str, output_dir: str) -> Optional[str]
         return None
 
     func_infos = []
+    with open(input_path, 'r', encoding='utf-8') as f:
+        content = f.read()
     if 'functions' in result and result['functions']:
+        callee_functions = collect_callee_functions(content, result['functions'])
         for func_data in result['functions']:
-            info = _collect_func_info_with_guard(func_data)
+            include_helpers = (
+                not func_data.get('inner_assertions')
+                and func_data['function'] in callee_functions
+            )
+            info = _collect_func_info_with_guard(
+                func_data,
+                include_helpers=include_helpers,
+            )
             if info:
+                info = _enrich_func_info_with_early_return_shape(content, info)
                 func_infos.append(info)
     else:
-        info = _collect_func_info_with_guard(result)
+        callee_functions = collect_callee_functions(content, [{'function': result['function']}])
+        include_helpers = (
+            not result.get('inner_assertions')
+            and result['function'] in callee_functions
+        )
+        info = _collect_func_info_with_guard(
+            result,
+            include_helpers=include_helpers,
+        )
         if info:
+            info = _enrich_func_info_with_early_return_shape(content, info)
             func_infos.append(info)
 
     if not func_infos:
-        print(f"No functions with loop invariants found in {input_path}")
+        print(f"No abstract program signatures found in {input_path}")
         return None
 
     src_basename = os.path.splitext(os.path.basename(input_path))[0]
