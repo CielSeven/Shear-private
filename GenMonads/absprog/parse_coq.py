@@ -1,5 +1,16 @@
 import re
-from typing import Dict, List
+from typing import Dict
+
+_IDENT_CHAR = re.compile(r"[A-Za-z0-9_']")
+
+
+def _is_keyword(text: str, pos: int, kw: str) -> bool:
+    end = pos + len(kw)
+    if text[pos:end] != kw:
+        return False
+    before_ok = pos == 0 or not _IDENT_CHAR.match(text[pos - 1])
+    after_ok = end >= len(text) or not _IDENT_CHAR.match(text[end])
+    return before_ok and after_ok
 
 
 def _extract_definition_block(coq_source: str, name: str) -> str:
@@ -13,15 +24,75 @@ def _extract_definition_block(coq_source: str, name: str) -> str:
     if start is None:
         raise ValueError(f"Could not find Definition '{name}' in response")
 
-    block: List[str] = []
-    for line in lines[start:]:
-        block.append(line.rstrip())
-        if line.strip().endswith("."):
-            break
-    else:
-        raise ValueError(f"Definition '{name}' does not terminate with '.'")
+    text = "\n".join(lines[start:])
+    paren_depth = 0
+    match_depth = 0
+    comment_depth = 0
+    in_string = False
+    i = 0
 
-    return "\n".join(block).strip()
+    while i < len(text):
+        # Inside string literal — only watch for closing quote
+        if in_string:
+            if text[i] == '"':
+                in_string = False
+            i += 1
+            continue
+
+        # Inside nested comment — watch for (* and *)
+        if comment_depth > 0:
+            if text[i:i + 2] == "(*":
+                comment_depth += 1
+                i += 2
+            elif text[i:i + 2] == "*)":
+                comment_depth -= 1
+                i += 2
+            else:
+                i += 1
+            continue
+
+        # Opening comment
+        if text[i:i + 2] == "(*":
+            comment_depth += 1
+            i += 2
+            continue
+
+        # Opening string
+        if text[i] == '"':
+            in_string = True
+            i += 1
+            continue
+
+        ch = text[i]
+
+        if ch in "([{":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch in ")]}":
+            paren_depth = max(0, paren_depth - 1)
+            i += 1
+            continue
+
+        if _is_keyword(text, i, "match"):
+            match_depth += 1
+            i += len("match")
+            continue
+        if match_depth > 0 and _is_keyword(text, i, "end"):
+            match_depth -= 1
+            i += len("end")
+            continue
+
+        # Terminating '.' — only at top level, followed by whitespace or EOF
+        # (distinguishes statement terminator from qualified names like Module.foo)
+        if ch == "." and paren_depth == 0 and match_depth == 0:
+            after = text[i + 1] if i + 1 < len(text) else ""
+            if not after or after in " \t\n\r":
+                return text[:i + 1].strip()
+
+        i += 1
+
+    raise ValueError(f"Definition '{name}' does not terminate with '.'")
 
 
 def parse_synthesized_components(response_text: str, func_name: str) -> Dict[str, str]:

@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple, Optional
 from .preprocess import AnnotationExtractor
 from .translator import ShapeTranslator
 from .parser import parse_assertion, recover_assertion
+from .data_witness import extract_data_witnesses, extract_pre_existing_vars
 
 # Import guardgen module
 try:
@@ -109,12 +110,25 @@ class AssertionProcessor:
                         assertion['content'], prefix=prefix
                     )
 
+                var_types = self.translator.last_generated_var_types[:]
+
+                # For Inv assertions, detect data witness variables from
+                # pre-existing existentials (e.g. 'w' in 't -> data == w')
+                data_witnesses = []
+                if assertion['type'] == 'Inv':
+                    pre_existing = extract_pre_existing_vars(assertion['content'])
+                    data_witnesses = extract_data_witnesses(translated, pre_existing)
+                    if data_witnesses:
+                        vars = list(vars) + data_witnesses
+                        var_types = var_types + ['Z'] * len(data_witnesses)
+
                 result_dict = {
                     'type': assertion['type'],
                     'original': assertion['content'],
                     'translated': translated,
                     'variables': vars,
-                    'variable_types': self.translator.last_generated_var_types[:],
+                    'variable_types': var_types,
+                    'data_witnesses': data_witnesses,
                     'position': assertion.get('position')
                 }
 
@@ -182,7 +196,11 @@ class AssertionProcessor:
                 'translated' in assertion and
                 'error' not in assertion):
                 try:
-                    coq_guard = gen_coq_guard(assertion['translated'], assertion['command_guard'])
+                    extra_vars = assertion.get('data_witnesses', [])
+                    coq_guard = gen_coq_guard(
+                        assertion['translated'], assertion['command_guard'],
+                        extra_vars=extra_vars or None,
+                    )
                     result_dict['coq_guard'] = coq_guard
                 except Exception as guard_error:
                     result_dict['coq_guard_error'] = str(guard_error)

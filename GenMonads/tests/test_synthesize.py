@@ -1,11 +1,14 @@
 import json
+import os
 import subprocess
 
 from GenMonads.absprog.assemble import assemble_rel_lib_from_blocks
 from GenMonads.absprog.context import collect_synthesis_context
 from GenMonads.absprog.parse_coq import parse_synthesized_components
 from GenMonads.absprog.synthesize import (
+    _append_missing_residual_decls_to_rel_c,
     _promote_rel_lib_if_accepted,
+    _sync_residual_artifacts,
     generate_candidate_response,
     run_synthesis_pipeline,
 )
@@ -49,8 +52,8 @@ def test_render_prompt_mentions_available_callees_when_present():
     assert "## Opaque Call Obligations" in prompt
     assert "Do not replace helper-call results with `any`." in prompt
     assert "`t = sll_merge(y, z);` must use `sll_merge_M`" in prompt
-    assert "M_loop_M1: (list Z * list Z * list Z * list Z) -> MONAD MretTy" in prompt
-    assert "M_loop_M2: (list Z * list Z * list Z * list Z) -> MONAD (early_result (list Z * list Z * list Z * list Z) (list Z))" in prompt
+    assert "M_loop_M1: (list Z * list Z * list Z * list Z * Z) -> MONAD MretTy" in prompt
+    assert "M_loop_M2: (list Z * list Z * list Z * list Z * Z) -> MONAD (early_result (list Z * list Z * list Z * list Z * Z) (list Z))" in prompt
     assert "break (Continue r)" in prompt
     assert "| Continue a'' => continue a''" in prompt
     assert "| ReturnNow r' => break (ReturnNow r')" in prompt
@@ -130,6 +133,75 @@ Definition sll_copy_double_M_loop_end
     assert "Definition sll_copy_double_M_loop_end" in blocks["M_loop_end"]
 
 
+def test_parse_synthesized_components_stops_at_depth_zero_dot_not_inside_match():
+    # A '.' inside a match/end block must not terminate early
+    response = """```coq
+Definition MretTy : Type := list Z.
+Definition foo_M_loop_before (l : list Z) : MONAD (list Z * list Z) :=
+  fun sigma => ret (nil, l).
+Definition foo_M_loop_M1 (s : list Z * list Z) : MONAD MretTy :=
+  fun sigma =>
+    match s with
+    | (l1, nil) => ret l1
+    | (l1, v :: l2) => ret l1
+    end.
+Definition foo_M_loop_M2 (s : list Z * list Z) : MONAD (list Z * list Z) :=
+  fun sigma => ret s.
+Definition foo_M_loop_end (r : MretTy) : MONAD (list Z) :=
+  fun sigma => ret r.
+```"""
+
+    blocks = parse_synthesized_components(response, "foo")
+
+    assert blocks["M_1"].startswith("Definition foo_M_loop_M1")
+    assert blocks["M_1"].endswith("end.")
+    assert "| (l1, nil) => ret l1" in blocks["M_1"]
+    assert "| (l1, v :: l2) => ret l1" in blocks["M_1"]
+
+
+def test_parse_synthesized_components_stops_at_depth_zero_dot_not_inside_comment():
+    # A '.' inside a comment must not terminate early
+    response = """```coq
+Definition MretTy : Type := list Z.
+Definition foo_M_loop_before (l : list Z) : MONAD (list Z * list Z) :=
+  (* initialise with empty acc. *)
+  fun sigma => ret (nil, l).
+Definition foo_M_loop_M1 (s : list Z * list Z) : MONAD MretTy :=
+  fun '(l1, _) => ret l1.
+Definition foo_M_loop_M2 (s : list Z * list Z) : MONAD (list Z * list Z) :=
+  fun s => ret s.
+Definition foo_M_loop_end (r : MretTy) : MONAD (list Z) :=
+  fun sigma => ret r.
+```"""
+
+    blocks = parse_synthesized_components(response, "foo")
+
+    assert blocks["M_loop_before"].startswith("Definition foo_M_loop_before")
+    assert blocks["M_loop_before"].endswith("ret (nil, l).")
+    assert "(* initialise with empty acc. *)" in blocks["M_loop_before"]
+
+
+def test_parse_synthesized_components_stops_at_depth_zero_dot_not_inside_parens():
+    # A '.' inside parentheses must not terminate early
+    response = """```coq
+Definition MretTy : Type := list Z.
+Definition foo_M_loop_before (l : list Z) : MONAD (list Z * list Z) :=
+  fun sigma => ret (SomeModule.helper l, l).
+Definition foo_M_loop_M1 (s : list Z * list Z) : MONAD MretTy :=
+  fun '(l1, _) => ret l1.
+Definition foo_M_loop_M2 (s : list Z * list Z) : MONAD (list Z * list Z) :=
+  fun s => ret s.
+Definition foo_M_loop_end (r : MretTy) : MONAD (list Z) :=
+  fun sigma => ret r.
+```"""
+
+    blocks = parse_synthesized_components(response, "foo")
+
+    assert blocks["M_loop_before"].startswith("Definition foo_M_loop_before")
+    assert blocks["M_loop_before"].endswith("ret (SomeModule.helper l, l).")
+    assert "SomeModule.helper" in blocks["M_loop_before"]
+
+
 def test_assemble_rel_lib_from_blocks_replaces_parameters():
     example = _load_example()
     blocks = {"MretTy": f"Definition MretTy : Type := {example['gold']['MretTy']}."}
@@ -173,6 +245,153 @@ def test_assemble_rel_lib_from_blocks_preserves_callee_declarations():
 
     assert "Parameter sll_merge_M : list Z -> list Z -> MONAD (list Z)." in content
     assert "Definition sll_multi_merge_M_loop_before" in content
+
+
+def test_append_missing_residual_decls_to_rel_c_is_idempotent(tmp_path):
+    rel_c = tmp_path / "demo_rel.c"
+    rel_c.write_text(
+        """#include "safeexec_def.h"
+
+/*@ Import Coq Require Import demo_rel_lib */
+/*@ Extern Coq (MretTy :: *) */
+/*@ Extern Coq 
+               (demo_M: list Z -> program unit (list Z))
+               */
+""",
+        encoding="utf-8",
+    )
+
+    decl = "(residual_prog_in_demo_M_call_1: list Z -> list Z -> program unit (list Z))"
+    patched = _append_missing_residual_decls_to_rel_c(str(rel_c), [decl])
+    assert patched == str(rel_c)
+    content = rel_c.read_text(encoding="utf-8")
+    assert decl in content
+
+    _append_missing_residual_decls_to_rel_c(str(rel_c), [decl])
+    content = rel_c.read_text(encoding="utf-8")
+    assert content.count("residual_prog_in_demo_M_call_1") == 1
+
+
+def test_sync_residual_artifacts_appends_rel_lib_and_patches_rel_c(monkeypatch, tmp_path):
+    monkeypatch.setenv("REL_DIR", str(tmp_path / "rel"))
+    rel_c_dir = tmp_path / "rel" / "sll"
+    rel_c_dir.mkdir(parents=True)
+    rel_c = rel_c_dir / "sll_multi_merge_rel.c"
+    rel_c.write_text(
+        """#include "safeexec_def.h"
+
+/*@ Import Coq Require Import sll_multi_merge_rel_lib */
+/*@ Extern Coq (MretTy :: *) */
+/*@ Extern Coq (early_result :: * => * => *) */
+/*@ Extern Coq 
+               (sll_multi_merge_M: list Z -> list Z -> list Z -> program unit (list Z))
+               (sll_multi_merge_M_loop: list Z -> list Z -> list Z -> list Z -> program unit (early_result MretTy (list Z)))
+               (sll_multi_merge_M_loop_end: MretTy -> program unit (list Z))
+               (sll_multi_merge_M_after_loop: early_result MretTy (list Z) -> program unit (list Z))
+               */
+""",
+        encoding="utf-8",
+    )
+
+    rel_lib = tmp_path / "sll_multi_merge_rel_lib.v"
+    rel_lib.write_text(
+        """Definition MretTy : Type := list Z.
+
+Inductive early_result (S Ret : Type) :=
+| Continue : S -> early_result S Ret
+| ReturnNow : Ret -> early_result S Ret.
+Arguments Continue {S Ret} _.
+Arguments ReturnNow {S Ret} _.
+
+Parameter sll_merge_M : list Z -> list Z -> MONAD (list Z).
+
+Definition sll_multi_merge_M_loop_M1
+  : (list Z * list Z * list Z * list Z) -> MONAD MretTy :=
+  fun '(l1, l2, l3, l4) =>
+    r <- sll_merge_M l1 l2;;
+    return (l4 ++ r).
+
+Definition sll_multi_merge_M_loop_M2
+  : (list Z * list Z * list Z * list Z)
+    -> MONAD (early_result (list Z * list Z * list Z * list Z) (list Z)) :=
+  fun '(l1, l2, l3, l4) =>
+    match l3 with
+    | nil =>
+        return (Continue (l1, l2, l3, l4))
+    | u0 :: u' =>
+        match l1 with
+        | nil =>
+            r <- sll_merge_M l3 l2;;
+            return (ReturnNow (l4 ++ r))
+        | y0 :: y' =>
+            match l2 with
+            | nil =>
+                r <- sll_merge_M l3 y';;
+                return (ReturnNow (l4 ++ (y0 :: r)))
+            | z0 :: z' =>
+                return (Continue (y', z', u', l4 ++ (y0 :: z0 :: u0 :: nil)))
+            end
+        end
+    end.
+
+Definition sll_multi_merge_M_loop_body : (list Z * list Z * list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z * list Z * list Z) (early_result MretTy (list Z))) :=
+  fun a =>
+    choice (assume!! (~ guard);; r <- sll_multi_merge_M_loop_M1 a ;; break (Continue r))
+           (assume!! guard;;
+            a' <- sll_multi_merge_M_loop_M2 a ;;
+            match a' with
+            | Continue a'' => continue a''
+            | ReturnNow r' => break (ReturnNow r')
+            end).
+
+Definition sll_multi_merge_M_loop_aux :=
+  repeat_break sll_multi_merge_M_loop_body.
+
+Definition sll_multi_merge_M_loop_before
+  : list Z -> list Z -> list Z -> MONAD (early_result (list Z * list Z * list Z * list Z) (list Z)) :=
+  fun l1 l2 l3 =>
+    match l1 with
+    | nil =>
+        r <- sll_merge_M l2 l3;;
+        return (ReturnNow r)
+    | xh :: xt =>
+        return (Continue (l2, l3, xt, xh :: nil))
+    end.
+
+Definition sll_multi_merge_M_after_loop : early_result MretTy (list Z) -> MONAD (list Z) :=
+  fun re =>
+    match re with
+    | Continue r => sll_multi_merge_M_loop_end r
+    | ReturnNow r => return r
+    end.
+
+Definition sll_multi_merge_M : list Z -> list Z -> list Z -> MONAD (list Z) :=
+  fun l1 l2 l3 =>
+    e <- sll_multi_merge_M_loop_before l1 l2 l3;;
+    match e with
+    | Continue s =>
+        re <- sll_multi_merge_M_loop_aux s;;
+        sll_multi_merge_M_after_loop re
+    | ReturnNow r =>
+        return r
+    end.
+""",
+        encoding="utf-8",
+    )
+
+    context = collect_synthesis_context(
+        "shape_invdataset/sll/sll_multi_merge.c",
+        func_name="sll_multi_merge",
+    )
+
+    files = _sync_residual_artifacts(context, str(rel_lib))
+
+    assert files["rel_lib"] == str(rel_lib)
+    assert files["rel_c"] == str(rel_c)
+    rel_lib_content = rel_lib.read_text(encoding="utf-8")
+    assert "Definition residual_prog_in_sll_multi_merge_M_call_2 (l4 : list Z) : list Z -> MONAD (list Z) :=" in rel_lib_content
+    rel_c_content = rel_c.read_text(encoding="utf-8")
+    assert "(residual_prog_in_sll_multi_merge_M_call_2: list Z -> list Z -> program unit (list Z))" in rel_c_content
 
 
 def test_run_synthesis_pipeline_replay_backend_writes_artifacts(tmp_path):

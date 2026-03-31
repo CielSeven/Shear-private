@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 from typing import Dict, List, Optional, Tuple
@@ -7,6 +8,12 @@ from typing import Dict, List, Optional, Tuple
 from GenMonads.absprog.assemble import write_assembled_rel_lib
 from GenMonads.absprog.check_rocq import check_rocq_file
 from GenMonads.absprog.context import collect_synthesis_context, write_synthesis_context
+from GenMonads.absprog.gen_func_residual import (
+    _strip_wrapping_parens,
+    generate_func_residual_entries,
+    polish_residual_segment,
+    promote_captured_identifiers_to_arguments,
+)
 from GenMonads.absprog.parse_coq import parse_synthesized_components
 from GenMonads.absprog.templates import prompt_payload, render_prompt, render_repair_prompt
 
@@ -219,6 +226,154 @@ def _default_coq_lib_dir() -> str:
     return os.path.join("output", "gen", "libs")
 
 
+def _default_rel_dir() -> str:
+    env = os.environ.get("REL_DIR")
+    if env:
+        return env
+
+    configure = os.path.join(os.path.dirname(__file__), "..", "..", "CONFIGURE")
+    configure = os.path.normpath(configure)
+    if os.path.isfile(configure):
+        with open(configure, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("REL_DIR="):
+                    value = line.split(":-", 1)[-1].rstrip('}"')
+                    if value:
+                        return value
+    return os.path.join("output", "gen", "rel")
+
+
+def _resolve_rel_c_path(c_file: str) -> str:
+    rel_root = _default_rel_dir()
+    normalized = c_file.replace("\\", "/")
+    marker = "shape_invdataset/"
+    if marker in normalized:
+        relative = normalized.split(marker, 1)[1]
+        rel_subpath = os.path.splitext(relative)[0] + "_rel.c"
+        return os.path.join(rel_root, rel_subpath)
+    base_name = os.path.splitext(os.path.basename(c_file))[0] + "_rel.c"
+    return os.path.join(rel_root, base_name)
+
+
+def _format_residual_extern_decl(entry: Dict) -> str:
+    arg_types = []
+    for identifier in entry.captured_identifiers:
+        ident_type = entry.captured_identifier_types.get(identifier)
+        if not ident_type:
+            raise ValueError(
+                f"Missing captured type for residual argument '{identifier}' in "
+                f"{entry.caller_component} call {entry.call_index}"
+            )
+        arg_types.append(ident_type)
+
+    if not entry.callee_return_type or not entry.caller_return_type:
+        raise ValueError(
+            f"Missing residual signature types for {entry.caller_component} call {entry.call_index}"
+        )
+
+    arg_types.append(_strip_wrapping_parens(entry.callee_return_type.strip()))
+    caller_type = entry.caller_return_type.strip()
+    rendered = " -> ".join(arg_types + [f"program unit {caller_type}"])
+    return (
+        f"(residual_prog_in_{entry.caller_component}_call_{entry.call_index}: "
+        f"{rendered})"
+    )
+
+
+def _append_missing_residual_decls_to_rel_c(rel_c_path: str, decls: List[str]) -> str:
+    if not os.path.isfile(rel_c_path) or not decls:
+        return ""
+
+    with open(rel_c_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    match = re.search(
+        r"/\*@ Extern Coq\s*\n(?P<body>.*?\n)(?P<closing_ws>[ \t]*)\*/",
+        content,
+        re.DOTALL,
+    )
+    if not match:
+        return ""
+
+    body = match.group("body")
+    closing_ws = match.group("closing_ws")
+    existing_names = set(
+        re.findall(r"\(\s*([A-Za-z_][A-Za-z0-9_']*)\s*:", body)
+    )
+    new_decls = []
+    for decl in decls:
+        name_match = re.match(r"\(\s*([A-Za-z_][A-Za-z0-9_']*)\s*:", decl)
+        if name_match and name_match.group(1) in existing_names:
+            continue
+        new_decls.append(decl)
+    if not new_decls:
+        return rel_c_path
+
+    # Infer per-line indentation from the existing body lines, falling back to closing_ws.
+    body_lines = [line for line in body.splitlines() if line.strip()]
+    if body_lines:
+        indent_match = re.match(r"^([ \t]*)", body_lines[0])
+        padding = indent_match.group(1) if indent_match else closing_ws
+    else:
+        padding = closing_ws
+
+    insertion = "\n".join(f"{padding}{decl}" for decl in new_decls)
+    close_marker = match.start("closing_ws")
+    updated = content[:close_marker] + insertion + "\n" + closing_ws + "*/" + content[match.end():]
+
+    with open(rel_c_path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    return rel_c_path
+
+
+def _sync_residual_artifacts(context: Dict, assembled_rel_lib: str) -> Dict[str, str]:
+    if not assembled_rel_lib or not os.path.isfile(assembled_rel_lib):
+        return {}
+
+    caller_component = f"{context['summary']['func_name']}_M"
+    all_entries = []
+    for callee in context.get("available_callees", []):
+        opaque_program = callee.get("opaque_program")
+        if not opaque_program:
+            continue
+        entries = generate_func_residual_entries(
+            assembled_rel_lib,
+            opaque_program,
+            caller_component,
+        )
+        all_entries.extend(entries)
+
+    if not all_entries:
+        return {}
+
+    all_entries = [polish_residual_segment(entry) for entry in all_entries]
+    rendered_defs = [
+        promote_captured_identifiers_to_arguments(
+            entry.definition,
+            entry.captured_identifiers,
+            entry.captured_identifier_types,
+        )
+        for entry in all_entries
+    ]
+    with open(assembled_rel_lib, "r", encoding="utf-8") as f:
+        original = f.read()
+    new_content = original.rstrip() + "\n\n" + "\n\n".join(rendered_defs) + "\n"
+    with open(assembled_rel_lib, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    rel_c_path = _resolve_rel_c_path(context["source"]["c_file"])
+    patched_rel_c = _append_missing_residual_decls_to_rel_c(
+        rel_c_path,
+        [_format_residual_extern_decl(entry) for entry in all_entries],
+    )
+
+    return {
+        "rel_lib": assembled_rel_lib,
+        "rel_c": patched_rel_c,
+    }
+
+
 def _promote_rel_lib_if_accepted(assembled_file: str, context_id: str, status: str) -> str:
     if status != "passed" or not assembled_file or not os.path.isfile(assembled_file):
         return ""
@@ -266,7 +421,7 @@ def _copy_final_attempt_files(final_attempt: Dict, output_dir: str, context_id: 
     for label, path in final_attempt["files"].items():
         if not path:
             continue
-        if label == "context":
+        if label in {"context", "patched_rel_c"}:
             final_files[label] = path
             continue
 
@@ -282,6 +437,62 @@ def _copy_final_attempt_files(final_attempt: Dict, output_dir: str, context_id: 
             _write_text(target, src.read())
         final_files[label] = target
     return final_files
+
+
+def _record_attempt(
+    attempt_index: int,
+    attempt_dir: str,
+    context_id: str,
+    files: Dict[str, str],
+    status: str,
+    failure_kind: str,
+    failure_message: str,
+    check_result: Dict,
+    attempts: List[Dict],
+    response_text: str,
+) -> Tuple[str, str, str]:
+    attempt_summary = _build_attempt_summary(
+        attempt_index, files, status, failure_kind, failure_message, check_result
+    )
+    attempt_summary_file = _attempt_file(attempt_dir, context_id, "summary.json")
+    _write_json(attempt_summary_file, attempt_summary)
+    attempt_summary["files"]["summary"] = attempt_summary_file
+    attempts.append(attempt_summary)
+    return response_text, failure_kind, failure_message
+
+
+def _build_final_summary(
+    input_path: str,
+    output_dir: str,
+    context: Dict,
+    backend: str,
+    max_retries: int,
+    attempts: List[Dict],
+    final_attempt: Dict,
+    status: str,
+) -> Dict:
+    final_files = _copy_final_attempt_files(final_attempt, output_dir, context["id"])
+    summary = {
+        "input_path": input_path,
+        "context_id": context["id"],
+        "func_name": context["summary"]["func_name"],
+        "backend": backend,
+        "max_retries": max_retries,
+        "attempt_count": len(attempts),
+        "attempts": attempts,
+        "files": final_files,
+        "check": final_attempt["check"],
+        "status": status,
+    }
+    promoted_path = _promote_rel_lib_if_accepted(
+        final_attempt["files"].get("assembled_rel_lib", ""), context["id"], status
+    )
+    if promoted_path:
+        summary["files"]["promoted_rel_lib"] = promoted_path
+    summary_file = _root_file(output_dir, context["id"], "summary.json")
+    _write_json(summary_file, summary)
+    summary["files"]["summary"] = summary_file
+    return summary
 
 
 def run_synthesis_pipeline(
@@ -346,6 +557,7 @@ def run_synthesis_pipeline(
             "response": response_out_file,
             "parsed": "",
             "assembled_rel_lib": "",
+            "patched_rel_c": "",
         }
 
         check_result = _default_check_result()
@@ -371,16 +583,10 @@ def run_synthesis_pipeline(
             failure_kind = "backend"
             failure_message = str(exc)
             _write_text(response_out_file, response_text)
-            attempt_summary = _build_attempt_summary(
-                attempt_index, files, status, failure_kind, failure_message, check_result
+            previous_response, previous_failure_kind, previous_failure_message = _record_attempt(
+                attempt_index, attempt_dir, context["id"], files, status,
+                failure_kind, failure_message, check_result, attempts, response_text,
             )
-            attempt_summary_file = _attempt_file(attempt_dir, context["id"], "summary.json")
-            _write_json(attempt_summary_file, attempt_summary)
-            attempt_summary["files"]["summary"] = attempt_summary_file
-            attempts.append(attempt_summary)
-            previous_response = response_text
-            previous_failure_kind = failure_kind
-            previous_failure_message = failure_message
             continue
 
         _write_text(response_out_file, response_text)
@@ -391,16 +597,10 @@ def run_synthesis_pipeline(
         except Exception as exc:
             failure_kind = "validation"
             failure_message = str(exc)
-            attempt_summary = _build_attempt_summary(
-                attempt_index, files, status, failure_kind, failure_message, check_result
+            previous_response, previous_failure_kind, previous_failure_message = _record_attempt(
+                attempt_index, attempt_dir, context["id"], files, status,
+                failure_kind, failure_message, check_result, attempts, response_text,
             )
-            attempt_summary_file = _attempt_file(attempt_dir, context["id"], "summary.json")
-            _write_json(attempt_summary_file, attempt_summary)
-            attempt_summary["files"]["summary"] = attempt_summary_file
-            attempts.append(attempt_summary)
-            previous_response = response_text
-            previous_failure_kind = failure_kind
-            previous_failure_message = failure_message
             continue
 
         try:
@@ -410,16 +610,10 @@ def run_synthesis_pipeline(
         except Exception as exc:
             failure_kind = "parse"
             failure_message = str(exc)
-            attempt_summary = _build_attempt_summary(
-                attempt_index, files, status, failure_kind, failure_message, check_result
+            previous_response, previous_failure_kind, previous_failure_message = _record_attempt(
+                attempt_index, attempt_dir, context["id"], files, status,
+                failure_kind, failure_message, check_result, attempts, response_text,
             )
-            attempt_summary_file = _attempt_file(attempt_dir, context["id"], "summary.json")
-            _write_json(attempt_summary_file, attempt_summary)
-            attempt_summary["files"]["summary"] = attempt_summary_file
-            attempts.append(attempt_summary)
-            previous_response = response_text
-            previous_failure_kind = failure_kind
-            previous_failure_message = failure_message
             continue
 
         write_assembled_rel_lib(
@@ -434,70 +628,53 @@ def run_synthesis_pipeline(
             check_result = check_rocq_file(assembled_file)
 
         if not run_check or check_result.get("status") == "passed":
+            residual_files = {}
+            try:
+                residual_files = _sync_residual_artifacts(context, assembled_file)
+            except Exception as exc:
+                failure_kind = "residual_sync"
+                failure_message = str(exc)
+                previous_response, previous_failure_kind, previous_failure_message = _record_attempt(
+                    attempt_index, attempt_dir, context["id"], files, status,
+                    failure_kind, failure_message, check_result, attempts, response_text,
+                )
+                continue
+
+            files["patched_rel_c"] = residual_files.get("rel_c", "")
+            if run_check and residual_files.get("rel_lib"):
+                check_result = check_rocq_file(assembled_file)
+                if check_result.get("status") != "passed":
+                    failure_kind = "rocq"
+                    failure_message = (
+                        check_result.get("stderr")
+                        or check_result.get("stdout")
+                        or "Rocq check failed after residual sync"
+                    )
+                    previous_response, previous_failure_kind, previous_failure_message = _record_attempt(
+                        attempt_index, attempt_dir, context["id"], files, status,
+                        failure_kind, failure_message, check_result, attempts, response_text,
+                    )
+                    continue
+
             status = "passed" if run_check else "assembled"
-            attempt_summary = _build_attempt_summary(
-                attempt_index, files, status, failure_kind, failure_message, check_result
+            _record_attempt(
+                attempt_index, attempt_dir, context["id"], files, status,
+                failure_kind, failure_message, check_result, attempts, response_text,
             )
-            attempt_summary_file = _attempt_file(attempt_dir, context["id"], "summary.json")
-            _write_json(attempt_summary_file, attempt_summary)
-            attempt_summary["files"]["summary"] = attempt_summary_file
-            attempts.append(attempt_summary)
-            final_files = _copy_final_attempt_files(attempt_summary, output_dir, context["id"])
-            summary = {
-                "input_path": input_path,
-                "context_id": context["id"],
-                "func_name": context["summary"]["func_name"],
-                "backend": backend,
-                "max_retries": max_retries,
-                "attempt_count": len(attempts),
-                "attempts": attempts,
-                "files": final_files,
-                "check": check_result,
-                "status": status,
-            }
-            promoted_path = _promote_rel_lib_if_accepted(
-                attempt_summary["files"].get("assembled_rel_lib", ""), context["id"], status
+            return _build_final_summary(
+                input_path, output_dir, context, backend, max_retries,
+                attempts, attempts[-1], status,
             )
-            if promoted_path:
-                summary["files"]["promoted_rel_lib"] = promoted_path
-            summary_file = _root_file(output_dir, context["id"], "summary.json")
-            _write_json(summary_file, summary)
-            summary["files"]["summary"] = summary_file
-            return summary
 
         failure_kind = "rocq"
         failure_message = check_result.get("stderr") or check_result.get("stdout") or "Rocq check failed"
-        attempt_summary = _build_attempt_summary(
-            attempt_index, files, status, failure_kind, failure_message, check_result
+        previous_response, previous_failure_kind, previous_failure_message = _record_attempt(
+            attempt_index, attempt_dir, context["id"], files, status,
+            failure_kind, failure_message, check_result, attempts, response_text,
         )
-        attempt_summary_file = _attempt_file(attempt_dir, context["id"], "summary.json")
-        _write_json(attempt_summary_file, attempt_summary)
-        attempt_summary["files"]["summary"] = attempt_summary_file
-        attempts.append(attempt_summary)
-        previous_response = response_text
-        previous_failure_kind = failure_kind
-        previous_failure_message = failure_message
 
     final_attempt = attempts[-1]
-    final_files = _copy_final_attempt_files(final_attempt, output_dir, context["id"])
-    summary = {
-        "input_path": input_path,
-        "context_id": context["id"],
-        "func_name": context["summary"]["func_name"],
-        "backend": backend,
-        "max_retries": max_retries,
-        "attempt_count": len(attempts),
-        "attempts": attempts,
-        "files": final_files,
-        "check": final_attempt["check"],
-        "status": _final_status_from_attempt(final_attempt),
-    }
-    promoted_path = _promote_rel_lib_if_accepted(
-        final_attempt["files"].get("assembled_rel_lib", ""), context["id"], summary["status"]
+    return _build_final_summary(
+        input_path, output_dir, context, backend, max_retries,
+        attempts, final_attempt, _final_status_from_attempt(final_attempt),
     )
-    if promoted_path:
-        summary["files"]["promoted_rel_lib"] = promoted_path
-    summary_file = _root_file(output_dir, context["id"], "summary.json")
-    _write_json(summary_file, summary)
-    summary["files"]["summary"] = summary_file
-    return summary

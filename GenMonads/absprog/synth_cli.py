@@ -95,10 +95,12 @@ def _run_batch(input_dir: str, output_dir: str, args) -> int:
         }
         for future in as_completed(future_map):
             stdout_lines, stderr_lines, batch_failures = future.result()
-            for line in stdout_lines:
-                print(line)
-            for line in stderr_lines:
-                print(line, file=sys.stderr)
+            if stdout_lines:
+                sys.stdout.write("\n".join(stdout_lines) + "\n")
+                sys.stdout.flush()
+            if stderr_lines:
+                sys.stderr.write("\n".join(stderr_lines) + "\n")
+                sys.stderr.flush()
             failures.extend(batch_failures)
 
     return 1 if failures else 0

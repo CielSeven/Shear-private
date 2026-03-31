@@ -134,8 +134,8 @@ class TestOutputVerification:
         assert '/*@ Extern Coq (early_result :: * => * => *) */' in content
         assert '(sll_merge_M: list Z -> list Z -> program unit (list Z))' in content
         assert '(sll_multi_merge_M: list Z -> list Z -> list Z -> program unit (list Z))' in content
-        assert '(sll_multi_merge_M_loop_before: list Z -> list Z -> list Z -> program unit (early_result (list Z * list Z * list Z * list Z) (list Z)))' in content
-        assert '(sll_multi_merge_M_loop: list Z -> list Z -> list Z -> list Z -> program unit (early_result MretTy (list Z)))' in content
+        assert '(sll_multi_merge_M_loop_before: list Z -> list Z -> list Z -> program unit (early_result (list Z * list Z * list Z * list Z * Z) (list Z)))' in content
+        assert '(sll_multi_merge_M_loop: list Z -> list Z -> list Z -> list Z -> Z -> program unit (early_result MretTy (list Z)))' in content
         assert '(sll_multi_merge_M_after_loop: early_result MretTy (list Z) -> program unit (list Z))' in content
         assert 'sll_merge_M_loop' not in content
         assert content.count('struct list * sll_merge(struct list * x, struct list * y)') == 2
@@ -144,7 +144,7 @@ class TestOutputVerification:
         assert 'With {B} (cont: (list Z) -> program unit B) X l1 l2' in content
         assert 'Require safeExec(ATrue, bind(sll_merge_M(l1, l2), cont), X)' in content
         assert 'Ensure exists l3, safeExec(ATrue, bind(return(l3), cont), X)' in content
-        assert 'bind(sll_multi_merge_M_loop(l1,l2,l3,l4), sll_multi_merge_M_after_loop)' in content
+        assert 'bind(sll_multi_merge_M_loop(l1,l2,l3,l4,v), sll_multi_merge_M_after_loop)' in content
 
 
 # ============================================================================

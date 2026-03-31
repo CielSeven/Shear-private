@@ -56,6 +56,7 @@
         "M": "list Z -> MONAD (list Z)"
       },
       "template": {
+        "loop_body_definition": "Definition sll_reverse_M_loop_body : (list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy) :=\n  fun a =>\n    choice (assume!! (~ (sll_reverse_guardP a));; r <- sll_reverse_M_loop_M1 a ;; break r)\n           (assume!! ((sll_reverse_guardP a));; a' <- sll_reverse_M_loop_M2 a ;; continue a').",
         "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
         "after_loop_definition": ""
       },
@@ -87,6 +88,7 @@
       "M": "list Z -> MONAD (list Z)"
     },
     "template": {
+      "loop_body_definition": "Definition sll_reverse_M_loop_body : (list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy) :=\n  fun a =>\n    choice (assume!! (~ (sll_reverse_guardP a));; r <- sll_reverse_M_loop_M1 a ;; break r)\n           (assume!! ((sll_reverse_guardP a));; a' <- sll_reverse_M_loop_M2 a ;; continue a').",
       "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
       "after_loop_definition": ""
     },
@@ -139,6 +141,7 @@
           "M": "list Z -> MONAD (list Z)"
         },
         "template": {
+          "loop_body_definition": "Definition sll_reverse_M_loop_body : (list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy) :=\n  fun a =>\n    choice (assume!! (~ (sll_reverse_guardP a));; r <- sll_reverse_M_loop_M1 a ;; break r)\n           (assume!! ((sll_reverse_guardP a));; a' <- sll_reverse_M_loop_M2 a ;; continue a').",
           "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
           "after_loop_definition": ""
         },
@@ -170,6 +173,7 @@
         "M": "list Z -> MONAD (list Z)"
       },
       "template": {
+        "loop_body_definition": "Definition sll_reverse_M_loop_body : (list Z * list Z) -> MONAD (CntOrBrk (list Z * list Z) MretTy) :=\n  fun a =>\n    choice (assume!! (~ (sll_reverse_guardP a));; r <- sll_reverse_M_loop_M1 a ;; break r)\n           (assume!! ((sll_reverse_guardP a));; a' <- sll_reverse_M_loop_M2 a ;; continue a').",
         "top_level": "Definition sll_reverse_M : list Z -> MONAD (list Z) :=\n  fun ... =>\n    s0 <- sll_reverse_M_loop_before ...;;\n    r <- sll_reverse_M_loop s0;;\n    sll_reverse_M_loop_end r.",
         "after_loop_definition": ""
       },
@@ -186,20 +190,7 @@
       "sll_reverse_M_loop_M2",
       "sll_reverse_M_loop_end"
     ],
+    "generated_scaffolding": [],
     "opaque_external_programs": []
-  },
-  "gold": {
-    "rel_lib_file": "few-shot-examples/absprog/sll_reverse_rel_lib.v",
-    "MretTy": "list Z",
-    "components": {
-      "M_loop_before": "Definition sll_reverse_M_loop_before : list Z -> MONAD (list Z * list Z) :=\n  fun l => return (nil, l).",
-      "M_1": "Definition sll_reverse_M_loop_M1 : (list Z * list Z) -> MONAD MretTy:=\n fun '(l1,l2) => return l1.",
-      "M_2": "Definition sll_reverse_M_loop_M2 : (list Z * list Z) -> MONAD (list Z * list Z) :=\n  fun '(l1,l2) =>\n    match l2 with\n    | nil => return (l1,l2) (* impossible *)\n    | v :: l2' => return (v :: l1, l2')\n    end.",
-      "M_loop_end": "Definition sll_reverse_M_loop_end : MretTy -> MONAD (list Z):=\n  fun l => return l."
-    }
-  },
-  "verification": {
-    "coqc_checked": true,
-    "status": "checked"
   }
 }

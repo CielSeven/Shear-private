@@ -200,10 +200,10 @@ def test_collect_synthesis_context_requires_function_name_for_multifunction_file
 
     assert left["id"] == "sll_rotate_left"
     assert left["summary"]["func_name"] == "sll_rotate_left"
-    assert left["features"]["inv_var_count"] == 2
+    assert left["features"]["inv_var_count"] == 3  # l1, l2 + data witness w
     assert right["id"] == "sll_rotate_right"
     assert right["summary"]["func_name"] == "sll_rotate_right"
-    assert right["features"]["inv_var_count"] == 3
+    assert right["features"]["inv_var_count"] == 4  # l1, l2, l3 + data witness w
 
 
 def test_collect_file_synthesis_manifest_tracks_targets_and_callees():
@@ -241,10 +241,10 @@ def test_collect_synthesis_context_includes_available_callees_for_target():
     assert ctx["control_flow"]["has_pre_loop_early_return"] is True
     assert ctx["control_flow"]["has_loop_body_early_return"] is True
     assert ctx["control_flow"]["prompt_signatures"]["M_loop_M1"] == (
-        "(list Z * list Z * list Z * list Z) -> MONAD MretTy"
+        "(list Z * list Z * list Z * list Z * Z) -> MONAD MretTy"
     )
     assert ctx["control_flow"]["prompt_signatures"]["M_loop_M2"] == (
-        "(list Z * list Z * list Z * list Z) -> MONAD (early_result (list Z * list Z * list Z * list Z) (list Z))"
+        "(list Z * list Z * list Z * list Z * Z) -> MONAD (early_result (list Z * list Z * list Z * list Z * Z) (list Z))"
     )
     assert "break (Continue r)" in ctx["control_flow"]["template"]["loop_body_definition"]
     assert "| ReturnNow r' => break (ReturnNow r')" in ctx["control_flow"]["template"]["loop_body_definition"]

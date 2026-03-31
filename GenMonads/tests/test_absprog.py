@@ -169,12 +169,12 @@ def test_generate_rel_lib_for_early_return_function_includes_early_result_scaffo
     assert "Arguments ReturnNow {S Ret} _." in content
     assert "Definition sll_multi_merge_M_after_loop" in content
     assert "Parameter sll_multi_merge_M_loop_before : list Z -> list Z -> list Z -> MONAD (early_result" in content
-    assert "Parameter sll_multi_merge_M_loop_M1 : (list Z * list Z * list Z * list Z) -> MONAD MretTy." in content
-    assert "Parameter sll_multi_merge_M_loop_M2 : (list Z * list Z * list Z * list Z) -> MONAD (early_result (list Z * list Z * list Z * list Z) (list Z))." in content
+    assert "Parameter sll_multi_merge_M_loop_M1 : (list Z * list Z * list Z * list Z * Z) -> MONAD MretTy." in content
+    assert "Parameter sll_multi_merge_M_loop_M2 : (list Z * list Z * list Z * list Z * Z) -> MONAD (early_result (list Z * list Z * list Z * list Z * Z) (list Z))." in content
     assert "choice (assume!! (~ (sll_multi_merge_guardP a));; r <- sll_multi_merge_M_loop_M1 a ;; break (Continue r))" in content
     assert "| Continue a'' => continue a''" in content
     assert "| ReturnNow r' => break (ReturnNow r')" in content
-    assert "Definition sll_multi_merge_M_loop : list Z -> list Z -> list Z -> list Z -> program unit (early_result" in content
+    assert "Definition sll_multi_merge_M_loop : list Z -> list Z -> list Z -> list Z -> Z -> program unit (early_result" in content
 
 
 def test_assemble_rel_lib_from_blocks_preserves_early_return_scaffold():

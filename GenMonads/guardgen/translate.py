@@ -135,7 +135,7 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
 
     return go(ast)
 
-def gen_coq_guard(inv: str, cond: str) -> str:
+def gen_coq_guard(inv: str, cond: str, extra_vars: list[str] | None = None) -> str:
     inv_norm = normalize_inv(inv)
     atoms = parse_invariant(inv_norm)
     pure_aliases = extract_pure_aliases(inv)
@@ -148,10 +148,12 @@ def gen_coq_guard(inv: str, cond: str) -> str:
     ast = parse_cond_full(cond_normalized)
     body = gen_coq_from_bool(ast, atoms, aliases=pure_aliases)
 
-    # Bind abstract names in INV order
+    # Bind abstract names in INV order, plus any extra vars (data witnesses)
     abs_names: list[str] = []
     for a in atoms:
         abs_names.extend(a.spec.abs_names(a.payload))
+    if extra_vars:
+        abs_names.extend(extra_vars)
 
     if not abs_names:
         return "fun _ => " + body

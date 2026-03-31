@@ -65,53 +65,47 @@ def _loop_statement_end(text: str, idx: int) -> int:
 
 
 def find_first_top_level_loop(body: str) -> Optional[Dict[str, int | str]]:
+    """Find the first while/for loop in the function body.
+
+    Scans at any brace depth so that loops inside if/else blocks are found.
+    Returns on the first match, so nested inner loops are not picked up.
+    """
     clean = strip_c_comments(body)
-    depth = 0
     idx = 0
     while idx < len(clean):
-        ch = clean[idx]
-        if ch == "{":
-            depth += 1
-            idx += 1
-            continue
-        if ch == "}":
-            depth = max(0, depth - 1)
-            idx += 1
-            continue
-        if depth == 0:
-            for keyword in ("while", "for"):
-                prefix_ok = idx == 0 or not (clean[idx - 1].isalnum() or clean[idx - 1] == "_")
-                if prefix_ok and clean.startswith(keyword, idx):
-                    after_kw = idx + len(keyword)
-                    suffix_ok = after_kw >= len(clean) or not (
-                        clean[after_kw].isalnum() or clean[after_kw] == "_"
-                    )
-                    if not suffix_ok:
-                        continue
-                    paren_start = _skip_ws(clean, after_kw)
-                    if paren_start >= len(clean) or clean[paren_start] != "(":
-                        continue
-                    paren_end = _find_matching(clean, paren_start, "(", ")")
-                    if paren_end is None:
-                        return None
-                    stmt_start = _skip_ws(clean, paren_end + 1)
-                    stmt_end = _loop_statement_end(clean, stmt_start)
-                    if stmt_start < len(clean) and clean[stmt_start] == "{":
-                        loop_body_start = stmt_start + 1
-                        loop_body_end = stmt_end - 1
-                    else:
-                        loop_body_start = stmt_start
-                        loop_body_end = stmt_end
-                    return {
-                        "keyword": keyword,
-                        "start": idx,
-                        "paren_start": paren_start,
-                        "paren_end": paren_end,
-                        "stmt_start": stmt_start,
-                        "stmt_end": stmt_end,
-                        "body_start": loop_body_start,
-                        "body_end": loop_body_end,
-                    }
+        for keyword in ("while", "for"):
+            prefix_ok = idx == 0 or not (clean[idx - 1].isalnum() or clean[idx - 1] == "_")
+            if prefix_ok and clean.startswith(keyword, idx):
+                after_kw = idx + len(keyword)
+                suffix_ok = after_kw >= len(clean) or not (
+                    clean[after_kw].isalnum() or clean[after_kw] == "_"
+                )
+                if not suffix_ok:
+                    continue
+                paren_start = _skip_ws(clean, after_kw)
+                if paren_start >= len(clean) or clean[paren_start] != "(":
+                    continue
+                paren_end = _find_matching(clean, paren_start, "(", ")")
+                if paren_end is None:
+                    return None
+                stmt_start = _skip_ws(clean, paren_end + 1)
+                stmt_end = _loop_statement_end(clean, stmt_start)
+                if stmt_start < len(clean) and clean[stmt_start] == "{":
+                    loop_body_start = stmt_start + 1
+                    loop_body_end = stmt_end - 1
+                else:
+                    loop_body_start = stmt_start
+                    loop_body_end = stmt_end
+                return {
+                    "keyword": keyword,
+                    "start": idx,
+                    "paren_start": paren_start,
+                    "paren_end": paren_end,
+                    "stmt_start": stmt_start,
+                    "stmt_end": stmt_end,
+                    "body_start": loop_body_start,
+                    "body_end": loop_body_end,
+                }
         idx += 1
     return None
 

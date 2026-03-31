@@ -57,7 +57,7 @@ def test_detect_early_return_shape_pre_loop_only():
     assert info["has_loop_body_early_return"] is False
 
 
-def test_find_first_top_level_loop_ignores_nested_loop_before_real_one():
+def test_find_first_top_level_loop_finds_loop_inside_if_else():
     body = textwrap.dedent(
         """\
             if (x) {
@@ -74,4 +74,34 @@ def test_find_first_top_level_loop_ignores_nested_loop_before_real_one():
     loop_info = find_first_top_level_loop(body)
 
     assert loop_info is not None
-    assert body[int(loop_info["start"]):].startswith("while (z)")
+    assert body[int(loop_info["start"]):].startswith("while (y)")
+
+
+def test_detect_early_return_shape_loop_inside_else_with_pre_return():
+    source = textwrap.dedent(
+        """\
+        struct list * sll_append(struct list * x, struct list * y)
+        {
+            struct list *t, *u;
+            if (x == 0) {
+                return y;
+            } else {
+                t = x;
+                u = t->next;
+                while (u) {
+                    t = u;
+                    u = t->next;
+                }
+                t->next = y;
+                return x;
+            }
+        }
+        """
+    )
+
+    info = detect_early_return_shape(source)
+
+    assert info["has_top_level_loop"] is True
+    assert info["has_pre_loop_early_return"] is True
+    assert info["has_loop_body_early_return"] is False
+    assert info["needs_early_result"] is True
