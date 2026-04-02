@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 from GenMonads.absprog import synth_cli
 
 
@@ -38,6 +40,33 @@ def test_synth_cli_accepts_alias_flags_for_single_input(monkeypatch, tmp_path, c
     assert calls["kwargs"]["output_dir"] == str(tmp_path)
     assert calls["kwargs"]["max_retries"] == 2
     assert calls["kwargs"]["run_check"] is False
+    captured = capsys.readouterr()
+    assert "Status: passed" in captured.out
+
+
+def test_synth_cli_accepts_file_alias_for_single_input(monkeypatch, tmp_path, capsys):
+    calls = {}
+
+    def fake_run(**kwargs):
+        calls["kwargs"] = kwargs
+        return {
+            "status": "passed",
+            "attempt_count": 1,
+            "files": {},
+            "check": {"status": "passed", "reason": ""},
+        }
+
+    monkeypatch.setattr(synth_cli, "run_synthesis_pipeline", fake_run)
+    monkeypatch.setattr(sys, "argv", [
+        "llm4pv-synth",
+        "--FILE=shape_invdataset/sll/sll_reverse.c",
+        f"--OUTPUT_PATH={tmp_path}",
+    ])
+
+    synth_cli.main()
+
+    assert calls["kwargs"]["input_path"] == "shape_invdataset/sll/sll_reverse.c"
+    assert calls["kwargs"]["output_dir"] == str(tmp_path)
     captured = capsys.readouterr()
     assert "Status: passed" in captured.out
 
@@ -157,3 +186,22 @@ def test_synth_cli_directory_mode_parallelizes_per_c_file(monkeypatch, tmp_path,
     captured = capsys.readouterr()
     assert f"done {input_dir / 'alpha.c'}" in captured.out
     assert f"done {input_dir / 'beta.c'}" in captured.out
+
+
+def test_synth_cli_reports_precise_missing_output_error(monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "llm4pv-synth",
+            "--FILE=shape_invdataset/sll/sll_reverse.c",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        synth_cli.main()
+
+    assert excinfo.value.code == 2
+    captured = capsys.readouterr()
+    assert "Provide an output directory via positional output_dir or --OUTPUT_PATH." in captured.err
+    assert "--FILE/--C_DIR" not in captured.err

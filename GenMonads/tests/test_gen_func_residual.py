@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 from GenMonads.absprog.gen_func_residual import (
     ResidualSegment,
     append_func_residual_definitions,
@@ -493,6 +495,52 @@ def test_residual_cli_accepts_no_polish_flag(monkeypatch, tmp_path):
     residual_cli.main()
 
     assert calls["args"] == (str(tmp_path / "demo.v"), "callee_M", "caller_M", False)
+
+
+def test_residual_cli_accepts_positional_arguments(monkeypatch, tmp_path):
+    from GenMonads.absprog import residual_cli
+
+    calls = {}
+
+    def fake_append(file_path, callee, caller, polish):
+        calls["args"] = (file_path, callee, caller, polish)
+        return []
+
+    monkeypatch.setattr(residual_cli, "append_func_residual_definitions", fake_append)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "llm4pv-residual",
+            str(tmp_path / "demo.v"),
+            "callee_M",
+            "caller_M",
+        ],
+    )
+
+    residual_cli.main()
+
+    assert calls["args"] == (str(tmp_path / "demo.v"), "callee_M", "caller_M", True)
+
+
+def test_residual_cli_help_uses_clear_metavars(monkeypatch, capsys):
+    from GenMonads.absprog import residual_cli
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "llm4pv-residual",
+            "--help",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        residual_cli.main()
+
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    assert "[FILE] [CALLEE] [CALLER]" in captured.out
 
 
 def test_generate_func_residual_entries_preserves_args_when_unfolding_named_definition(tmp_path):

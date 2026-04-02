@@ -10,16 +10,17 @@ struct list * sll_copy(struct list * x)
  */
 {
     struct list *y, *p, *t;
-    y = malloc_list(0);
-    t = y;
-    p = x;
-    /*@ Inv t != 0 && t -> next == 0 && t -> data == 0 && lseg(x@pre,p) * listrep(p) * lseg(y, t) */
-    while (p) {
-      t -> data = p -> data;
-      t -> next = malloc_list(0);
-      p = p -> next;
-      t = t -> next;
+    if (x == 0) {
+      return 0;
     }
-    free_list(t);
+    y = malloc_list(x -> data);
+    t = y;
+    p = x -> next;
+    /*@ Inv exists v, t != 0 && t -> next == 0 && t -> data == v && lseg(x@pre,p) * listrep(p) * lseg(y, t) */
+    while (p) {
+      t -> next = malloc_list(p -> data);
+      t = t -> next;
+      p = p -> next;
+    }
     return y;
 }

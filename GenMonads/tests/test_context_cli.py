@@ -96,6 +96,35 @@ def test_context_cli_writes_directory_outputs(monkeypatch, tmp_path, capsys):
     assert f"Generated: {helper_path}" in captured.out
 
 
+def test_context_cli_accepts_alias_flags(monkeypatch, tmp_path, capsys):
+    output_path = tmp_path / "single.auto.json"
+
+    monkeypatch.setattr(
+        context_cli,
+        "write_synthesis_context",
+        lambda input_file, target_path: {
+            "id": "demo",
+            "summary": {"func_name": "demo"},
+            "source": {"c_file": input_file},
+            "written_to": target_path,
+        },
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "llm4pv-context",
+            "--FILE=input/demo.c",
+            f"--OUTPUT_PATH={output_path}",
+        ],
+    )
+
+    context_cli.main()
+
+    captured = capsys.readouterr()
+    assert f"Generated: {output_path} (demo)" in captured.out
+
+
 def test_context_cli_reports_skipped_file_when_no_contexts(monkeypatch, tmp_path, capsys):
     input_dir = tmp_path / "inputs"
     output_dir = tmp_path / "outputs"

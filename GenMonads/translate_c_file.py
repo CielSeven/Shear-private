@@ -13,6 +13,11 @@ import sys
 from typing import Dict, Optional, List
 
 from GenMonads.early_return import detect_early_return_shape
+from GenMonads.cli_common import (
+    add_input_path_arguments,
+    add_output_path_argument,
+    resolve_cli_value,
+)
 from GenMonads.transshape.process_and_translate import process_and_translate_file
 from GenMonads.addabstract import add_safeexec_predicate, process_funcspec_with_safeexec
 from GenMonads.addabstract.addexec import extract_variables_from_assertion
@@ -766,24 +771,45 @@ def translate_directory(input_dir: str, output_dir: str) -> Dict[str, bool]:
             print(f"Processing {filename}...", end=' ')
             success = translate_c_file(input_path, output_path)
             results[filename] = success
-            if success: print(f"✓ -> {output_filename}")
-            else: print(f"✗ Failed")
+            if success: print(f"OK -> {output_filename}")
+            else: print("FAILED")
     return results
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Translate C files with shape assertions')
-    parser.add_argument('input', help='Input C file or directory')
-    parser.add_argument('output', help='Output C file or directory')
+    add_input_path_arguments(parser, 'Input C file or directory')
+    add_output_path_argument(parser, 'output', 'Output C file or directory')
     args = parser.parse_args()
-    if os.path.isdir(args.input):
-        results = translate_directory(args.input, args.output)
+    input_path = resolve_cli_value(
+        args,
+        parser,
+        'input',
+        ('file_path', 'c_dir'),
+        'Provide an input path via positional input, --FILE, or --C_DIR.',
+        is_path=True,
+    )
+    output_path = resolve_cli_value(
+        args,
+        parser,
+        'output',
+        ('output_path',),
+        'Provide an output path via positional output or --OUTPUT_PATH.',
+        is_path=True,
+    )
+    if os.path.isdir(input_path):
+        results = translate_directory(input_path, output_path)
         total, success = len(results), sum(1 for v in results.values() if v)
         print(f"\nSummary: {success}/{total} files translated successfully")
+        if success != total:
+            sys.exit(1)
     else:
-        success = translate_c_file(args.input, args.output)
-        if success: print(f"✓ Translation successful: {args.output}")
-        else: print(f"✗ Translation failed")
+        success = translate_c_file(input_path, output_path)
+        if success:
+            print(f"Translation successful: {output_path}")
+        else:
+            print("Translation failed", file=sys.stderr)
+            sys.exit(1)
 
 if __name__ == "__main__":
     main()

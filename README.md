@@ -9,12 +9,19 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```bash
 # Translate a single C file
 uv run llm4pv shape_invdataset/sll/sll_copy.c output/shape/rel/sll/sll_copy_rel.c
+uv run llm4pv --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=output/shape/rel/sll/sll_copy_rel.c
 
 # Translate an entire directory
 uv run llm4pv shape_invdataset/sll output/shape/rel/sll
 
 # Generate abstract program Rocq libs
 uv run llm4pv-rellib shape_invdataset/sll
+
+# Generate synthesis contexts for abstract-program generation
+uv run llm4pv-context shape_invdataset/sll/sll_copy.c ./output/gen/context/sll_copy.auto.json
+
+# Run the abstract-program synthesis pipeline
+uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy
 
 # Generate a Rocq guard from an invariant and loop condition
 uv run llm4pv-guard "sll(p, l1) * sll(y, l2)" "p != null"
@@ -75,6 +82,9 @@ struct list * sll_copy(struct list * x)
 ```bash
 uv run --from /path/to/LLM4PV llm4pv input.c output_rel.c
 uv run --from /path/to/LLM4PV llm4pv-guard "sll(p, l1)" "p"
+uv run --from /path/to/LLM4PV llm4pv-context input.c output.auto.json
+uv run --from /path/to/LLM4PV llm4pv-synth input.c output_dir
+uv run --from /path/to/LLM4PV llm4pv-rellib input.c output_lib_dir
 ```
 
 ### Library
@@ -116,11 +126,60 @@ Generate `_rel_lib.v` files from one C file or a whole directory:
 ```bash
 uv run llm4pv-rellib shape_invdataset/sll/sll_copy.c
 uv run llm4pv-rellib shape_invdataset/sll
+uv run llm4pv-rellib shape_invdataset/sll ./output/gen/libs
 uv run llm4pv-rellib shape_invdataset/sll --output-dir ./output/gen/libs
+uv run llm4pv-rellib --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=./output/gen/libs
 ```
 
 By default, the output directory comes from `COQ_LIB_DIR` in `CONFIGURE`.
+These CLIs also accept alias-style path flags such as `--FILE`, `--C_DIR`, and `--OUTPUT_PATH` in addition to positional arguments.
 Generated libs use function-scoped guard names in multi-function files and define `maketuple` when a function returns multiple logical results.
+
+## Context Generation
+
+Generate JSON contexts that capture the loop-invariant synthesis inputs for one file or a whole directory:
+
+```bash
+uv run llm4pv-context shape_invdataset/sll/sll_copy.c ./output/gen/context/sll_copy.auto.json
+uv run llm4pv-context shape_invdataset/sll ./output/gen/context/sll
+uv run llm4pv-context --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=./output/gen/context/sll_copy.auto.json
+```
+
+If the output path ends with `.json`, a single context file is written. Otherwise, the command writes one `*.auto.json` file per discovered synthesis context.
+
+## Abstract Program Synthesis
+
+Run the abstract-program synthesis pipeline on a C file, a context JSON file, or a whole directory:
+
+```bash
+uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy
+uv run llm4pv-synth few-shot-examples/absprog/sll_reverse.auto.json ./output/gen/synth/sll_reverse
+uv run llm4pv-synth shape_invdataset/sll ./output/gen/synth/sll --jobs=2
+uv run llm4pv-synth --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=./output/gen/synth/sll_copy
+uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy \
+  --backend=command \
+  --command 'codex exec - --output-last-message {response_file}'
+```
+
+Useful options:
+
+- `--func-name` selects a target function in multi-function C files.
+- `--backend` chooses the generation backend: `gold-example`, `response-file`, or `command`.
+- `--few-shot` adds repeatable few-shot example JSON files to the prompt.
+- `--no-check` skips the Rocq syntax check step.
+- `--max-retries` retries repair after the initial generation attempt.
+- `--exclude` and `--jobs` control directory-mode batching.
+
+## Residual Abstract Programs
+
+Append residual abstract-program definitions for a callee call inside a generated Rocq library file:
+
+```bash
+uv run llm4pv-residual output/gen/libs/sll_multi_merge_rel_lib.v sll_merge_M sll_multi_merge_M
+uv run llm4pv-residual --FILE=output/gen/libs/sll_multi_merge_rel_lib.v --CALLEE=sll_merge_M --CALLER=sll_multi_merge_M
+```
+
+Use `--NO-POLISH` to append raw residual definitions without the post-processing cleanup step.
 
 ## Shell Scripts
 

@@ -13,6 +13,7 @@ All commands run from repo root:
 ```bash
 # Translate a single C file
 uv run llm4pv shape_invdataset/sll/sll_copy.c output/shape/rel/sll/sll_copy_rel.c
+uv run llm4pv --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=output/shape/rel/sll/sll_copy_rel.c
 
 # Translate an entire directory
 uv run llm4pv shape_invdataset/sll output/shape/rel/sll
@@ -20,7 +21,9 @@ uv run llm4pv shape_invdataset/sll output/shape/rel/sll
 # Generate _rel_lib.v skeleton (abstract program scaffolding for Coq)
 uv run llm4pv-rellib shape_invdataset/sll/sll_copy.c
 uv run llm4pv-rellib shape_invdataset/sll/            # whole directory
+uv run llm4pv-rellib shape_invdataset/sll/ /tmp/lib   # positional output dir
 uv run llm4pv-rellib shape_invdataset/sll/ -o /tmp/lib # custom output dir
+uv run llm4pv-rellib --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=/tmp/lib
 
 # Run all tests
 uv run --with pytest pytest

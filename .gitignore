@@ -17,6 +17,7 @@ CONFIGURE
 CLAUDE.md
 GEMINI.md
 .claude/
-
+.codex/
+.vscode/
 # dataset
 dataset/

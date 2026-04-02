@@ -7,13 +7,30 @@ import sys
 
 from GenMonads.absprog.context import collect_all_synthesis_contexts
 from GenMonads.absprog.synthesize import run_synthesis_pipeline
+from GenMonads.cli_common import (
+    add_input_path_arguments,
+    add_output_path_argument,
+    resolve_cli_value,
+)
 
 
 def _resolve_io(args, parser):
-    input_path = args.input or args.c_dir
-    output_dir = args.output_dir or args.output_path
-    if not input_path or not output_dir:
-        parser.error("Provide either positional input/output_dir or --C_DIR/--OUTPUT_PATH.")
+    input_path = resolve_cli_value(
+        args,
+        parser,
+        "input",
+        ("file_path", "c_dir"),
+        "Provide an input path via positional input, --FILE, or --C_DIR.",
+        is_path=True,
+    )
+    output_dir = resolve_cli_value(
+        args,
+        parser,
+        "output_dir",
+        ("output_path",),
+        "Provide an output directory via positional output_dir or --OUTPUT_PATH.",
+        is_path=True,
+    )
     return input_path, output_dir
 
 
@@ -110,18 +127,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run the abstract-program synthesis pipeline and emit artifacts"
     )
-    parser.add_argument("input", nargs="?", help="Input C file, context JSON, or directory")
-    parser.add_argument("output_dir", nargs="?", help="Directory for generated artifacts")
-    parser.add_argument(
-        "--C_DIR",
-        dest="c_dir",
-        help="Input C file or directory (alias-style convenience flag)",
-    )
-    parser.add_argument(
-        "--OUTPUT_PATH",
-        dest="output_path",
-        help="Output directory (alias-style convenience flag)",
-    )
+    add_input_path_arguments(parser, "Input C file, context JSON, or directory")
+    add_output_path_argument(parser, "output_dir", "Directory for generated artifacts")
     parser.add_argument(
         "--func-name",
         help="Function name for multi-function C files",
