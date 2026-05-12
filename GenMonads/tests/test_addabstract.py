@@ -6,7 +6,6 @@ Tests the safeExec predicate addition to translated assertions:
 - Function specifications (Require/Ensure with With clause)
 """
 
-import os
 import pytest
 
 from GenMonads.addabstract import (
@@ -19,8 +18,58 @@ from GenMonads.addabstract import (
 )
 from GenMonads.transshape.process_and_translate import process_and_translate_file
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-SLL_DIR = os.path.join(BASE_DIR, 'shape_invdataset', 'sll')
+
+_SLL_COPY_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list *sll_copy(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(x) * listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *p, *q, *t, *y;\n'
+    '    p = x; y = (struct list *) 0; t = (struct list *) 0;\n'
+    '    /*@ Inv lseg(x@pre, p) * listrep(p) * lseg(y, t) */\n'
+    '    while (p != 0) {\n'
+    '        q = (struct list *) 0;\n'
+    '        q->next = y; y = q; p = p->next;\n'
+    '    }\n'
+    '    return y;\n'
+    '}\n'
+)
+
+
+_SLL_APPEND_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list *sll_append(struct list *x, struct list *y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *t, *u;\n'
+    '    if (x == 0) { return y; }\n'
+    '    t = x; u = t->next;\n'
+    '    /*@ Inv lseg(x@pre, t) * listrep(u) * listrep(y) */\n'
+    '    while (u) { t = u; u = t->next; }\n'
+    '    t->next = y;\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+def _write_sll_copy(tmp_path):
+    p = tmp_path / "sll_copy.c"
+    p.write_text(_SLL_COPY_SRC, encoding="utf-8")
+    return str(p)
+
+
+def _write_sll_append(tmp_path):
+    p = tmp_path / "sll_append.c"
+    p.write_text(_SLL_APPEND_SRC, encoding="utf-8")
+    return str(p)
 
 
 # ============================================================================
@@ -119,6 +168,69 @@ class TestFuncSpecSafeExec:
         result = add_safeexec_to_ensure("sll(__return, ?l1)", ['?l1'])
         assert "exists l1, safeExec(ATrue, return(l1), X)" in result
 
+    def test_add_safeexec_to_ensure_no_vars_uses_return_tt(self):
+        # When there are no Ensure-only variables AND the return type is
+        # void (or implicitly unit), the abstract program return type is
+        # `unit`, so the call must be `return(tt)` (not bare `return`).
+        result = add_safeexec_to_ensure("emp", [], return_type="void")
+        assert result == "safeExec(ATrue, return(tt), X) && emp"
+
+    def test_add_safeexec_to_ensure_synthesizes_return_witness_for_non_void(self):
+        # Function has non-void return type but the original Ensure has no
+        # __return predicate.  We synthesize a witness `r` so the abstract
+        # program return value is observable.
+        result = add_safeexec_to_ensure(
+            "sll(x@pre, ?l2)", ['?l2'], return_type="long"
+        )
+        assert result == (
+            "exists l2 r, safeExec(ATrue, return(maketuple(l2, r)), X) "
+            "&& __return == r && sll(x@pre, l2)"
+        )
+
+    def test_add_safeexec_to_ensure_no_witness_when_return_already_used(self):
+        # Existing __return predicate ⇒ no synthetic witness needed.
+        result = add_safeexec_to_ensure(
+            "sll(__return, ?l2)", ['?l2'], return_type="struct list *"
+        )
+        assert result == (
+            "exists l2, safeExec(ATrue, return(l2), X) && sll(__return, l2)"
+        )
+
+    def test_add_safeexec_to_ensure_witness_with_no_other_vars(self):
+        # No predicate variables, non-void return type, no __return.
+        result = add_safeexec_to_ensure("emp", [], return_type="long")
+        assert result == (
+            "exists r, safeExec(ATrue, return(r), X) && __return == r && emp"
+        )
+
+    def test_add_safeexec_to_ensure_pointer_return_is_not_void(self):
+        # `void *` returns are not void — they still produce a value.
+        result = add_safeexec_to_ensure("emp", [], return_type="void *")
+        assert "return(r)" in result
+        assert "__return == r" in result
+
+    def test_add_safeexec_to_ensure_lifts_data_witness_from_ensure(self):
+        # The original Ensure has ``exists d, __return -> data == d``.  Since
+        # ``data`` is a configured data field and ``d`` is a pre-existing
+        # existential, ``d`` is a data witness: it must be lifted into the
+        # outer ``exists``, threaded into ``return(maketuple(...))``, and the
+        # inner ``exists d, ...`` stripped.
+        translated = (
+            "exists d, __return != 0 && __return -> next == 0 && "
+            "__return -> data == d && sllseg(x, __return, ?l2)"
+        )
+        result = add_safeexec_to_ensure(
+            translated,
+            ['?l2'],
+            return_type="struct list *",
+            data_witnesses=['d'],
+        )
+        assert result == (
+            "exists l2 d, safeExec(ATrue, return(maketuple(l2, d)), X) "
+            "&& __return != 0 && __return -> next == 0 && "
+            "__return -> data == d && sllseg(x, __return, l2)"
+        )
+
     def test_process_funcspec_complete(self):
         funcspec = {
             'with': None,
@@ -147,11 +259,8 @@ class TestFuncSpecSafeExec:
 # ============================================================================
 
 class TestRealFileIntegration:
-    def test_sll_copy(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
-        if not os.path.exists(file_path):
-            pytest.skip("sll_copy.c not found")
-
+    def test_sll_copy(self, tmp_path):
+        file_path = _write_sll_copy(tmp_path)
         result = process_and_translate_file(file_path, generate_guards=False)
         for assertion in result['inner_assertions']:
             if assertion['type'] == 'Inv':
@@ -162,11 +271,8 @@ class TestRealFileIntegration:
                 assert "safeExec" in with_safeexec
                 assert "bind" in with_safeexec
 
-    def test_sll_append(self):
-        file_path = os.path.join(SLL_DIR, 'sll_append.c')
-        if not os.path.exists(file_path):
-            pytest.skip("sll_append.c not found")
-
+    def test_sll_append(self, tmp_path):
+        file_path = _write_sll_append(tmp_path)
         result = process_and_translate_file(file_path, generate_guards=False)
         for assertion in result['inner_assertions']:
             if assertion['type'] == 'Inv':
@@ -176,15 +282,9 @@ class TestRealFileIntegration:
                 )
                 assert "safeExec" in with_safeexec
 
-    def test_all_sll_files(self):
-        if not os.path.exists(SLL_DIR):
-            pytest.skip("sll directory not found")
-
-        c_files = [f for f in os.listdir(SLL_DIR) if f.endswith('.c')]
-        assert len(c_files) > 0
-
-        for filename in sorted(c_files):
-            file_path = os.path.join(SLL_DIR, filename)
+    def test_multiple_synthetic_files(self, tmp_path):
+        for writer in (_write_sll_copy, _write_sll_append):
+            file_path = writer(tmp_path)
             result = process_and_translate_file(file_path, generate_guards=False)
             for assertion in result['inner_assertions']:
                 if assertion['type'] == 'Inv':
@@ -193,13 +293,10 @@ class TestRealFileIntegration:
                         f"{result['function']}_M_loop", f"{result['function']}_M_loop_end"
                     )
                     assert "safeExec" in with_safeexec and "bind" in with_safeexec, \
-                        f"Failed for {filename}"
+                        f"Failed for {file_path}"
 
-    def test_real_file_funcspec(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
-        if not os.path.exists(file_path):
-            pytest.skip("sll_copy.c not found")
-
+    def test_real_file_funcspec(self, tmp_path):
+        file_path = _write_sll_copy(tmp_path)
         result = process_and_translate_file(file_path, generate_guards=False)
         assert result.get('funcspec') is not None
 

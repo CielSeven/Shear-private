@@ -42,14 +42,16 @@ Primary role:
 - Batch-run symbolic execution over C sources.
 
 Inputs:
-- `C_DIR`, `LOGDIR`, `SYMEXEC`, `SYMEXEC_INCLUDE_DIRS`, `OUTPUT_PATH`, optional `SYMEXEC_STRATEGY_PATHS`, and optional `FILE`
+- `C_DIR`, `LOGDIR`, `SYMEXEC`, `SYMEXEC_INCLUDE_DIRS`, `OUTPUT_PATH`, optional `SYMEXEC_STRATEGY_PATHS`, optional `FILE`, and optional `FULL_AUTO` or `SYMEXEC_FULL_AUTO`
 
 Behavior:
 - Supports both single-file and directory-wide runs
 - Passes one `-I...` flag per entry in `SYMEXEC_INCLUDE_DIRS`
 - Passes one `-slp physical_path rocq_logic_path` triple per entry in `SYMEXEC_STRATEGY_PATHS`
+- Appends `--full-auto` when `FULL_AUTO` is enabled
 - `SYMEXEC_INCLUDE_DIRS` is a colon-separated list of include directories
 - `SYMEXEC_STRATEGY_PATHS` is a colon-separated list of `physical_path,rocq_logic_path` pairs
+- `FULL_AUTO` accepts common boolean values such as `true`, `false`, `1`, `0`, `yes`, and `no`
 - Produces `${base}_goal.v`, `${base}_auto.v`, `${base}_manual.v`, and matching logs
 - Uses the same argument shape as `loopinv_c.sh`, which keeps the workflows parallel
 
@@ -58,6 +60,7 @@ Example commands:
 ```bash
 scripts/symexec.sh
 scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c
+scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c --FULL_AUTO=true
 scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c --SYMEXEC_INCLUDE_DIRS=./shape_invdataset/sll:/Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/QCP_examples:/Users/cielseven/Projects/QCP/sac_c_parser/examples
 scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c --SYMEXEC_STRATEGY_PATHS=/Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/QCP_examples,SimpleC.EE
 scripts/symexec.sh --C_DIR=./output/gen/rel/sll --OUTPUT_PATH=./output/gen/vcs/ --LOGDIR=./output/gen/logs/
@@ -142,7 +145,9 @@ Primary role:
 Behavior:
 - Reuses the translation pipeline to infer loop-state arity and generated guards
 - Emits function-scoped guard names such as `sll_rotate_left_guardP` in multi-function files
+- Declares `Parameter MretTy : Type.` once for single-function libs, or `Parameter {func}_MretTy : Type.` per function for multi-function libs
 - Defines `maketuple` in the generated lib when a translated function returns multiple logical results
+- Reads the default output directory from `COQ_LIB_DIR` (env var or `CONFIGURE`) via `GenMonads.cli_common.read_configure_value` — there is no hardcoded default in the Python source
 
 Example commands:
 
@@ -154,6 +159,27 @@ uv run llm4pv-rellib shape_invdataset/dll --output-dir ./output/gen/libs
 
 Useful when:
 - Creating Rocq-side abstract program skeletons after C translation
+
+### 4b. Abstract-program synthesis via `GenMonads/absprog/synth_cli.py`
+
+Primary role:
+- Fill in the LLM-provided `Parameter` declarations in a `_rel_lib.v` skeleton.
+
+Behavior:
+- Single function (or explicit `--func-name`): assembles the lib in the output directory and promotes the accepted result to `COQ_LIB_DIR/{basename}_rel_lib.v`.
+- Multi-function .c file without `--func-name`: synthesizes every target into its own subdirectory `{output_dir}/{func}/`, defers promotion, then merges all accepted per-function libs into a single `COQ_LIB_DIR/{basename}_rel_lib.v`. Any stale `{func}_rel_lib.v` files from older runs are removed after a successful merge.
+- Directory mode: iterates over every `.c` file, synthesizing each function it finds.
+
+Example commands:
+
+```bash
+uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy
+uv run llm4pv-synth shape_invdataset/sll/sll_rotate.c ./output/gen/synth/sll_rotate   # auto per-function + merge
+uv run llm4pv-synth shape_invdataset/sll ./output/gen/synth/sll --jobs=2
+```
+
+Useful when:
+- Running the end-to-end LLM synthesis pipeline after generating rel.c and the rel_lib skeleton
 
 ### 5. `check_rocq.sh`
 

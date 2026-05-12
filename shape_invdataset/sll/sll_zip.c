@@ -24,6 +24,7 @@ struct list * sll_zip(struct list * x, struct list * y)
         p->next = q;
         q->next = np;
         if (np == (struct list *) 0) {
+            q->next = nq;
             break;
         }
         p = np;

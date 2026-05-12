@@ -9,9 +9,11 @@
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/auxlibs AUXLib
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/EncRelSeq EncRelSeq
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/Language LangLib
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/listlib ListLib
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/Examples Examples
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/fixedpoints FP
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/monadlib MonadLib
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/SeparationLogic SimpleC.SL
+-R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/Common SimpleC.Common
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/examples SimpleC.EE
 -R /Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/SeparationLogic/StrategyLib SimpleC.StrategyLib

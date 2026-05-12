@@ -10,7 +10,7 @@ This module processes C files to:
 import os
 import re
 import sys
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Set
 
 from GenMonads.early_return import detect_early_return_shape
 from GenMonads.cli_common import (
@@ -20,7 +20,10 @@ from GenMonads.cli_common import (
 )
 from GenMonads.transshape.process_and_translate import process_and_translate_file
 from GenMonads.addabstract import add_safeexec_predicate, process_funcspec_with_safeexec
-from GenMonads.addabstract.addexec import extract_variables_from_assertion
+from GenMonads.addabstract.addexec import (
+    _is_void_return_type,
+    extract_variables_from_assertion,
+)
 from GenMonads.header_mapping import translate_headers
 
 
@@ -61,6 +64,26 @@ def collect_func_extern_info(
             for name, var_type in zip(ensure_vars, raw_ensure_types)
             if name.lstrip('?') not in require_var_names
         ]
+
+        # Data witnesses bound by the original Ensure (e.g. ``exists d,
+        # __return -> data == d``) are lifted into the abstract loop state,
+        # so they widen the abstract program's return type as well.
+        ensure_data_witnesses = funcspec['ensure'].get('data_witnesses', []) or []
+        for witness in ensure_data_witnesses:
+            ensure_only.append((witness, 'Z'))
+
+        # If the C function has a non-void return type but the Ensure does
+        # not mention __return, ``add_safeexec_to_ensure`` synthesizes a
+        # witness ``r`` of type Z.  Mirror that here so the abstract program's
+        # return type matches the emitted ``return(...)`` arity.
+        ensure_body = funcspec['ensure'].get('translated', '')
+        return_type = func_data.get('return_type', '')
+        if (
+            not _is_void_return_type(return_type)
+            and '__return' not in ensure_body
+        ):
+            ensure_only.append(('r', 'Z'))
+
         ensure_var_count = len(ensure_only)
         ensure_var_types = [var_type for _, var_type in ensure_only]
 
@@ -175,10 +198,77 @@ def _build_return_call(clean_vars: List[str]) -> str:
     return "return"
 
 
-def insert_safeexec_include(content: str) -> str:
-    """Insert #include "safeexec_def.h" after the last #include line, if not already present."""
-    if 'safeexec_def.h' in content:
+_SAFEEXEC_HEADER_NAME = "safeexec_def.h"
+
+
+def _quoted_includes(content: str) -> List[str]:
+    """Return the list of ``#include "<name>"`` filenames in *content*."""
+    return re.findall(r'^\s*#include\s+"([^"]+)"', content, flags=re.MULTILINE)
+
+
+def _header_includes_safeexec(
+    header_name: str,
+    search_dirs: List[str],
+    visited: Optional[Set[str]] = None,
+) -> bool:
+    """Return True if *header_name* (or any header it #includes, recursively)
+    contains ``#include "safeexec_def.h"``.
+
+    *search_dirs* is the list of directories to look in.  Missing or
+    unreadable headers are silently skipped — we conservatively report False
+    in that case.
+    """
+    if visited is None:
+        visited = set()
+
+    for directory in search_dirs:
+        candidate = os.path.join(directory, header_name)
+        try:
+            real = os.path.realpath(candidate)
+        except OSError:
+            continue
+        if real in visited:
+            return False
+        if not os.path.isfile(real):
+            continue
+        visited.add(real)
+        try:
+            with open(real, "r", encoding="utf-8") as f:
+                header_text = f.read()
+        except OSError:
+            return False
+        if _SAFEEXEC_HEADER_NAME in header_text:
+            return True
+        # Recurse into nested ``#include "..."`` directives.
+        for nested in _quoted_includes(header_text):
+            if nested == header_name:
+                continue
+            nested_dirs = [os.path.dirname(real)] + search_dirs
+            if _header_includes_safeexec(nested, nested_dirs, visited):
+                return True
+        return False
+    return False
+
+
+def insert_safeexec_include(
+    content: str,
+    header_search_dirs: Optional[List[str]] = None,
+) -> str:
+    """Insert ``#include "safeexec_def.h"`` after the last ``#include`` line,
+    unless it is already present in *content* or transitively reachable via
+    one of the headers ``#include``d from *content*.
+
+    *header_search_dirs* is the list of directories to look in when chasing
+    quoted-form includes (usually the input C file's directory).  When
+    omitted, only the literal text of *content* is checked.
+    """
+    if _SAFEEXEC_HEADER_NAME in content:
         return content
+
+    if header_search_dirs:
+        for header in _quoted_includes(content):
+            if _header_includes_safeexec(header, header_search_dirs):
+                return content
 
     lines = content.split('\n')
     last_include_idx = -1
@@ -187,7 +277,7 @@ def insert_safeexec_include(content: str) -> str:
             last_include_idx = i
 
     if last_include_idx >= 0:
-        lines.insert(last_include_idx + 1, '#include "safeexec_def.h"')
+        lines.insert(last_include_idx + 1, f'#include "{_SAFEEXEC_HEADER_NAME}"')
     return '\n'.join(lines)
 
 
@@ -528,6 +618,7 @@ def translate_c_file(input_path: str, output_path: str) -> bool:
                 func_data.get('funcspec'),
                 program,
                 is_callee_funcspec=func_name in callee_functions,
+                return_type=func_data.get('return_type', ''),
             )
 
             # 2. Replace Inners
@@ -571,6 +662,7 @@ def translate_c_file(input_path: str, output_path: str) -> bool:
             result.get('funcspec'),
             program,
             is_callee_funcspec=func_name in callee_functions,
+            return_type=result.get('return_type', ''),
         )
         content = replace_inner_assertions_original(
             content,
@@ -592,8 +684,10 @@ def translate_c_file(input_path: str, output_path: str) -> bool:
     # Translate header file includes
     content = translate_headers(content)
 
-    # Insert safeexec_def.h include
-    content = insert_safeexec_include(content)
+    # Insert safeexec_def.h include, unless a header in the input directory
+    # already includes it (directly or transitively).
+    header_search_dirs = [os.path.dirname(os.path.abspath(input_path))]
+    content = insert_safeexec_include(content, header_search_dirs=header_search_dirs)
 
     # Generate and insert Coq blocks
     basename = os.path.splitext(os.path.basename(output_path))[0]
@@ -622,11 +716,14 @@ def replace_funcspec(
     funcspec: Optional[Dict],
     program: str,
     is_callee_funcspec: bool = False,
+    return_type: str = "",
 ) -> str:
     if not funcspec:
         return content
 
-    processed = process_funcspec_with_safeexec(funcspec, program)
+    processed = process_funcspec_with_safeexec(
+        funcspec, program, return_type=return_type
+    )
 
     spec_comments = [_format_funcspec_comment(_build_funcspec_parts(processed))]
     if is_callee_funcspec:

@@ -259,70 +259,136 @@ def add_safeexec_to_require(
     return result
 
 
+def _is_void_return_type(return_type: str) -> bool:
+    """Heuristic: treat empty / 'void' (possibly with pointer stars) as void.
+
+    A pointer-to-void (``void *``) is *not* a void return type — the function
+    still produces a value the abstract program must witness.
+    """
+    rt = (return_type or "").strip()
+    if not rt:
+        return True
+    if "*" in rt:
+        return False
+    return rt == "void"
+
+
 def add_safeexec_to_ensure(
     translated_ensure: str,
     generated_vars: List[str],
     precondition: str = "ATrue",
-    postcondition: str = "X"
+    postcondition: str = "X",
+    return_type: str = "",
+    data_witnesses: Optional[List[str]] = None,
 ) -> str:
     """
     Add safeExec predicate to a translated Ensure assertion.
 
-    Strips ? prefix from variables, wraps with exists quantifier.
+    Strips ? prefix from variables, wraps with exists quantifier.  If the
+    function has a non-void *return_type* and the Ensure body does not
+    mention ``__return``, a fresh witness variable ``r`` is synthesized so the
+    abstract program return value is observable: it is appended to the
+    existentials, threaded into the ``return(...)`` call, and bound by
+    ``__return == r`` in the body.
+
+    Pre-existing existentials that name data-field witnesses (e.g.
+    ``exists d, __return -> data == d``) are *lifted out* of the body into
+    the outer ``exists`` list and threaded into ``return(maketuple(…))``;
+    the now-redundant inner ``exists`` clause is stripped from the body.
 
     Args:
         translated_ensure: Translated ensure assertion, e.g., "sll(__return, ?l2) * sll(x, ?l3)"
         generated_vars: List of generated variables, e.g., ['?l2', '?l3']
         precondition: Precondition for safeExec (default: "ATrue")
         postcondition: Postcondition for safeExec (default: "X")
+        return_type: C function return type (e.g. ``"long"``, ``"void"``,
+            ``"struct list *"``).  Empty string or ``"void"`` is treated as
+            void.
+        data_witnesses: Names of pre-existing existentials that bind data-field
+            witnesses (e.g. ``['d']`` for ``exists d, ... __return -> data == d``).
+            These get lifted into the outer ``exists`` and the abstract return.
 
     Returns:
         Ensure assertion with exists and safeExec added, e.g.,
-        "exists l2 l3, safeExec(ATrue, return(l2, l3), X) && sll(__return, l2) * sll(x, l3)"
+        "exists l2 l3, safeExec(ATrue, return(maketuple(l2, l3)), X) && sll(__return, l2) * sll(x, l3)"
 
-    Example:
-        Input:  "sll(__return, ?l2) * sll(x, ?l3)", ['?l2', '?l3']
-        Output: "exists l2 l3, safeExec(ATrue, return(l2, l3), X) && sll(__return, l2) * sll(x, l3)"
+    Example (no __return predicate, non-void return type):
+        Input:  "sll(x@pre, ?l2)", ['?l2'], return_type="long"
+        Output: "exists l2 r, safeExec(ATrue, return(maketuple(l2, r)), X) && __return == r && sll(x@pre, l2)"
     """
-    # Strip ? prefix from variables
+    data_witnesses = list(data_witnesses or [])
+
+    # Strip ? prefix from variables.
     clean_vars = [v.lstrip('?') for v in generated_vars]
 
-    # Build the return call with clean variables
-    if len(clean_vars) > 1:
-        var_args = ', '.join(clean_vars)
-        return_call = f"return(maketuple({var_args}))"
-    elif len(clean_vars) == 1:
-        return_call = f"return({clean_vars[0]})"
-    else:
-        return_call = "return"
-
-    # Build the safeExec predicate
-    safeexec_pred = f"safeExec({precondition}, {return_call}, {postcondition})"
-
-    # Replace ?-prefixed vars in the assertion body
+    # Replace ?-prefixed vars in the assertion body first so we can scan it
+    # for the presence of __return cleanly.
     body = translated_ensure
     for var in generated_vars:
         if var.startswith('?'):
             body = body.replace(var, var[1:])
 
-    # Combine with the original assertion
+    # Strip any leading ``exists <vars>,`` clause from the body so the data
+    # witnesses can be re-bound by the outer wrapper.  Names not promoted to
+    # the outer exists (e.g. pointer existentials we don't track) are
+    # preserved in a residual ``exists`` clause kept inside the body.
+    body, leftover_exists = _strip_leading_exists(body, data_witnesses)
+    if leftover_exists:
+        body = f"exists {' '.join(leftover_exists)}, {body}"
+
+    # Decide whether we need a synthetic return witness for __return.
+    need_witness = (
+        not _is_void_return_type(return_type)
+        and "__return" not in body
+    )
+    witness = "r" if need_witness else None
+    return_vars = clean_vars + data_witnesses + ([witness] if witness else [])
+
+    # Build the return call.
+    if len(return_vars) > 1:
+        var_args = ', '.join(return_vars)
+        return_call = f"return(maketuple({var_args}))"
+    elif len(return_vars) == 1:
+        return_call = f"return({return_vars[0]})"
+    else:
+        # No Ensure-only variables AND no return witness ⇒ unit return type.
+        return_call = "return(tt)"
+
+    safeexec_pred = f"safeExec({precondition}, {return_call}, {postcondition})"
+
+    if witness:
+        body = f"__return == {witness} && {body}"
+
     combined = f"{safeexec_pred} && {body}"
 
-    # Wrap with exists if there are variables
-    if clean_vars:
-        exists_vars = ' '.join(clean_vars)
-        result = f"exists {exists_vars}, {combined}"
-    else:
-        result = combined
+    if return_vars:
+        exists_vars = ' '.join(return_vars)
+        return f"exists {exists_vars}, {combined}"
+    return combined
 
-    return result
+
+def _strip_leading_exists(body: str, promote_vars: List[str]) -> tuple:
+    """Strip a leading ``exists v1 v2 ..., `` clause from *body*.
+
+    The variables in *promote_vars* are removed from the binder list (they
+    are being lifted to an outer scope).  Any remaining binders are returned
+    in *leftover_exists* so the caller can re-wrap them around the body.
+    """
+    m = re.match(r"\s*exists\s+([^,]+?)\s*,\s*", body, re.DOTALL)
+    if not m:
+        return body, []
+    binders = m.group(1).split()
+    leftover = [b for b in binders if b not in promote_vars]
+    rest = body[m.end():]
+    return rest, leftover
 
 
 def process_funcspec_with_safeexec(
     funcspec: dict,
     program: str,
     parameter: str = "X",
-    precondition: str = "ATrue"
+    precondition: str = "ATrue",
+    return_type: str = "",
 ) -> dict:
     """
     Process a complete function specification: add With parameter and safeExec to Require/Ensure.
@@ -390,12 +456,15 @@ def process_funcspec_with_safeexec(
 
         # Extract variables from the translated assertion
         ensure_vars = extract_variables_from_assertion(translated)
+        ensure_data_witnesses = ensure.get('data_witnesses', [])
 
         ensure['with_safeexec'] = add_safeexec_to_ensure(
             translated,
             ensure_vars,
             precondition,
-            parameter  # postcondition is the parameter (X)
+            parameter,  # postcondition is the parameter (X)
+            return_type=return_type,
+            data_witnesses=ensure_data_witnesses,
         )
         result['ensure'] = ensure
 

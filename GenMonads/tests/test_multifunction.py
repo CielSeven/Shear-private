@@ -25,56 +25,105 @@ from GenMonads.translate_c_file import (
     replace_inner_assertions_for_func,
 )
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), 'fixtures')
-SLL_DIR = os.path.join(BASE_DIR, 'shape_invdataset', 'sll')
-DLL_DIR = os.path.join(BASE_DIR, 'shape_invdataset', 'dll')
 MULTI_FUNC_INPUT = os.path.join(FIXTURES_DIR, 'test_complex_structure.c')
 MULTI_FUNC_EXPECTED = os.path.join(FIXTURES_DIR, 'test_complex_structure_rel.c')
-SLL_ROTATE_INPUT = os.path.join(SLL_DIR, 'sll_rotate.c')
 
 
-
-def _discover_c_files(*dirs):
-    """Find all .c files in the given directories."""
-    paths = []
-    for d in dirs:
-        if not os.path.exists(d):
-            continue
-        for f in sorted(os.listdir(d)):
-            if f.endswith('.c'):
-                paths.append((os.path.join(d, f), f))
-    return paths
-
-
-def _classify_files():
-    """Auto-discover and classify C files into single-function and multi-function.
-
-    Single-function: backward-compatible funcspec found (spec after function header).
-    Multi-function: multiple annotated functions in the functions list.
-    Files with no annotations are skipped.
-    """
-    all_files = _discover_c_files(SLL_DIR, DLL_DIR)
-    single, multi = [], []
-    for file_path, filename in all_files:
-        extractor = AnnotationExtractor()
-        result = extractor.process_file(file_path)
-        if 'error' in result:
-            continue
-        real_funcs = [f for f in result.get('functions', [])
-                      if f['funcspec'] is not None
-                      and f['function'] not in ('while', 'if', 'for', 'switch', 'return')]
-        if len(real_funcs) >= 2:
-            multi.append((file_path, filename))
-        elif result.get('funcspec') is not None:
-            single.append((file_path, filename))
-        elif len(real_funcs) == 1:
-            # Single function but spec-before-header (not backward-compatible)
-            multi.append((file_path, filename))
-    return single, multi
+# Synthetic single-function sources (one Require/Ensure spec + at least one Inv).
+_SINGLE_FUNC_SOURCES = {
+    "sll_reverse.c": (
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list *sll_reverse(struct list *head)\n'
+        '/*@ Require listrep(head)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    struct list *prev = (void *) 0;\n'
+        '    struct list *curr = head;\n'
+        '    /*@ Inv listrep(prev) * listrep(curr) */\n'
+        '    while (curr != (void *) 0) { curr = curr->next; prev = curr; }\n'
+        '    return prev;\n'
+        '}\n'
+    ),
+    "sll_free_all.c": (
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'void sll_free_all(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  emp\n'
+        ' */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x != (void *) 0) { x = x->next; }\n'
+        '}\n'
+    ),
+}
 
 
-_SINGLE_FUNC_PATHS, _MULTI_FUNC_PATHS = _classify_files()
+# Synthetic multi-function sources (two or more annotated functions).
+_MULTI_FUNC_SOURCES = {
+    "two_simple_loops.c": (
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list *f1(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x != 0) { x = x->next; }\n'
+        '    return x;\n'
+        '}\n'
+        '\n'
+        'struct list *f2(struct list *y)\n'
+        '/*@ Require listrep(y)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    /*@ Inv listrep(y) */\n'
+        '    while (y != 0) { y = y->next; }\n'
+        '    return y;\n'
+        '}\n'
+    ),
+    "sll_rotate.c": (
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list *sll_rotate_left(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x != 0) { x = x->next; }\n'
+        '    return x;\n'
+        '}\n'
+        '\n'
+        'struct list *sll_rotate_right(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x != 0) { x = x->next; }\n'
+        '    return x;\n'
+        '}\n'
+    ),
+}
+
+_SINGLE_FUNC_FILENAMES = sorted(_SINGLE_FUNC_SOURCES)
+_MULTI_FUNC_FILENAMES = sorted(_MULTI_FUNC_SOURCES)
+
+
+def _write_synthetic(tmp_path, filename, sources):
+    p = tmp_path / filename
+    p.write_text(sources[filename], encoding="utf-8")
+    return str(p)
 
 
 # ============================================================================
@@ -201,11 +250,10 @@ void myfunc(int x) {
         assert funcs['func1']['funcspec'] is not None
         assert funcs['func2']['funcspec'] is not None
 
-    def test_spec_after_header_before_brace(self):
+    def test_spec_after_header_before_brace(self, tmp_path):
         """A function header followed by /*@ ... */ then { should still be detected."""
-        if not os.path.exists(SLL_ROTATE_INPUT):
-            pytest.skip("sll_rotate.c not found")
-        result = self.extractor.process_file(SLL_ROTATE_INPUT)
+        file_path = _write_synthetic(tmp_path, "sll_rotate.c", _MULTI_FUNC_SOURCES)
+        result = self.extractor.process_file(file_path)
         funcs = {f['function']: f for f in result['functions']
                  if f['function'] in ('sll_rotate_left', 'sll_rotate_right')}
 
@@ -468,28 +516,47 @@ void func_b(int y) {
         # func_b's Inv should be untouched
         assert '/*@ Inv listrep(y) */' in result
 
-    def test_header_then_spec_translation(self):
-        """Multi-function files with spec after the header should translate both functions."""
-        if not os.path.exists(SLL_ROTATE_INPUT):
-            pytest.skip("sll_rotate.c not found")
+    def test_header_then_spec_translation(self, tmp_path):
+        """Multi-function files with spec after the header should translate
+        both functions.  Uses a synthetic two-function source so the test
+        doesn't depend on any file in ``shape_invdataset/``.
+        """
+        c_src = tmp_path / "two_funcs.c"
+        c_src.write_text(
+            '#include "verification_list.h"\n'
+            '#include "sll_shape_def.h"\n'
+            '\n'
+            'struct list *func_a(struct list *x)\n'
+            '/*@ Require listrep(x)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    /*@ Inv listrep(x) */\n'
+            '    while (x != 0) { x = x->next; }\n'
+            '    return x;\n'
+            '}\n'
+            '\n'
+            'struct list *func_b(struct list *y)\n'
+            '/*@ Require listrep(y)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    /*@ Inv listrep(y) */\n'
+            '    while (y != 0) { y = y->next; }\n'
+            '    return y;\n'
+            '}\n'
+        )
+        output_path = tmp_path / "two_funcs_rel.c"
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_rel.c', delete=False) as f:
-            output_path = f.name
+        assert translate_c_file(str(c_src), str(output_path))
+        output = output_path.read_text()
 
-        try:
-            assert translate_c_file(SLL_ROTATE_INPUT, output_path)
-
-            with open(output_path, 'r') as f:
-                output = f.read()
-
-            assert 'sll_rotate_left_M' in output
-            assert 'sll_rotate_right_M' in output
-            assert 'safeExec(ATrue, sll_rotate_left_M(' in output
-            assert 'safeExec(ATrue, sll_rotate_right_M(' in output
-            assert 'bind(sll_rotate_left_M_loop' in output
-            assert 'bind(sll_rotate_right_M_loop' in output
-        finally:
-            os.unlink(output_path)
+        assert 'func_a_M' in output
+        assert 'func_b_M' in output
+        assert 'safeExec(ATrue, func_a_M(' in output
+        assert 'safeExec(ATrue, func_b_M(' in output
+        assert 'bind(func_a_M_loop' in output
+        assert 'bind(func_b_M_loop' in output
 
 
 # ============================================================================
@@ -499,12 +566,10 @@ void func_b(int y) {
 class TestSingleFuncFixtures:
     """Test the pipeline against generated single-function C files."""
 
-    @pytest.mark.parametrize("file_path,filename", _SINGLE_FUNC_PATHS,
-                             ids=[p[1] for p in _SINGLE_FUNC_PATHS])
-    def test_extraction(self, file_path, filename):
+    @pytest.mark.parametrize("filename", _SINGLE_FUNC_FILENAMES, ids=_SINGLE_FUNC_FILENAMES)
+    def test_extraction(self, tmp_path, filename):
         """Each single-function file should extract a funcspec and inner assertions."""
-        if not os.path.exists(file_path):
-            pytest.skip(f"{filename} not found")
+        file_path = _write_synthetic(tmp_path, filename, _SINGLE_FUNC_SOURCES)
         extractor = AnnotationExtractor()
         result = extractor.process_file(file_path)
 
@@ -514,12 +579,10 @@ class TestSingleFuncFixtures:
         assert result['funcspec']['ensure'] is not None, f"{filename}: no Ensure"
         assert len(result['inner_assertions']) > 0, f"{filename}: no inner assertions"
 
-    @pytest.mark.parametrize("file_path,filename", _SINGLE_FUNC_PATHS,
-                             ids=[p[1] for p in _SINGLE_FUNC_PATHS])
-    def test_translation(self, file_path, filename):
+    @pytest.mark.parametrize("filename", _SINGLE_FUNC_FILENAMES, ids=_SINGLE_FUNC_FILENAMES)
+    def test_translation(self, tmp_path, filename):
         """Each single-function file should translate without errors."""
-        if not os.path.exists(file_path):
-            pytest.skip(f"{filename} not found")
+        file_path = _write_synthetic(tmp_path, filename, _SINGLE_FUNC_SOURCES)
         result = process_and_translate_file(file_path, generate_guards=False)
 
         assert 'error' not in result, f"{filename}: {result.get('error')}"
@@ -542,25 +605,19 @@ class TestSingleFuncFixtures:
                 assert 'translated' in a, f"{filename}: Inv {i} not translated"
                 assert 'error' not in a, f"{filename}: Inv {i} error: {a.get('error')}"
 
-    @pytest.mark.parametrize("file_path,filename", _SINGLE_FUNC_PATHS,
-                             ids=[p[1] for p in _SINGLE_FUNC_PATHS])
-    def test_end_to_end(self, file_path, filename):
+    @pytest.mark.parametrize("filename", _SINGLE_FUNC_FILENAMES, ids=_SINGLE_FUNC_FILENAMES)
+    def test_end_to_end(self, tmp_path, filename):
         """Each single-function file should translate end-to-end."""
-        if not os.path.exists(file_path):
-            pytest.skip(f"{filename} not found")
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_rel.c', delete=False) as f:
-            output_path = f.name
-        try:
-            success = translate_c_file(file_path, output_path)
-            assert success, f"{filename}: translate_c_file returned False"
+        file_path = _write_synthetic(tmp_path, filename, _SINGLE_FUNC_SOURCES)
+        output_path = str(tmp_path / f"{filename}_rel.c")
+        success = translate_c_file(file_path, output_path)
+        assert success, f"{filename}: translate_c_file returned False"
 
-            with open(output_path, 'r') as f:
-                output = f.read()
+        with open(output_path, 'r') as f:
+            output = f.read()
 
-            assert 'safeExec' in output, f"{filename}: no safeExec in output"
-            assert 'bind(' in output, f"{filename}: no bind() in output"
-        finally:
-            os.unlink(output_path)
+        assert 'safeExec' in output, f"{filename}: no safeExec in output"
+        assert 'bind(' in output, f"{filename}: no bind() in output"
 
 
 # ============================================================================
@@ -570,12 +627,10 @@ class TestSingleFuncFixtures:
 class TestMultiFuncFixtures:
     """Test the pipeline against generated multi-function C files."""
 
-    @pytest.mark.parametrize("file_path,filename", _MULTI_FUNC_PATHS,
-                             ids=[p[1] for p in _MULTI_FUNC_PATHS])
-    def test_extraction_multiple_functions(self, file_path, filename):
+    @pytest.mark.parametrize("filename", _MULTI_FUNC_FILENAMES, ids=_MULTI_FUNC_FILENAMES)
+    def test_extraction_multiple_functions(self, tmp_path, filename):
         """Each multi-function file should extract functions."""
-        if not os.path.exists(file_path):
-            pytest.skip(f"{filename} not found")
+        file_path = _write_synthetic(tmp_path, filename, _MULTI_FUNC_SOURCES)
         extractor = AnnotationExtractor()
         result = extractor.process_file(file_path)
 
@@ -592,45 +647,105 @@ class TestMultiFuncFixtures:
             f"{filename}: expected >=1 functions with specs, got {len(funcs_with_specs)}: " \
             f"{[f['function'] for f in funcs_with_specs]}"
 
-    @pytest.mark.parametrize("file_path,filename", _MULTI_FUNC_PATHS,
-                             ids=[p[1] for p in _MULTI_FUNC_PATHS])
-    def test_translation_multiple_functions(self, file_path, filename):
-        """Each multi-function file should translate all functions."""
-        if not os.path.exists(file_path):
-            pytest.skip(f"{filename} not found")
-        result = process_and_translate_file(file_path, generate_guards=False)
+    # Synthetic multi-function fixtures, parameterized so we get one test
+    # per shape variation.  Each entry is (id, c_source); the test writes the
+    # source to a temp file and runs the pipeline.  Avoids depending on any
+    # checked-in dataset file that might be edited outside the test scope.
+    _MULTI_FUNC_SYNTHETIC_FIXTURES = [
+        (
+            "two_simple_loops",
+            '#include "verification_list.h"\n'
+            '#include "sll_shape_def.h"\n'
+            '\n'
+            'struct list *f1(struct list *x)\n'
+            '/*@ Require listrep(x)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    /*@ Inv listrep(x) */\n'
+            '    while (x != 0) { x = x->next; }\n'
+            '    return x;\n'
+            '}\n'
+            '\n'
+            'struct list *f2(struct list *y)\n'
+            '/*@ Require listrep(y)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    /*@ Inv listrep(y) */\n'
+            '    while (y != 0) { y = y->next; }\n'
+            '    return y;\n'
+            '}\n',
+        ),
+        (
+            "loops_with_data_witness",
+            '#include "verification_list.h"\n'
+            '#include "sll_shape_def.h"\n'
+            '\n'
+            'struct list *g1(struct list *t)\n'
+            '/*@ Require listrep(t)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    /*@ Inv exists w, t != 0 && t -> data == w && listrep(t) */\n'
+            '    while (t != 0) { t = t->next; }\n'
+            '    return t;\n'
+            '}\n'
+            '\n'
+            'struct list *g2(struct list *u)\n'
+            '/*@ Require listrep(u)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    /*@ Inv listrep(u) */\n'
+            '    while (u != 0) { u = u->next; }\n'
+            '    return u;\n'
+            '}\n',
+        ),
+    ]
 
-        assert 'error' not in result, f"{filename}: {result.get('error')}"
+    @pytest.mark.parametrize(
+        "fixture_id,c_source",
+        _MULTI_FUNC_SYNTHETIC_FIXTURES,
+        ids=[fid for fid, _ in _MULTI_FUNC_SYNTHETIC_FIXTURES],
+    )
+    def test_translation_multiple_functions(self, tmp_path, fixture_id, c_source):
+        """Multi-function pipeline translates every annotated function in a
+        file.  Uses synthetic in-test C sources so the test does not depend
+        on any file in ``shape_invdataset/``.
+        """
+        c_file = tmp_path / f"{fixture_id}.c"
+        c_file.write_text(c_source)
+        result = process_and_translate_file(str(c_file), generate_guards=False)
+
+        assert 'error' not in result, f"{fixture_id}: {result.get('error')}"
         assert 'functions' in result
 
+        translated_any = False
         for func in result['functions']:
             if func['funcspec'] is None:
                 continue
+            translated_any = True
             spec = func['funcspec']
             if 'require' in spec:
                 assert 'translated' in spec['require'], \
-                    f"{filename}/{func['function']}: Require not translated"
+                    f"{fixture_id}/{func['function']}: Require not translated"
             for i, a in enumerate(func['inner_assertions']):
                 if a['type'] == 'Inv':
                     assert 'translated' in a, \
-                        f"{filename}/{func['function']}: Inv {i} not translated"
+                        f"{fixture_id}/{func['function']}: Inv {i} not translated"
+        assert translated_any, f"{fixture_id}: no function spec was translated"
 
-    @pytest.mark.parametrize("file_path,filename", _MULTI_FUNC_PATHS,
-                             ids=[p[1] for p in _MULTI_FUNC_PATHS])
-    def test_end_to_end_multiple_functions(self, file_path, filename):
+    @pytest.mark.parametrize("filename", _MULTI_FUNC_FILENAMES, ids=_MULTI_FUNC_FILENAMES)
+    def test_end_to_end_multiple_functions(self, tmp_path, filename):
         """Each multi-function file should translate end-to-end."""
-        if not os.path.exists(file_path):
-            pytest.skip(f"{filename} not found")
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_rel.c', delete=False) as f:
-            output_path = f.name
-        try:
-            success = translate_c_file(file_path, output_path)
-            assert success, f"{filename}: translate_c_file returned False"
+        file_path = _write_synthetic(tmp_path, filename, _MULTI_FUNC_SOURCES)
+        output_path = str(tmp_path / f"{filename}_rel.c")
+        success = translate_c_file(file_path, output_path)
+        assert success, f"{filename}: translate_c_file returned False"
 
-            with open(output_path, 'r') as f:
-                output = f.read()
+        with open(output_path, 'r') as f:
+            output = f.read()
 
-            assert 'safeExec' in output, f"{filename}: no safeExec in output"
-        finally:
-            os.unlink(output_path)
+        assert 'safeExec' in output, f"{filename}: no safeExec in output"
 

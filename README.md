@@ -57,23 +57,26 @@ struct list * sll_copy(struct list * x)
 /*@ Import Coq Require Import sll_copy_rel_lib */
 /*@ Extern Coq (MretTy :: *) */
 /*@ Extern Coq
-               (sll_copy_M: list Z -> program unit (list Z))
-               (sll_copy_M_loop: list Z -> list Z -> list Z -> program unit MretTy)
-               (sll_copy_M_loop_end: MretTy -> program unit (list Z))
+               (maketuple: {A} {B} -> A -> B -> (A * B))
+               (sll_copy_M: list Z -> program unit (list Z * list Z))
+               (sll_copy_M_loop: list Z -> list Z -> list Z -> Z -> program unit MretTy)
+               (sll_copy_M_loop_end: MretTy -> program unit (list Z * list Z))
                 */
 
 struct list * sll_copy(struct list * x)
 /*@
     With X l1
     Require safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)
-    Ensure exists l2 l3, safeExec(ATrue, return(l2, l3), X) && sll(__return, l2) * sll(x, l3)
+    Ensure exists l2 l3, safeExec(ATrue, return(maketuple(l2, l3)), X) && sll(__return, l2) * sll(x, l3)
  */
 {
     ...
-    /*@ Inv exists l1 l2 l3, safeExec(ATrue, bind(sll_copy_M_loop(l1,l2,l3), sll_copy_M_loop_end), X) && t != 0 && t -> next == 0 && sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3) */
+    /*@ Inv exists v l1 l2 l3, safeExec(ATrue, bind(sll_copy_M_loop(l1,l2,l3,v), sll_copy_M_loop_end), X) && t != 0 && t -> next == 0 && t -> data == v && sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3) */
     while (p) { ... }
 }
 ```
+
+Note: the data witness `v` (bound by `t -> data == v` in the original invariant) is automatically lifted into the abstract loop state.  When the original Ensure has no `__return` predicate on a non-void function (e.g. a scalar return), a synthetic witness `r` is added and threaded through `return(...)` so the abstract program's return type matches its body.
 
 ## Use From Other Projects
 
@@ -103,9 +106,9 @@ guard = gen_coq_guard("sll(p, l1) * sll(y, l2)", "p != null")
 
 ## Pipeline Stages
 
-1. **TransShape** (`GenMonads/transshape/`) — Extract `/*@ ... */` annotations and translate shape predicates to data predicates (`listrep` -> `sll`, `lseg` -> `sllseg`), adding list variables (`?l1`, `?l2`, ...). Supports multiple functions per file and variable prefixing for multi-loop disambiguation.
-2. **GuardGen** (`GenMonads/guardgen/`) — Generate Rocq guard functions from loop conditions (null checks, pointer equality, `p->field` dereferences). Resolves pointer aliases from pure equalities in invariants (e.g., `u->next == w`).
-3. **AddAbstract** (`GenMonads/addabstract/`) — Wrap loop invariants with `safeExec(ATrue, bind(...), X)` predicates and `exists` quantifiers. Require vars are lifted into the `With` clause; Ensure vars are wrapped with `exists`.
+1. **TransShape** (`GenMonads/transshape/`) — Extract `/*@ ... */` annotations and translate shape predicates to data predicates (`listrep` -> `sll`, `lseg` -> `sllseg`), adding list variables (`?l1`, `?l2`, ...). Supports multiple functions per file and variable prefixing for multi-loop disambiguation. Pure data-field clauses like `t -> data == w` promote `w` (type `Z`) into the abstract loop state via the configurable `GenMonads/data/data_fields.json` (`data`, `key`, `val` by default).
+2. **GuardGen** (`GenMonads/guardgen/`) — Generate Rocq guard functions from loop conditions: null checks, pointer equality, bare `p`/`!p` sugar, and field dereferences. `<root>-><field>` comparisons resolve through a per-predicate field-deref handler (e.g. `x->next != 0` with `sll(x, l)` ⇒ `tl l <> []`). Also resolves pointer aliases from pure equalities in invariants (e.g., `u->next == w`).
+3. **AddAbstract** (`GenMonads/addabstract/`) — Wrap loop invariants with `safeExec(ATrue, bind(...), X)` and `exists`. Require existentials are lifted into the `With` clause; Ensure keeps the `exists` quantifier. When the function has a non-void return type and the Ensure has no `__return` predicate, a witness `r` is synthesized and the abstract program's return type widens accordingly. Functions whose abstract return type is `unit` emit `return(tt)` rather than a bare `return`.
 4. **C File Translation** (`GenMonads/translate_c_file.py`) — Orchestrate stages 1-3, replace annotations in the original C file, translate header includes. Handles multi-function files and annotations placed before or after function headers. Auto-inserts `#include "safeexec_def.h"` and generates `Import Coq` / `Extern Coq` declaration blocks.
 
 ## Predicate Mappings
@@ -117,7 +120,7 @@ guard = gen_coq_guard("sll(p, l1) * sll(y, l2)", "p != null")
 | `dlistrep(x)` | `dll(x, ?l1)` |
 | `dlseg(x, p, n, y)` | `dllseg(x, p, n, y, ?l1)` |
 
-Mappings are configured in `GenMonads/data/predicate_mappings.json`.
+Mappings are configured in `GenMonads/data/predicate_mappings.json`.  Guard-side translations (root-null, segment-eq, field-deref) for the same predicates live in `GenMonads/data/guard_predicates.json`, and the list of struct fields treated as "data" (for invariant data-witness extraction) is in `GenMonads/data/data_fields.json`.
 
 ## Abstract Program Lib Generation
 
@@ -131,9 +134,17 @@ uv run llm4pv-rellib shape_invdataset/sll --output-dir ./output/gen/libs
 uv run llm4pv-rellib --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=./output/gen/libs
 ```
 
-By default, the output directory comes from `COQ_LIB_DIR` in `CONFIGURE`.
+The output directory is read from the `COQ_LIB_DIR` environment variable or `CONFIGURE` at repo root — there is no hardcoded fallback in the Python source.
 These CLIs also accept alias-style path flags such as `--FILE`, `--C_DIR`, and `--OUTPUT_PATH` in addition to positional arguments.
-Generated libs use function-scoped guard names in multi-function files and define `maketuple` when a function returns multiple logical results.
+
+Skeleton conventions:
+
+- Loop-bearing functions get the full scaffold (`M_loop_before`, `M_loop_M1`, `M_loop_M2`, `M_loop_end`, plus concrete `M_loop_body` / `M_loop_aux` / `M_loop` / `M`).
+- Loop-less functions with at least one early-return branch get a split scaffold: `M_before : args -> MONAD (early_result MretTy (ret))` plus `M_normal : MretTy -> MONAD (ret)`, joined by a concrete `M` that pattern-matches on the `Continue` / `ReturnNow` branches.
+- Straight-line loop-less functions get a single opaque `Parameter {fn}_M`.
+- Single-function libs share `Parameter MretTy : Type.`; multi-function libs declare `Parameter {func}_MretTy : Type.` per function to avoid result-type clashes.
+- `maketuple` is defined when any function returns multiple logical results.
+- Multi-function guard names are function-scoped (e.g. `sll_rotate_left_guardP`).
 
 ## Context Generation
 
@@ -163,7 +174,7 @@ uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy 
 
 Useful options:
 
-- `--func-name` selects a target function in multi-function C files.
+- `--func-name` selects a target function in multi-function C files. If omitted on a multi-function file, every target function is synthesized into its own subdirectory under the output directory, and the accepted per-function libs are merged into a single `{basename}_rel_lib.v` in `COQ_LIB_DIR`.
 - `--backend` chooses the generation backend: `gold-example`, `response-file`, or `command`.
 - `--few-shot` adds repeatable few-shot example JSON files to the prompt.
 - `--no-check` skips the Rocq syntax check step.
@@ -187,6 +198,7 @@ For generating Rocq verification conditions with the external `symexec` tool:
 
 ```bash
 scripts/symexec.sh                              # use defaults from CONFIGURE
+scripts/symexec.sh --FULL_AUTO=true             # add --full-auto when invoking symexec
 scripts/symexec.sh --C_DIR=./output/gen/rel/sll --OUTPUT_PATH=./output/gen/vcs/ --LOGDIR=./output/gen/logs/
 scripts/clean_symexec.sh --C_DIR=./shape_invdataset/sll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
 ```

@@ -53,6 +53,10 @@ class ResidualSegment:
     origin_start: int
 
 
+def _is_simple_identifier(name: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", name))
+
+
 def _binder_is_used(binder: str, body: str) -> bool:
     if binder == "_":
         return False
@@ -134,11 +138,27 @@ def _parse_definition_blocks(text: str) -> Dict[str, DefinitionBlock]:
 def _parse_parameter_signatures(text: str) -> Dict[str, str]:
     signatures: Dict[str, str] = {}
     for match in re.finditer(
-        r"^Parameter\s+([A-Za-z_][A-Za-z0-9_']*)\s*:\s*(.+?)\.\s*$",
+        r"^Parameter\s+([A-Za-z_][A-Za-z0-9_']*)\s*:",
         text,
         re.MULTILINE,
     ):
-        signatures[match.group(1)] = match.group(2).strip()
+        name = match.group(1)
+        rest = text[match.end():]
+        # Find the terminating period at paren depth 0.
+        depth = 0
+        end = -1
+        for i, ch in enumerate(rest):
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth = max(0, depth - 1)
+            elif ch == "." and depth == 0:
+                end = i
+                break
+        if end == -1:
+            continue
+        sig = " ".join(rest[:end].split())
+        signatures[name] = sig
     return signatures
 
 
@@ -851,9 +871,11 @@ def _split_top_level_bind(expr: str) -> Optional[Tuple[str, str, str]]:
     binder = expr[:bind_index].strip()
     left = expr[bind_index + 2:sep_index].strip()
     right = expr[sep_index + 2:].strip()
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", binder):
-        return None
-    return binder, left, right
+    if _is_simple_identifier(binder):
+        return binder, left, right
+    if _split_top_level_tuple_pattern(binder) is not None:
+        return binder, left, right
+    return None
 
 
 def _split_top_level_sequence(expr: str) -> Optional[Tuple[str, str]]:
@@ -985,16 +1007,58 @@ def _contains_callee(expr: str, callee_M: str) -> bool:
 
 def _collect_locally_bound_identifiers(body: str) -> Set[str]:
     bound: Set[str] = set()
-    for match in re.finditer(
-        rf"(?<!{_IDENT_BOUNDARY})([A-Za-z_][A-Za-z0-9_']*)(?!{_IDENT_BOUNDARY})\s*<-",
-        body,
-    ):
-        bound.add(match.group(1))
-
-    for pattern_match in re.finditer(r"\|\s*(.*?)=>", body, re.DOTALL):
-        pattern = pattern_match.group(1)
-        bound.update(_collect_pattern_bound_identifiers(pattern))
+    _collect_bound_recursive(body, bound)
     return bound
+
+
+def _collect_bound_recursive(expr: str, bound: Set[str]) -> None:
+    expr = _strip_terminal_period(_strip_wrapping_parens(expr.strip()))
+
+    # Bind: x <- m ;; k
+    bind_parts = _split_top_level_bind(expr)
+    if bind_parts is not None:
+        binder, left, right = bind_parts
+        if _is_simple_identifier(binder):
+            bound.add(binder)
+        else:
+            bound.update(_collect_pattern_bound_identifiers(binder))
+        _collect_bound_recursive(left, bound)
+        _collect_bound_recursive(right, bound)
+        return
+
+    # Let: let p := v in k
+    let_parts = _split_top_level_let(expr)
+    if let_parts is not None:
+        pattern, value, let_body = let_parts
+        bound.update(_collect_pattern_bound_identifiers(pattern))
+        _collect_bound_recursive(value, bound)
+        _collect_bound_recursive(let_body, bound)
+        return
+
+    # Sequence: m1 ;; m2
+    seq_parts = _split_top_level_sequence(expr)
+    if seq_parts is not None:
+        left, right = seq_parts
+        _collect_bound_recursive(left, bound)
+        _collect_bound_recursive(right, bound)
+        return
+
+    # Match: match e with | p => b end
+    match_parts = _parse_top_level_match(expr)
+    if match_parts is not None:
+        _, branches = match_parts
+        for pattern, branch_body in branches:
+            bound.update(_collect_pattern_bound_identifiers(pattern))
+            _collect_bound_recursive(branch_body, bound)
+        return
+
+    # Fun: fun x => k
+    parsed_fun = _parse_leading_fun(expr)
+    if parsed_fun is not None:
+        binder_part, fun_body = parsed_fun
+        bound.update(_collect_pattern_bound_identifiers(binder_part))
+        _collect_bound_recursive(fun_body, bound)
+        return
 
 
 def _extract_captured_identifiers(
@@ -1017,6 +1081,8 @@ def _extract_captured_identifiers(
         "continue",
         "break",
         "assume",
+        "let",
+        "in",
         "Continue",
         "ReturnNow",
         "by_continue",
@@ -1089,8 +1155,8 @@ def _build_residual_segment(
     origin_start: int,
 ) -> ResidualSegment:
     if cont is None:
-        body = "None"
-        binder = "_"
+        body = "return r"
+        binder = "r"
     else:
         body = _strip_terminal_period(cont.body)
         binder = cont.binder
@@ -1208,11 +1274,64 @@ def _collect_residuals(
 ) -> None:
     if seen_defs is None:
         seen_defs = set()
-    expr = _strip_terminal_period(_strip_wrapping_parens(_strip_leading_fun(expr)))
+    expr = _strip_terminal_period(_strip_wrapping_parens(expr))
+
+    # Peel leading fun layers, recording binder types into type_env.
+    # Determine available arg types from the origin component signature.
+    sig = named_signatures.get(origin_component)
+    sig_arg_types = _split_top_level_arrow_type(sig)[:-1] if sig else []
+    consumed_args = 0
+    while True:
+        parsed = _parse_leading_fun(expr)
+        if parsed is None:
+            break
+        binder_part, inner = parsed
+        if consumed_args < len(sig_arg_types):
+            # Simple curried binders: fun a b => ...
+            simple_binders = [p for p in binder_part.split() if p]
+            if simple_binders and all(
+                re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", b) for b in simple_binders
+            ):
+                for b in simple_binders:
+                    if consumed_args < len(sig_arg_types):
+                        type_env = dict(type_env)
+                        type_env[b] = sig_arg_types[consumed_args]
+                        consumed_args += 1
+            else:
+                # Tuple/pattern binder
+                if consumed_args < len(sig_arg_types):
+                    type_env = _bind_pattern_types(
+                        binder_part, sig_arg_types[consumed_args], dict(type_env),
+                    )
+                    consumed_args += 1
+        expr = inner
     bind_parts = _split_top_level_bind(expr)
 
     if bind_parts is not None:
         binder, left, right = bind_parts
+        if not _is_simple_identifier(binder):
+            # Tuple-destructuring bind: desugar '(x,y) <- m ;; k
+            # into: v <- m ;; let '(x,y) := v in k
+            all_idents = set(_extract_identifiers(right))
+            if cont is not None:
+                all_idents.update(_extract_identifiers(cont.body))
+            fresh = _fresh_identifier("v", all_idents)
+            desugared = f"{fresh} <- {left};;\nlet {binder} := {fresh} in {right}"
+            _collect_residuals(
+                desugared,
+                callee_M,
+                caller_component,
+                blocks,
+                named_signatures,
+                type_env,
+                cont,
+                out,
+                position_ref,
+                origin_component,
+                origin_start,
+                seen_defs.copy(),
+            )
+            return
         left_cont = Continuation(
             binder=binder,
             body=_compose_with_continuation(right, cont),
@@ -1476,6 +1595,7 @@ def generate_func_residual_entries(
     coqfilepath: str,
     callee_M: str,
     caller_component: str,
+    extra_signatures: Optional[Dict[str, str]] = None,
 ) -> List[ResidualSegment]:
     """Generate first-stage residual entries for each call to ``callee_M`` in ``caller_component``.
 
@@ -1486,17 +1606,22 @@ def generate_func_residual_entries(
     - recurse into ``m2`` with the outer continuation unchanged
     - if a leaf expression contains ``callee_M``, emit the copied residual and
       record which identifiers are captured from the surrounding context
+
+    *extra_signatures* lets callers supply signatures for names that are only
+    visible via ``Require Import``, not declared in the assembled file
+    (e.g. cross-file callees).  Local Definitions/Parameters override.
     """
 
     with open(coqfilepath, "r", encoding="utf-8") as handle:
         text = handle.read()
 
     blocks = _parse_definition_blocks(text)
-    named_signatures = {
+    named_signatures: Dict[str, str] = dict(extra_signatures or {})
+    named_signatures.update({
         name: block.signature
         for name, block in blocks.items()
         if block.signature
-    }
+    })
     named_signatures.update(_parse_parameter_signatures(text))
     caller_block = blocks.get(caller_component)
     if caller_block is None:

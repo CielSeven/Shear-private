@@ -10,6 +10,12 @@
     "root_null": {
       "eq": "{abs} = []",
       "ne": "{abs} <> []"
+    },
+    "field_deref_null": {
+      "next": {
+        "eq": "tl {abs} = []",
+        "ne": "tl {abs} <> []"
+      }
     }
   },
   "sllseg": {

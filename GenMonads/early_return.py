@@ -117,11 +117,17 @@ def detect_early_return_shape(c_source: str) -> Dict[str, bool]:
     has_loop = loop_info is not None
 
     if not has_loop:
+        # No loop: an "early return" is any branching exit — detected as two
+        # or more `return` statements (one in a conditional branch plus the
+        # final one, or multiple conditional branches).
+        return_count = len(re.findall(r"\breturn\b", clean))
+        has_no_loop_early_return = return_count >= 2
         return {
             "has_top_level_loop": False,
             "has_pre_loop_early_return": False,
             "has_loop_body_early_return": False,
-            "needs_early_result": False,
+            "has_no_loop_early_return": has_no_loop_early_return,
+            "needs_early_result": has_no_loop_early_return,
         }
 
     pre_region = clean[: int(loop_info["start"])]
@@ -133,5 +139,6 @@ def detect_early_return_shape(c_source: str) -> Dict[str, bool]:
         "has_top_level_loop": True,
         "has_pre_loop_early_return": has_pre_loop_early_return,
         "has_loop_body_early_return": has_loop_body_early_return,
+        "has_no_loop_early_return": False,
         "needs_early_result": has_pre_loop_early_return or has_loop_body_early_return,
     }

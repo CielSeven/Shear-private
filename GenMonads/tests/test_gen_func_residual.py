@@ -73,8 +73,8 @@ Definition caller_M : A -> MONAD T :=
 
     assert len(segments) == 1
     assert "Definition residual_prog_in_caller_M_call_1 : R -> MONAD (T) :=" in segments[0]
-    assert "fun _ =>" in segments[0]
-    assert "None" in segments[0]
+    assert "fun r =>" in segments[0]
+    assert "return r" in segments[0]
 
 
 def test_generate_func_residual_segments_descends_into_match_without_extra_residual(tmp_path):
@@ -707,6 +707,96 @@ Definition sll_multi_merge_M : list Z -> list Z -> list Z -> MONAD (list Z) :=
     assert entries[3].captured_identifier_types == {"l4": "list Z", "y0": "Z"}
 
 
+def test_generate_func_residual_entries_parses_multiline_parameter_signature(tmp_path):
+    coq_file = tmp_path / "demo_rel_lib.v"
+    coq_file.write_text(
+        """Parameter callee_M
+  : list Z -> list Z
+    -> MONAD (list Z).
+
+Definition caller_M : list Z -> MONAD (list Z) :=
+  fun a =>
+    r <- callee_M a a;;
+    return r.
+""",
+        encoding="utf-8",
+    )
+
+    entries = generate_func_residual_entries(str(coq_file), "callee_M", "caller_M")
+
+    assert len(entries) == 1
+    assert entries[0].callee_return_type is not None
+    assert "list Z" in entries[0].callee_return_type
+    assert "list Z -> MONAD" in entries[0].definition
+
+
+def test_generate_func_residual_entries_infers_types_through_nested_fun_layers(tmp_path):
+    coq_file = tmp_path / "demo_rel_lib.v"
+    coq_file.write_text(
+        """Parameter callee_M : list Z -> MONAD (list Z).
+
+Definition caller_M : list Z -> list Z -> MONAD (list Z) :=
+  fun l1 =>
+    fun l2 =>
+      r <- callee_M l1;;
+      return (l2 ++ r).
+""",
+        encoding="utf-8",
+    )
+
+    entries = generate_func_residual_entries(str(coq_file), "callee_M", "caller_M")
+
+    assert len(entries) == 1
+    assert entries[0].captured_identifiers == ["l2"]
+    assert entries[0].captured_identifier_types == {"l2": "list Z"}
+
+
+def test_generate_func_residual_entries_handles_tuple_destructuring_bind(tmp_path):
+    coq_file = tmp_path / "demo_rel_lib.v"
+    coq_file.write_text(
+        """Parameter callee_M : A -> B -> MONAD (list Z * list Z).
+
+Definition caller_M : A -> MONAD (list Z) :=
+  fun a =>
+    '(x, y) <- callee_M arg1 arg2;;
+    return (x ++ y).
+""",
+        encoding="utf-8",
+    )
+
+    entries = generate_func_residual_entries(str(coq_file), "callee_M", "caller_M")
+
+    assert len(entries) == 1
+    assert "fun v =>" in entries[0].definition
+    assert "let '(x, y) := v in" in entries[0].definition
+    assert "return (x ++ y)" in entries[0].definition
+    assert entries[0].captured_identifiers == []
+
+
+def test_generate_func_residual_entries_tuple_bind_with_continuation(tmp_path):
+    coq_file = tmp_path / "demo_rel_lib.v"
+    coq_file.write_text(
+        """Parameter callee_M : A -> MONAD (list Z * list Z).
+
+Definition caller_M : A -> MONAD (list Z) :=
+  fun a =>
+    '(x, y) <- callee_M a;;
+    z <- m x;;
+    return (z ++ y).
+""",
+        encoding="utf-8",
+    )
+
+    entries = generate_func_residual_entries(str(coq_file), "callee_M", "caller_M")
+
+    assert len(entries) == 1
+    defn = entries[0].definition
+    assert "fun v =>" in defn
+    assert "let '(x, y) := v in" in defn
+    assert "z <- m x" in defn
+    assert "return (z ++ y)" in defn
+
+
 def test_hygienic_renaming_preserves_callee_result_binder_in_nested_composition(tmp_path):
     coq_file = tmp_path / "demo_rel_lib.v"
     coq_file.write_text(
@@ -738,3 +828,42 @@ Definition caller_M :=
 
     assert len(polished) == 1
     assert "fun r =>" in polished[0].definition
+
+
+def test_residual_entries_use_extra_signatures_for_cross_file_callee(tmp_path):
+    """A callee imported via ``Require Import`` is not present in the file's
+    Definition/Parameter list, so its signature must be supplied via
+    ``extra_signatures`` to get a typed residual definition.
+    """
+    coq_file = tmp_path / "caller_rel_lib.v"
+    coq_file.write_text(
+        """\
+Require Import callee_rel_lib.
+
+Definition caller_M : list Z -> MONAD (list Z) :=
+  fun l =>
+    r <- callee_M l ;;
+    return r.
+""",
+        encoding="utf-8",
+    )
+
+    # Without extra_signatures: callee return type is unknown, so the
+    # residual definition lacks a type annotation.
+    entries_untyped = generate_func_residual_entries(str(coq_file), "callee_M", "caller_M")
+    assert entries_untyped, "expected at least one residual entry"
+    assert ": list Z -> MONAD" not in entries_untyped[0].definition
+
+    # With extra_signatures: the cross-file callee's return type is known
+    # and the residual definition becomes fully typed.
+    entries_typed = generate_func_residual_entries(
+        str(coq_file),
+        "callee_M",
+        "caller_M",
+        extra_signatures={"callee_M": "list Z -> MONAD (list Z)"},
+    )
+    assert entries_typed
+    assert (
+        "Definition residual_prog_in_caller_M_call_1 : list Z -> MONAD (list Z) :="
+        in entries_typed[0].definition
+    )

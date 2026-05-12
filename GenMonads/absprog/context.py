@@ -86,13 +86,16 @@ def _select_function(
                 return func_data
         raise ValueError(f"Function '{func_name}' not found in {file_path}")
 
-    if len(functions) != 1:
-        names = ", ".join(func.get("func_name", func.get("function")) for func in functions)
+    local_functions = [f for f in functions if not f.get("cross_file")]
+    if len(local_functions) != 1:
+        names = ", ".join(
+            func.get("func_name", func.get("function")) for func in local_functions
+        )
         raise ValueError(
             "Function name is required for multi-function files. "
             f"Available functions: {names}"
         )
-    return functions[0]
+    return local_functions[0]
 
 
 def _extract_function_source(file_path: str, func_name: str) -> str:
@@ -342,14 +345,88 @@ def _build_control_flow_template(
         ),
         "has_pre_loop_early_return": has_pre_loop_early_return,
         "has_loop_body_early_return": has_loop_body_early_return,
+        "has_no_loop_early_return": False,
         "needs_early_result": has_pre_loop_early_return or has_loop_body_early_return,
         "state_type": state_type,
         "return_type": return_type,
         "prompt_signatures": prompt_signatures,
+        # Component keys the LLM must supply; consumed by parser, assembler,
+        # and prompt rendering.
+        "required_components": ["MretTy", "M_loop_before", "M_1", "M_2", "M_loop_end"],
         "template": {
             "loop_body_definition": loop_body_definition,
             "top_level": top_level_definition,
             "after_loop_definition": after_loop_definition,
+        },
+    }
+
+
+def _build_no_loop_control_flow_template(
+    func_name: str,
+    require_types: List[str],
+    return_type: str,
+    has_early_return: bool,
+) -> Dict:
+    """Build the control-flow template for a function with no loop.
+
+    Two shapes:
+    - has_early_return=True  -> split scaffold (`M_before` + `M_normal`).
+    - has_early_return=False -> single opaque ``Parameter M`` (no MretTy).
+    """
+    req_args = _curried_type(require_types)
+
+    if has_early_return:
+        before_type = f"{req_args}MONAD (early_result MretTy ({return_type}))"
+        normal_type = f"MretTy -> MONAD ({return_type})"
+        top_level_type = f"{req_args}MONAD ({return_type})"
+        top_level_definition = "\n".join([
+            f"Definition {func_name}_M : {top_level_type} :=",
+            "  fun ... =>",
+            f"    e <- {func_name}_M_before ...;;",
+            "    match e with",
+            f"    | Continue s => {func_name}_M_normal s",
+            "    | ReturnNow r => return r",
+            "    end.",
+        ])
+        prompt_signatures = {
+            "M_before": before_type,
+            "M_normal": normal_type,
+            "M": top_level_type,
+        }
+        return {
+            "template_case": "no_loop_early_return",
+            "has_pre_loop_early_return": False,
+            "has_loop_body_early_return": False,
+            "has_no_loop_early_return": True,
+            "needs_early_result": True,
+            "state_type": "",
+            "return_type": return_type,
+            "prompt_signatures": prompt_signatures,
+            "required_components": ["MretTy", "M_before", "M_normal"],
+            "template": {
+                "loop_body_definition": "",
+                "top_level": top_level_definition,
+                "after_loop_definition": "",
+            },
+        }
+
+    # Straight-line: just one opaque ``Parameter {fn}_M``.
+    top_level_type = f"{req_args}MONAD ({return_type})"
+    prompt_signatures = {"M": top_level_type}
+    return {
+        "template_case": "no_loop_simple",
+        "has_pre_loop_early_return": False,
+        "has_loop_body_early_return": False,
+        "has_no_loop_early_return": False,
+        "needs_early_result": False,
+        "state_type": "",
+        "return_type": return_type,
+        "prompt_signatures": prompt_signatures,
+        "required_components": ["M"],
+        "template": {
+            "loop_body_definition": "",
+            "top_level": "",
+            "after_loop_definition": "",
         },
     }
 
@@ -362,33 +439,57 @@ def _collect_extern_info(func_data: Dict, include_helpers: bool = False) -> Opti
 
 
 def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
-    info = collect_func_extern_info(func_data)
+    # Loop-less functions still produce an extern info dict when we pass
+    # ``include_helpers=True``; that lets us synthesize an abstract program
+    # for them (full opaque ``Parameter M`` or the Option-C split scaffold).
+    info = _collect_extern_info(func_data, include_helpers=True)
     if info is None:
-        raise ValueError(f"Function '{func_data['function']}' has no loop invariants")
+        raise ValueError(f"Function '{func_data['function']}' has no funcspec")
 
     funcspec = func_data.get("funcspec") or {}
     inv_assertions = [a for a in func_data.get("inner_assertions", []) if a.get("type") == "Inv"]
     first_inv = inv_assertions[0] if inv_assertions else {}
     program = f"{func_data['function']}_M"
-    processed_funcspec = process_funcspec_with_safeexec(funcspec, program) if funcspec else {}
+    if funcspec:
+        try:
+            processed_funcspec = process_funcspec_with_safeexec(
+                funcspec, program, return_type=func_data.get("return_type", "")
+            )
+        except TypeError:
+            # Older callers / tests that monkeypatch with a 2-arg signature.
+            processed_funcspec = process_funcspec_with_safeexec(funcspec, program)
+    else:
+        processed_funcspec = {}
     c_source = _extract_function_source(c_file, func_data["function"])
+
+    has_loop_program = bool(inv_assertions)
 
     require_types = _require_var_types(info, "require_var_types", "require_var_count")
     inv_types = _require_var_types(info, "inv_var_types", "inv_var_count")
     ensure_types = _require_var_types(info, "ensure_var_types", "ensure_var_count")
-    state_type = _tuple_type(inv_types)
+    state_type = _tuple_type(inv_types) if inv_types else ""
     return_type = _return_type_from_types(ensure_types)
     early_return_shape = detect_early_return_shape(c_source)
     has_pre_loop_early_return = early_return_shape["has_pre_loop_early_return"]
     has_loop_body_early_return = early_return_shape["has_loop_body_early_return"]
-    control_flow = _build_control_flow_template(
-        func_data["function"],
-        require_types,
-        inv_types,
-        return_type,
-        has_pre_loop_early_return,
-        has_loop_body_early_return,
-    )
+    has_no_loop_early_return = early_return_shape.get("has_no_loop_early_return", False)
+
+    if has_loop_program:
+        control_flow = _build_control_flow_template(
+            func_data["function"],
+            require_types,
+            inv_types,
+            return_type,
+            has_pre_loop_early_return,
+            has_loop_body_early_return,
+        )
+    else:
+        control_flow = _build_no_loop_control_flow_template(
+            func_data["function"],
+            require_types,
+            return_type,
+            has_early_return=has_no_loop_early_return,
+        )
     control_flow["has_top_level_loop"] = early_return_shape["has_top_level_loop"]
     control_flow["has_top_level_loop"] = early_return_shape["has_top_level_loop"]
 
@@ -452,6 +553,81 @@ def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
     }
 
 
+_IDENT_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+_C_KEYWORDS_AND_BUILTINS = {
+    "if", "else", "for", "while", "do", "switch", "case", "default",
+    "return", "break", "continue", "goto", "sizeof", "typedef",
+    "struct", "union", "enum", "static", "extern", "const", "volatile",
+    "register", "auto", "inline", "void", "char", "short", "int",
+    "long", "float", "double", "signed", "unsigned", "_Bool",
+    "malloc", "free", "calloc", "realloc", "memcpy", "memset",
+    "printf", "fprintf", "scanf", "assert",
+}
+
+
+def _candidate_callees_in_source(source: str) -> set[str]:
+    body = _strip_c_comments(_extract_body_from_source(source))
+    return {match.group(1) for match in _IDENT_CALL_RE.finditer(body)}
+
+
+def _collect_sibling_manifest_entries(
+    c_file: str, candidate_names: set[str]
+) -> List[Dict]:
+    """For each name in `candidate_names`, if `{name}.c` exists as a sibling
+    in the same directory, parse it and return a manifest entry tagged
+    `cross_file=True`. Returns [] if no candidates resolve.
+    """
+    if not candidate_names:
+        return []
+    src_dir = os.path.dirname(os.path.abspath(c_file))
+    own_stem = os.path.splitext(os.path.basename(c_file))[0]
+    entries: List[Dict] = []
+    seen: set[str] = set()
+    for name in sorted(candidate_names):
+        if name == own_stem or name in seen:
+            continue
+        sibling_path = os.path.join(src_dir, f"{name}.c")
+        if not os.path.isfile(sibling_path):
+            continue
+        try:
+            sibling_result = process_and_translate_file(sibling_path, generate_guards=False)
+        except Exception:
+            continue
+        if isinstance(sibling_result, dict) and "error" in sibling_result:
+            continue
+        for func_data in _collect_functions(sibling_result):
+            fn_name = func_data.get("function")
+            if not fn_name or fn_name not in candidate_names or fn_name in seen:
+                continue
+            seen.add(fn_name)
+            helper_info = _collect_extern_info(
+                func_data,
+                include_helpers=func_data.get("funcspec") is not None,
+            )
+            externals = {}
+            if helper_info is not None:
+                externals["M"] = _build_m_signature(helper_info)
+            sibling_entry = {
+                "func_name": fn_name,
+                "has_body": True,
+                "has_loop_invariants": _collect_extern_info(func_data) is not None,
+                "is_recursive": False,
+                "called_by": [],
+                "calls": [],
+                "should_synthesize": False,
+                "cross_file": True,
+                "defined_in": sibling_path,
+                "externals": externals,
+            }
+            if func_data.get("funcspec"):
+                sibling_entry["spec"] = _build_low_level_spec(
+                    func_data["funcspec"], f"{fn_name}_M"
+                )
+            entries.append(sibling_entry)
+    return entries
+
+
 def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
     if "error" in result:
         raise ValueError(result["error"])
@@ -465,10 +641,19 @@ def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
         except (ValueError, OSError):
             continue
 
+    unresolved_candidates: set[str] = set()
+    for source in function_sources.values():
+        unresolved_candidates |= _candidate_callees_in_source(source)
+    unresolved_candidates -= set(function_names)
+    unresolved_candidates -= _C_KEYWORDS_AND_BUILTINS
+    sibling_entries = _collect_sibling_manifest_entries(c_file, unresolved_candidates)
+    sibling_names = [entry["func_name"] for entry in sibling_entries]
+    callable_names = function_names + sibling_names
+
     call_graph: Dict[str, List[str]] = {}
     call_sites: Dict[str, Dict[str, List[str]]] = {}
     for name, source in function_sources.items():
-        calls = _collect_calls_for_source(source, function_names)
+        calls = _collect_calls_for_source(source, callable_names)
         call_graph[name] = sorted(calls)
         call_sites[name] = {
             callee: _collect_call_sites(source, callee)
@@ -487,7 +672,11 @@ def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
         has_body = func_name in function_sources
         info = _collect_extern_info(func_data)
         has_loop_invariants = info is not None
-        should_synthesize = has_body and has_loop_invariants
+        # A function is synthesizable if it has a body and a funcspec; loop
+        # invariants are required for loop-bearing functions but not for
+        # straight-line / early-return-only functions (Option C scaffolds).
+        has_funcspec = func_data.get("funcspec") is not None
+        should_synthesize = has_body and has_funcspec
         if should_synthesize:
             targets.append(func_name)
 
@@ -528,6 +717,9 @@ def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
 
         manifest_functions.append(entry)
 
+    for sibling in sibling_entries:
+        manifest_functions.append(sibling)
+
     return {
         "file_id": os.path.splitext(os.path.basename(c_file))[0],
         "version": 2,
@@ -547,7 +739,7 @@ def collect_file_synthesis_manifest(c_file: str) -> Dict:
 def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str] = None) -> Dict:
     func_entry = _select_function(manifest["functions"], func_name, manifest["source"]["c_file"])
     if not func_entry["should_synthesize"]:
-        raise ValueError(f"Function '{func_entry['func_name']}' has no loop invariants")
+        raise ValueError(f"Function '{func_entry['func_name']}' has no funcspec to synthesize")
 
     available_callees = []
     for callee_name in func_entry.get("calls", []):
@@ -566,6 +758,8 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
             "externals": callee_entry.get("externals", {}),
             "spec": callee_entry.get("spec", {}),
             "call_sites": func_entry.get("call_sites", {}).get(callee_name, []),
+            "cross_file": callee_entry.get("cross_file", False),
+            "defined_in": callee_entry.get("defined_in"),
         })
 
     opaque_call_obligations = []
@@ -582,13 +776,21 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
         result,
         func_entry["func_name"],
     )
-    must_define = [
-        "MretTy",
-        f"{func_entry['func_name']}_M_loop_before",
-        f"{func_entry['func_name']}_M_loop_M1",
-        f"{func_entry['func_name']}_M_loop_M2",
-        f"{func_entry['func_name']}_M_loop_end",
-    ]
+    fn = func_entry["func_name"]
+    control_flow = func_entry.get("control_flow", {})
+    required = control_flow.get("required_components", [
+        "MretTy", "M_loop_before", "M_1", "M_2", "M_loop_end",
+    ])
+    must_define = []
+    for component in required:
+        if component == "MretTy":
+            must_define.append("MretTy")
+        elif component == "M_1":
+            must_define.append(f"{fn}_M_loop_M1")
+        elif component == "M_2":
+            must_define.append(f"{fn}_M_loop_M2")
+        else:
+            must_define.append(f"{fn}_{component}")
     generated_scaffolding = []
     if func_entry.get("control_flow", {}).get("has_loop_body_early_return"):
         generated_scaffolding.append(f"{func_entry['func_name']}_M_after_loop")

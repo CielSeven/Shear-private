@@ -5,8 +5,88 @@ from GenMonads.absprog import context as context_mod
 from GenMonads.absprog import context_cli
 
 
-def test_collect_all_synthesis_contexts_expands_multifunction_files():
-    contexts = context_mod.collect_all_synthesis_contexts("shape_invdataset/sll/sll_rotate.c")
+_SLL_ROTATE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list *sll_rotate_left(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    /*@ Inv listrep(x) * listrep(x) */\n'
+    '    while (x) { x = x->next; }\n'
+    '    return x;\n'
+    '}\n'
+    '\n'
+    'struct list *sll_rotate_right(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    /*@ Inv listrep(x) * listrep(x) * listrep(x) */\n'
+    '    while (x) { x = x->next; }\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+_SLL_MULTI_MERGE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list * sll_merge(struct list * x, struct list * y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */;\n'
+    '\n'
+    'struct list * sll_multi_merge(struct list * x, struct list * y, struct list * z)\n'
+    '/*@ Require listrep(x) * listrep(y) * listrep(z)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *t, *u;\n'
+    '    if (x == (struct list *) 0) { t = sll_merge(y, z); return t; }\n'
+    '    t = x; u = t->next;\n'
+    '    /*@ Inv listrep(y) * listrep(z) * listrep(u) * lseg(x@pre, t) */\n'
+    '    while (u) { t = u; u = t->next; }\n'
+    '    u = sll_merge(y, z); t->next = u;\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+_SLL_REVERSE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list* sll_reverse(struct list* head)\n'
+    '/*@\n'
+    '      Require listrep(head)\n'
+    '      Ensure  listrep(__return)\n'
+    '*/\n'
+    '{\n'
+    '    struct list* prev = (void *)0;\n'
+    '    struct list* curr = head;\n'
+    '    /*@ Inv listrep(prev) * listrep(curr) */\n'
+    '    while (curr != (void *) 0) {\n'
+    '        struct list* next = curr->next;\n'
+    '        curr->next = prev; prev = curr; curr = next;\n'
+    '    }\n'
+    '    return prev;\n'
+    '}\n'
+)
+
+
+def _write(tmp_path, name, src):
+    p = tmp_path / name
+    p.write_text(src, encoding="utf-8")
+    return str(p)
+
+
+def test_collect_all_synthesis_contexts_expands_multifunction_files(tmp_path):
+    c_file = _write(tmp_path, "sll_rotate.c", _SLL_ROTATE_SRC)
+    contexts = context_mod.collect_all_synthesis_contexts(c_file)
 
     assert [ctx["id"] for ctx in contexts] == ["sll_rotate_left", "sll_rotate_right"]
     assert [ctx["summary"]["func_name"] for ctx in contexts] == [
@@ -15,8 +95,9 @@ def test_collect_all_synthesis_contexts_expands_multifunction_files():
     ]
 
 
-def test_collect_all_synthesis_contexts_skips_helper_functions_without_invariants():
-    contexts = context_mod.collect_all_synthesis_contexts("shape_invdataset/sll/sll_multi_merge.c")
+def test_collect_all_synthesis_contexts_skips_helper_functions_without_invariants(tmp_path):
+    c_file = _write(tmp_path, "sll_multi_merge.c", _SLL_MULTI_MERGE_SRC)
+    contexts = context_mod.collect_all_synthesis_contexts(c_file)
 
     assert [ctx["id"] for ctx in contexts] == ["sll_multi_merge"]
     assert [ctx["summary"]["func_name"] for ctx in contexts] == ["sll_multi_merge"]
@@ -24,9 +105,10 @@ def test_collect_all_synthesis_contexts_skips_helper_functions_without_invariant
 
 def test_write_synthesis_context_writes_json_file(tmp_path):
     output_path = tmp_path / "sll_reverse.auto.json"
+    c_file = _write(tmp_path, "sll_reverse.c", _SLL_REVERSE_SRC)
 
     context = context_mod.write_synthesis_context(
-        "shape_invdataset/sll/sll_reverse.c", str(output_path)
+        c_file, str(output_path)
     )
 
     assert output_path.exists()

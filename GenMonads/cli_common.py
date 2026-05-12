@@ -11,6 +11,39 @@ import os
 from typing import Optional
 
 
+_CONFIGURE_REL_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "CONFIGURE")
+)
+
+
+def read_configure_value(key: str) -> Optional[str]:
+    """Return the default for *key* from ``$key`` env var or the ``CONFIGURE`` file.
+
+    Environment variables take precedence.  The CONFIGURE file uses shell
+    syntax like ``KEY="${KEY:-/default/path}"``; the default after ``:-`` is
+    extracted.  Returns ``None`` if neither source provides a value.
+    """
+    env = os.environ.get(key)
+    if env:
+        return env
+
+    if not os.path.isfile(_CONFIGURE_REL_PATH):
+        return None
+
+    with open(_CONFIGURE_REL_PATH) as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped.startswith(f"{key}="):
+                continue
+            if ":-" in stripped:
+                value = stripped.split(":-", 1)[-1].rstrip('}"')
+            else:
+                value = stripped.split("=", 1)[-1].strip().strip('"')
+            if value:
+                return value
+    return None
+
+
 def add_input_path_arguments(parser, help_text: str) -> None:
     parser.add_argument("input", nargs="?", help=help_text)
     parser.add_argument(

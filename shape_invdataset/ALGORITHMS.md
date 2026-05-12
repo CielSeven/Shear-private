@@ -1,7 +1,7 @@
 # Shape Invariant Dataset — Algorithm Coverage
 
-All files use `/*@ Require ... Ensure ... */` for function specs and `/*@ Inv ... */` for loop invariants.
-Predicates: `listrep`, `lseg` (SLL); `dlistrep_shape`, `dllseg_shape` (DLL).
+Annotated files use `/*@ Require ... Ensure ... */` for function specs and `/*@ Inv Assert ... */` for loop invariants.
+Predicates: `listrep`, `lseg` (SLL); `dlistrep_shape`, `dllseg_shape` (DLL); `IntArray::*_shape` and `IntArray::undef_*` (integer arrays).
 
 ---
 
@@ -55,8 +55,42 @@ Predicates: `listrep`, `lseg` (SLL); `dlistrep_shape`, `dllseg_shape` (DLL).
 
 ---
 
+## Integer Array (`int_array/`)
+
+| File | Functions | Description |
+|------|-----------|-------------|
+| `lc26_remove_duplicates.c` | `array_remove_duplicates(a, n)` | Compact a sorted array in-place and return the number of unique elements. |
+| `lc31_next_permutation.c` | `array_next_permutation(a, n)` | Compute the next lexicographic permutation in-place. |
+| `lc42_trap_rain.c` | `array_trap_rain_water(height, n)` | Two-pointer greedy trapped-rain-water accumulation. |
+| `lc45_jump_min.c` | `array_jump_min_steps(a, n)` | Greedy minimum jumps using current range end and next farthest reach. |
+| `lc53_max_subarray.c` | `array_max_subarray(a, n)` | Kadane-style maximum subarray sum with a running best value. |
+| `lc55_can_jump.c` | `array_can_jump(a, n)` | Greedy reachability check using the farthest reachable index. |
+| `lc75_dutch_flag.c` | `array_dutch_flag_sort(a, n)` | Sort an array containing `0`, `1`, and `2` with low/mid/high pointers. |
+| `lc75_partition_by_pivot.c` | `array_partition_by_pivot(a, n, pivot)` | Dutch-flag-style three-way in-place partition around an arbitrary pivot. |
+| `lc88_merge_sorted.c` | `array_merge_sorted(a, m, b, n)` | Merge sorted array `b` into the spare tail of sorted array `a` from right to left. |
+| `lc121_best_stock.c` | `array_best_stock_profit(prices, n)` | Greedy single-pass stock profit using the minimum price seen so far. |
+| `lc152_max_product_subarray.c` | `array_max_product_subarray(a, n)` | DP tracking both maximum and minimum product ending at each index. |
+| `lc189_rotate.c` | `array_rotate_right(a, n, k)` | Rotate an array in-place using three range reversals. |
+| `lc198_rob_linear.c` | `array_rob_linear(a, n)` | Constant-space dynamic programming for non-adjacent maximum sum. |
+| `lc238_product_except_self.c` | `array_product_except_self(a, n, out)` | Fill `out` with products of all elements except the current one using prefix/suffix scans. |
+| `lc376_wiggle_length.c` | `array_wiggle_max_length(a, n)` | Greedy/DP wiggle subsequence length with `up` and `down` states. |
+| `lc746_min_cost_climb.c` | `array_min_cost_climb(cost, n)` | Constant-space DP over the previous two stair costs. |
+
+### Integer Array Patterns Used
+- Forward and backward scans over one or two arrays.
+- Read/write compaction with separate source and destination indices.
+- In-place swaps with two-pointer and three-pointer regions.
+- Suffix reversal after a pivot search.
+- Prefix/suffix accumulation with an output array.
+- Running dynamic-programming state over a linear scan.
+- Greedy frontier maintenance (`farthest`, `current_end`) for jump-style problems.
+- Constant-space DP with rolling states (`skip/take`, `prev1/prev2`, `up/down`).
+- Dual-state DP where negative values can swap maxima and minima.
+
+---
+
 ## Notes
 
 - `dll_zip.c` uses a 2-step `dllseg` extension per iteration (inserting one node from each list); symexec verification in progress.
 - Use `scripts/symexec.sh --FILE=<path>` to verify a single file.
-- Use `scripts/symexec.sh --C_DIR=shape_invdataset/sll` or `--C_DIR=shape_invdataset/dll` to batch-verify a directory.
+- Use `scripts/symexec.sh --C_DIR=shape_invdataset/sll`, `--C_DIR=shape_invdataset/dll`, or `--C_DIR=shape_invdataset/int_array` to batch-verify an annotated directory.

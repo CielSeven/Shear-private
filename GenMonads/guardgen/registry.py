@@ -14,6 +14,10 @@ class PredicateSpec:
     parse_args: Callable[[list[str]], dict]
     to_coq_root_null: Optional[Callable[[dict, bool], str]] = None
     to_coq_segment_eq: Optional[Callable[[dict, bool, bool], str]] = None
+    # Translate a ``<root>-><field> == null`` / ``!= null`` check to Coq.
+    # Args: (payload, field_name, is_eq).  Raise to indicate the field deref
+    # is not supported on this predicate.
+    to_coq_field_deref_null: Optional[Callable[[dict, str, bool], str]] = None
     abs_names: Callable[[dict], list[str]] = lambda payload: []
 
 PREDICATES: dict[str, PredicateSpec] = {}
@@ -53,6 +57,29 @@ def _make_segment_eq_handler(eq_template: str, ne_template: str) -> Callable[[di
     return _handler
 
 
+def _make_field_deref_null_handler(
+    spec_name: str, field_specs: dict
+) -> Callable[[dict, str, bool], str]:
+    """Build a handler that translates ``<root>-><field>`` null comparisons.
+
+    *field_specs* maps each supported field name to a dict with ``eq`` and
+    ``ne`` Python-format-string templates referencing the predicate's payload
+    keys.
+    """
+    def _handler(payload: dict, field: str, is_eq: bool) -> str:
+        templates = field_specs.get(field)
+        if templates is None:
+            supported = ", ".join(sorted(field_specs)) or "(none)"
+            raise ValueError(
+                f"{spec_name}: field deref '->{field}' is not supported "
+                f"(supported fields: {supported})"
+            )
+        template = templates["eq"] if is_eq else templates["ne"]
+        return template.format(**payload)
+
+    return _handler
+
+
 def _make_abs_names(abs_fields: list[str]) -> Callable[[dict], list[str]]:
     def _abs(payload: dict) -> list[str]:
         return [payload[field] for field in abs_fields]
@@ -71,6 +98,7 @@ def load_predicates_from_json(config_path: str = _GUARD_PREDICATE_FILE) -> None:
 
         root_null = raw_spec.get("root_null")
         segment_eq = raw_spec.get("segment_eq")
+        field_deref_null = raw_spec.get("field_deref_null")
 
         register_predicate(PredicateSpec(
             name=name,
@@ -84,6 +112,10 @@ def load_predicates_from_json(config_path: str = _GUARD_PREDICATE_FILE) -> None:
             to_coq_segment_eq=(
                 _make_segment_eq_handler(segment_eq["eq"], segment_eq["ne"])
                 if segment_eq else None
+            ),
+            to_coq_field_deref_null=(
+                _make_field_deref_null_handler(name, field_deref_null)
+                if field_deref_null else None
             ),
             abs_names=_make_abs_names(abs_fields),
         ))

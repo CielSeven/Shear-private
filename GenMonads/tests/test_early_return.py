@@ -3,11 +3,28 @@ import textwrap
 from GenMonads.early_return import detect_early_return_shape, find_first_top_level_loop
 
 
-def test_detect_early_return_shape_for_sll_multi_merge():
-    with open("shape_invdataset/sll/sll_multi_merge.c", "r", encoding="utf-8") as f:
-        content = f.read()
+def test_detect_early_return_shape_loop_with_both_pre_and_body_early_returns():
+    """Multi-merge-style function shape: an early-return guard before the
+    loop AND an early-return inside the loop body must surface both flags.
+    """
+    source = textwrap.dedent(
+        """\
+        struct list * f(struct list * x, struct list * y) {
+            if (x == 0) {
+                return y;
+            }
+            while (x != 0) {
+                if (y == 0) {
+                    return x;
+                }
+                x = x->next;
+            }
+            return x;
+        }
+        """
+    )
 
-    info = detect_early_return_shape(content)
+    info = detect_early_return_shape(source)
 
     assert info["has_top_level_loop"] is True
     assert info["has_pre_loop_early_return"] is True

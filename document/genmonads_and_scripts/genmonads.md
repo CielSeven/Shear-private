@@ -202,8 +202,8 @@ These files are standard JSON files and should stay comment-free.
 ### Important implementation notes
 
 - Loop invariants use `bind(program_loop(...), program_loop_end)` inside `safeExec(...)`.
-- `Require` clauses move generated variables into the `With` clause after adding `safeExec(...)`.
-- `Ensure` clauses encode the post-state with `return(...)` or `return(maketuple(...))`.
+- `Require` clauses move generated variables into the `With` clause (e.g. `With X l1`), drop the `?` prefix, and wrap the body with `safeExec(...)`. The leading `exists` is lifted away because the vars are now bound at `With` scope.
+- `Ensure` clauses keep the `exists` quantifier in front of the body (e.g. `Ensure exists l2, safeExec(ATrue, return(l2), X) && sll(__return, l2)`).
 
 ## `absprog/`
 
@@ -216,14 +216,20 @@ These files are standard JSON files and should stay comment-free.
 | File | Purpose | Key details |
 | --- | --- | --- |
 | `absprog/__init__.py` | Export surface | Re-exports `generate_rel_lib` and `generate_rel_lib_for_file` |
-| `absprog/cli.py` | CLI for `_rel_lib.v` generation | Accepts a file or directory input, resolves a default output directory from `COQ_LIB_DIR` or `CONFIGURE`, and writes skeleton `.v` files |
-| `absprog/gen_rel_lib.py` | Rocq library generator | Builds imports, `MretTy`, function-scoped guard definitions such as `sll_copy_guardP`, loop-body scaffolding, and function-level `Parameter`/`Definition` blocks for each translated function |
+| `absprog/cli.py` | CLI for `_rel_lib.v` generation | Accepts a file or directory input, resolves the default output directory via `GenMonads.cli_common.read_configure_value("COQ_LIB_DIR")` (env var or `CONFIGURE` file — no hardcoded path fallback), and writes skeleton `.v` files |
+| `absprog/gen_rel_lib.py` | Rocq library generator | Builds imports, `MretTy` (shared or per-function), function-scoped guard definitions such as `sll_copy_guardP`, loop-body scaffolding, and function-level `Parameter`/`Definition` blocks for each translated function |
+| `absprog/assemble.py` | Per-function lib assembly and merge | Assembles one function's LLM-provided blocks into the skeleton; `merge_rel_libs_into_file` combines multiple per-function libs into a single multi-function lib (used by multi-function synthesis) |
+| `absprog/synthesize.py` | Synthesis pipeline | Runs the LLM/backend loop, writes per-attempt artefacts, and promotes the accepted `_rel_lib.v` to `COQ_LIB_DIR`. `run_synthesis_pipeline` accepts `promote_rel_lib=False` so multi-function runs can defer promotion until after merge |
+| `absprog/synth_cli.py` | `llm4pv-synth` CLI | Handles single-file, multi-function-auto, and directory modes; orchestrates the merge step for multi-function C files |
 
 ### Important implementation notes
 
 - `gen_rel_lib.py` reuses `process_and_translate_file(...)` and `collect_func_extern_info(...)`, so the Rocq stub shape tracks the same translated assertion structure as the C rewrite stage.
 - The first invariant guard, if available, becomes a concrete function-scoped guard definition such as `{func_name}_guardP`, which avoids name collisions in multi-function files.
 - If any translated function returns more than one logical result, the generated `_rel_lib.v` also defines `maketuple` concretely as `(a, b)` so later VC files can reuse it.
+- **`MretTy` scoping**: a single-function `_rel_lib.v` declares `Parameter MretTy : Type.` once at the top and shares it. A multi-function lib instead declares `Parameter {func}_MretTy : Type.` inside each function's section and uses that scoped name everywhere in the section. This prevents one function's synthesized `MretTy` body from clashing with another's.
+- **Multi-function synthesis and merge**: `llm4pv-synth` on a multi-function C file without `--func-name` synthesizes each target into its own subdirectory, suppresses per-function promotion, then merges all accepted per-function libs into a single `{basename}_rel_lib.v` in `COQ_LIB_DIR`. Stale `{func}_rel_lib.v` files from older promotion runs are removed during merge.
+- **Data witnesses**: loop invariants of the form `exists w, ... t -> data == w ...` promote `w` (type `Z`) into the abstract loop state. The field list (`data`, `key`, `val`) is stored in `GenMonads/data/data_fields.json`; extend it when new data-bearing fields appear. Existentials bound to pointer fields (e.g., `exists nxt, x -> next == nxt`) are intentionally excluded.
 
 ## Tests
 

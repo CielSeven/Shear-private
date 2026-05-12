@@ -1,5 +1,21 @@
 #!/bin/bash
 # symexec.sh — CONFIGURE + CLI overrides + OUTPUT_PATH for generated V files
+#
+# Usage:
+#   scripts/symexec.sh
+#     Run with defaults from CONFIGURE.
+#
+#   scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c
+#     Run symexec for one C file.
+#
+#   scripts/symexec.sh --FULL_AUTO=true
+#     Append --full-auto when invoking symexec.
+#
+#   scripts/symexec.sh --full-auto
+#     Alias for --FULL_AUTO=true.
+#
+#   scripts/symexec.sh --FULL_AUTO=false
+#     Explicitly skip --full-auto, even if enabled via environment/config.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -15,6 +31,20 @@ if [ -z "${SYMEXEC_INCLUDE_DIRS:-}" ] && [ -n "${SYMEXEC_HEADER_DIR:-}" ]; then
   SYMEXEC_INCLUDE_DIRS="$SYMEXEC_HEADER_DIR"
 fi
 
+SYMEXEC_FULL_AUTO="${SYMEXEC_FULL_AUTO:-0}"
+
+parse_bool() {
+  case "$1" in
+    1|true|TRUE|True|yes|YES|on|ON) printf '1\n' ;;
+    0|false|FALSE|False|no|NO|off|OFF) printf '0\n' ;;
+    *)
+      echo "❌ Invalid boolean value: $1"
+      echo "   Expected one of: true, false, 1, 0, yes, no, on, off"
+      return 1
+      ;;
+  esac
+}
+
 # --- Parse CLI overrides: support both - and -- prefix
 FILE_ARG=""
 for arg in "$@"; do
@@ -27,6 +57,12 @@ for arg in "$@"; do
     -SYMEXEC_STRATEGY_PATHS=*|--SYMEXEC_STRATEGY_PATHS=*) SYMEXEC_STRATEGY_PATHS="${arg#*=}";;
     -OUTPUT_PATH=*|--OUTPUT_PATH=*) OUTPUT_PATH="${arg#*=}";;
     -FILE=*|--FILE=*)           FILE_ARG="${arg#*=}";;
+    -FULL_AUTO|--FULL_AUTO|-full-auto|--full-auto|full-auto|-SYMEXEC_FULL_AUTO|--SYMEXEC_FULL_AUTO) SYMEXEC_FULL_AUTO=1;;
+    -NO_FULL_AUTO|--NO_FULL_AUTO|-NO_SYMEXEC_FULL_AUTO|--NO_SYMEXEC_FULL_AUTO) SYMEXEC_FULL_AUTO=0;;
+    -FULL_AUTO=*|--FULL_AUTO=*|-SYMEXEC_FULL_AUTO=*|--SYMEXEC_FULL_AUTO=*)
+      parsed_full_auto="$(parse_bool "${arg#*=}")" || exit 1
+      SYMEXEC_FULL_AUTO="$parsed_full_auto"
+      ;;
     *) echo "⚠️  Unknown arg: $arg";;
   esac
 done
@@ -106,6 +142,11 @@ if [ -n "${SYMEXEC_STRATEGY_PATHS:-}" ]; then
   done
 fi
 
+FULL_AUTO_FLAGS=()
+if [ "$SYMEXEC_FULL_AUTO" = "1" ]; then
+  FULL_AUTO_FLAGS+=(--full-auto)
+fi
+
 mkdir -p "$LOGDIR_ABS" "$OUTPUT_ABS"
 [ -x "$SYMEXEC_ABS" ] || { echo "❌ symexec executable not found: $SYMEXEC_ABS"; exit 1; }
 
@@ -125,6 +166,7 @@ else
   echo "  OUTPUT_PATH  = $OUTPUT_ABS"
   echo "  SYMEXEC      = $SYMEXEC_ABS"
   echo "  INCLUDE_DIRS = ${INCLUDE_DIRS_ABS[*]}"
+  echo "  FULL_AUTO    = $([ "$SYMEXEC_FULL_AUTO" = "1" ] && echo true || echo false)"
   [ "${#STRATEGY_PATHS_DISPLAY[@]}" -gt 0 ] && echo "  STRATEGY_MAP = ${STRATEGY_PATHS_DISPLAY[*]}"
   echo
   cd "$C_DIR_ABS" || { echo "❌ Cannot enter $C_DIR_ABS"; exit 1; }
@@ -137,19 +179,29 @@ for f in "${FILES[@]}"; do
   goal_out="$OUTPUT_ABS/${base}_goal.v"
   auto_out="$OUTPUT_ABS/${base}_auto.v"
   manual_out="$OUTPUT_ABS/${base}_manual.v"
+  symexec_cmd=("$SYMEXEC_ABS" "${INCLUDE_FLAGS[@]}")
+
+  if [ "${#SLP_FLAGS[@]}" -gt 0 ]; then
+    symexec_cmd+=("${SLP_FLAGS[@]}")
+  fi
+
+  if [ "${#FULL_AUTO_FLAGS[@]}" -gt 0 ]; then
+    symexec_cmd+=("${FULL_AUTO_FLAGS[@]}")
+  fi
+
+  symexec_cmd+=(
+    --input-file="$f"
+    --goal-file="$goal_out"
+    --proof-auto-file="$auto_out"
+    --proof-manual-file="$manual_out"
+    --basic-assertion
+    --user-info=2
+  )
 
   [ -z "$FILE_ARG" ] && echo ">>> Processing $f"
   {
     echo "== $(date '+%F %T') : $f =="
-    "$SYMEXEC_ABS" \
-      "${INCLUDE_FLAGS[@]}" \
-      "${SLP_FLAGS[@]}" \
-      --input-file="$f" \
-      --goal-file="$goal_out" \
-      --proof-auto-file="$auto_out" \
-      --proof-manual-file="$manual_out" \
-      --basic-assertion \
-      --user-info=2
+    "${symexec_cmd[@]}"
     echo "exit code: $?"
   } > "$log" 2>&1 || true
 
@@ -167,3 +219,5 @@ if [ -z "$FILE_ARG" ]; then
   echo "   Logs   → $LOGDIR_ABS"
   echo "   Output → $OUTPUT_ABS"
 fi
+
+exit 0

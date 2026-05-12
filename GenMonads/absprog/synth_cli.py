@@ -5,8 +5,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import sys
 
+from GenMonads.absprog.assemble import merge_rel_libs_into_file
 from GenMonads.absprog.context import collect_all_synthesis_contexts
-from GenMonads.absprog.synthesize import run_synthesis_pipeline
+from GenMonads.absprog.synthesize import _default_coq_lib_dir, run_synthesis_pipeline
 from GenMonads.cli_common import (
     add_input_path_arguments,
     add_output_path_argument,
@@ -179,6 +180,21 @@ def main() -> None:
         help="Exclude a C basename or filename in directory mode (repeatable)",
     )
     parser.add_argument(
+        "--patch-rel-c",
+        action="store_true",
+        help=(
+            "After synthesis, eliminate the opaque MretTy placeholder in the target "
+            "_rel.c file and append residual program signatures. Requires --rel-c-path."
+        ),
+    )
+    parser.add_argument(
+        "--rel-c-path",
+        help=(
+            "Path to the _rel.c file to patch. Required when --patch-rel-c is set. "
+            "Not supported in directory mode."
+        ),
+    )
+    parser.add_argument(
         "-j",
         "--jobs",
         type=int,
@@ -188,8 +204,90 @@ def main() -> None:
     args = parser.parse_args()
     input_path, output_dir = _resolve_io(args, parser)
 
+    if args.patch_rel_c and not args.rel_c_path:
+        parser.error("--patch-rel-c requires --rel-c-path")
+    if args.rel_c_path and not args.patch_rel_c:
+        parser.error("--rel-c-path requires --patch-rel-c")
+
     if os.path.isdir(input_path):
+        if args.patch_rel_c:
+            parser.error("--patch-rel-c is not supported in directory mode")
         sys.exit(_run_batch(input_path, output_dir, args))
+
+    # Single-file mode: if --func-name is omitted and the file has multiple
+    # functions, synthesize each one into its own subdirectory.
+    if not args.func_name and input_path.endswith(".c"):
+        try:
+            contexts = collect_all_synthesis_contexts(input_path)
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
+
+        if len(contexts) > 1:
+            if args.patch_rel_c:
+                parser.error("--patch-rel-c is not supported when synthesizing multiple functions")
+            failures = []
+            passed_assembled_paths = []
+            for context in contexts:
+                func_name = context["summary"]["func_name"]
+                target_dir = os.path.join(output_dir, context["id"])
+                print(f"\n=== {context['id']} ({func_name}) ===")
+                try:
+                    summary = run_synthesis_pipeline(
+                        input_path=input_path,
+                        output_dir=target_dir,
+                        func_name=func_name,
+                        backend=args.backend,
+                        replay_from=args.replay_from,
+                        response_file=args.response_file,
+                        command=args.command,
+                        few_shot_paths=args.few_shot,
+                        run_check=not args.no_check,
+                        max_retries=args.max_retries,
+                        promote_rel_lib=False,
+                    )
+                except Exception as exc:
+                    print(f"Failed: {context['id']} ({exc})", file=sys.stderr)
+                    failures.append(context["id"])
+                    continue
+                print(
+                    f"{context['id']}: {summary['status']} "
+                    f"(attempts={summary['attempt_count']}, rocq={summary['check']['status']})"
+                )
+                assembled = summary["files"].get("assembled_rel_lib")
+                if summary["status"] == "passed" and assembled:
+                    passed_assembled_paths.append(assembled)
+
+            # Merge per-function passed libs into a single {basename}_rel_lib.v
+            if passed_assembled_paths:
+                basename = os.path.splitext(os.path.basename(input_path))[0]
+                libs_dir = _default_coq_lib_dir()
+                merged_target = os.path.join(libs_dir, f"{basename}_rel_lib.v")
+                try:
+                    merge_rel_libs_into_file(
+                        input_path, passed_assembled_paths, merged_target
+                    )
+                    print(f"\nMerged rel_lib: {merged_target}")
+                except Exception as exc:
+                    print(f"Failed to merge rel_lib: {exc}", file=sys.stderr)
+                    failures.append(f"merge:{basename}")
+
+                # Remove stale per-function {func}_rel_lib.v files in libs_dir
+                # that correspond to functions in this C file (from pre-merge
+                # promotion runs).  Keep only the merged {basename}_rel_lib.v.
+                func_names = {ctx["summary"]["func_name"] for ctx in contexts}
+                for func_name in func_names:
+                    if func_name == basename:
+                        continue
+                    for ext in (".v", ".vo", ".vok", ".vos", ".glob"):
+                        stale = os.path.join(libs_dir, f"{func_name}_rel_lib{ext}")
+                        if os.path.isfile(stale):
+                            try:
+                                os.remove(stale)
+                                print(f"Removed stale per-function lib: {stale}")
+                            except OSError as exc:
+                                print(f"Warning: could not remove {stale} ({exc})", file=sys.stderr)
+            sys.exit(1 if failures else 0)
 
     try:
         summary = run_synthesis_pipeline(
@@ -203,6 +301,7 @@ def main() -> None:
             few_shot_paths=args.few_shot,
             run_check=not args.no_check,
             max_retries=args.max_retries,
+            rel_c_path=args.rel_c_path if args.patch_rel_c else None,
         )
     except Exception as exc:
         print(str(exc), file=sys.stderr)

@@ -68,11 +68,20 @@ class AssertionProcessor:
             try:
                 translated, vars = self.translator.translate_assertion(funcspec['ensure'], reset=False)
                 var_types = self.translator.last_generated_var_types[:]
+
+                # Detect data-field witnesses bound by the original Ensure's
+                # ``exists`` clause (e.g. ``__return -> data == d``).  These
+                # become abstract-state-visible variables, the same way they
+                # are for loop invariants.
+                pre_existing = extract_pre_existing_vars(funcspec['ensure'])
+                data_witnesses = extract_data_witnesses(translated, pre_existing)
+
                 result['ensure'] = {
                     'original': funcspec['ensure'],
                     'translated': translated,
                     'variables': vars,
                     'variable_types': var_types,
+                    'data_witnesses': data_witnesses,
                 }
                 all_variables.extend(vars)
                 all_variable_types = result.get('variable_types', [])
@@ -172,13 +181,22 @@ class AssertionProcessor:
             
             processed_functions.append({
                 'function': func_data['function'],
+                'return_type': func_data.get('return_type', ''),
                 'funcspec': f_spec,
                 'inner_assertions': f_inner
             })
 
+        # Mirror return_type at top level for the single-function fallback.
+        top_level_return_type = ''
+        for func in processed_functions:
+            if func['function'] == extraction_result['function']:
+                top_level_return_type = func.get('return_type', '')
+                break
+
         return {
             'file': extraction_result['file'],
             'function': extraction_result['function'],
+            'return_type': top_level_return_type,
             'funcspec': translated_funcspec,
             'inner_assertions': translated_inner,
             'functions': processed_functions

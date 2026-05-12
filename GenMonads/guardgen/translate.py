@@ -61,6 +61,18 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
         resolved = _resolve_ptr(ptr)
         root_atom = roots_by_ptr.get(resolved)
         if root_atom is None:
+            # Try field-deref: ``<base>-><field>`` may not appear in any
+            # spatial predicate directly, but its base might be a root.
+            if "->" in resolved:
+                base, _, field = resolved.partition("->")
+                base = _normalize_ptr(base)
+                field = field.strip()
+                base = _resolve_ptr(base)
+                base_atom = roots_by_ptr.get(base)
+                if base_atom is not None and base_atom.spec.to_coq_field_deref_null is not None:
+                    return base_atom.spec.to_coq_field_deref_null(
+                        base_atom.payload, field, is_eq
+                    )
             # Improve diagnostics depending on spatial occurrence
             if resolved in seg_ptrs:
                 raise ValueError(
@@ -158,6 +170,8 @@ def gen_coq_guard(inv: str, cond: str, extra_vars: list[str] | None = None) -> s
     if not abs_names:
         return "fun _ => " + body
     if len(abs_names) == 1:
-        return "fun a =>\n  " + body
+        # Use the variable's name directly as the binder so the body's
+        # reference to it (e.g. "l1 <> []") resolves.
+        return f"fun {abs_names[0]} =>\n  " + body
     pat = ", ".join(abs_names)
     return "fun a =>\n  let '(" + pat + ") := a in\n  " + body

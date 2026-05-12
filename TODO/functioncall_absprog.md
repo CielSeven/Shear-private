@@ -405,6 +405,38 @@ The order is:
 2. callee return type
 3. `program unit (caller_return_type)`
 
+## Patching `_rel.c` (opt-in)
+
+By default, `llm4pv-synth` does not modify any `_rel.c` file. The rel-lib is
+synthesized, residual definitions are appended to the rel-lib, and nothing else.
+
+To patch the corresponding `_rel.c`, pass both flags:
+
+```bash
+uv run llm4pv-synth input.c output/ \
+  --patch-rel-c \
+  --rel-c-path path/to/input_rel.c
+```
+
+The two flags are mutually required: `--patch-rel-c` without `--rel-c-path` (or
+vice versa) is an error. Directory (batch) mode does not support `--patch-rel-c`.
+
+When enabled, the rel-c patch step performs two rewrites on the file at
+`--rel-c-path`:
+
+1. **MretTy elimination.** It reads the concrete `Definition MretTy : Type := T.`
+   from the synthesized rel-lib, removes the line
+   `/*@ Extern Coq (MretTy :: *) */`, and rewrites every remaining `MretTy`
+   token to the concrete type (parenthesized if it is not a bare identifier).
+   For example, given `Definition MretTy : Type := list Z.`, the declaration
+   `(demo_M_loop_end: MretTy -> program unit (list Z))` becomes
+   `(demo_M_loop_end: (list Z) -> program unit (list Z))`.
+
+2. **Residual signature append.** Any generated
+   `residual_prog_in_{caller}_call_{n}` definitions get a matching
+   `/*@ Extern Coq (... : ...) */` entry appended into the existing
+   `Extern Coq` block. Duplicate entries are skipped, so re-running is safe.
+
 ## Example: `sll_multi_merge`
 
 Current generated residual definitions in the synthesized rel-lib include:
@@ -448,22 +480,42 @@ It is not a general whole-program interprocedural analyzer for arbitrary C or ar
 
 ## Issues
 
-- [ ] **Tail-position callee call produces `None` body**: When the callee is in tail position (no continuation after it), the residual body is the literal string `"None"`, which is not valid Coq. Should emit `return` (identity continuation) or be flagged as a trivial/degenerate residual. See `_build_residual_segment` when `cont is None` (`gen_func_residual.py:1092`).
+- [x] **Tail-position callee call produces `None` body**: When the callee is in tail position (no continuation after it), the residual body is the literal string `"None"`, which is not valid Coq. See `_build_residual_segment` when `cont is None` (`gen_func_residual.py:1092`).
 
-- [ ] **`append_func_residual_definitions` is not idempotent**: Running the CLI or API twice on the same file appends duplicate residual definitions. There is no check for whether residual definitions already exist before appending. Should detect and skip or replace existing residual definitions with the same name.
+  **Plan**: In `_build_residual_segment`, when `cont is None`, emit `fun r => return r` (identity continuation) instead of `fun _ => None`. Change the `binder` to a fresh name (e.g. `r`) and `body` to `return r`. Update the existing test `test_generate_func_residual_segments_for_call_in_tail_has_no_residual` to assert the new valid Coq output instead of checking for `"None"`.
 
-- [ ] **Tuple-destructuring bind patterns not supported**: `_split_top_level_bind` (`gen_func_residual.py:854`) rejects any binder that is not a simple identifier (e.g., `'(x, y) <- m ;; k` is not parsed as a bind). If a caller uses tuple-destructuring binds, the traversal will miss callee calls inside.
+- [ ] **`append_func_residual_definitions` is not idempotent**: Running the CLI or API twice on the same file appends duplicate residual definitions. No check for existing definitions before appending.
 
-- [ ] **`_render_polished_residual_definition` is a dead wrapper**: This function (`gen_func_residual.py:1120`) just delegates to `_render_residual_definition` with the same arguments and adds no logic. It should either be removed or extended with actual polishing of the definition header.
+  **Plan**: Before appending, scan the file text for existing `Definition residual_prog_in_{caller_component}_call_` blocks using `_DEF_RE`. Strip all matching blocks (from `Definition` to the next `Definition` or EOF). Then append the freshly generated ones. This makes re-runs replace rather than duplicate. Add a test that calls `append_func_residual_definitions` twice and asserts only one copy of each definition exists.
 
-- [ ] **`_strip_leading_fun` in `_collect_residuals` discards all `fun` layers without recording binders**: At `gen_func_residual.py:1211`, `_strip_leading_fun` strips every leading `fun ... =>` without propagating the binder names or their types into the type environment. This means type inference is lost for inner parameters of curried definitions when traversal enters them directly (as opposed to via named definition unfolding which handles this separately).
+- [x] **Tuple-destructuring bind patterns not supported**: `_split_top_level_bind` (`gen_func_residual.py:854`) rejects any binder that is not a simple identifier (e.g., `'(x, y) <- m ;; k`).
 
-- [ ] **`_parse_parameter_signatures` only matches single-line Parameter declarations**: The regex at `gen_func_residual.py:137` requires the entire `Parameter ... : ... .` on one line. Multi-line Parameter declarations (which Coq allows) will not be parsed, causing missing callee return types and incorrect residual headers.
+  **Plan**: Extend `_split_top_level_bind` to accept tuple patterns. After finding `<-` and `;;`, if the binder text is not a simple identifier, check if it matches a tuple pattern (starts with `'(` or `(`). Return it as-is and let `_collect_residuals` handle the bind case by treating a tuple binder like a `let` decomposition: `v <- m ;; let '(x,y) := v in k`. Propagate types via `_bind_pattern_types`. Add a test with `'(x, y) <- callee_M a ;; k x y`.
 
-- [ ] **`_collect_locally_bound_identifiers` uses a fragile regex for match patterns**: The regex `\|\s*(.*?)=>` (`gen_func_residual.py:994`) is non-greedy and single-line. Multi-token patterns or patterns on separate lines from `=>` may not be captured correctly, leading to incorrect captured-identifier sets.
+- [ ] **`_render_polished_residual_definition` is a dead wrapper**: (`gen_func_residual.py:1120`) just delegates to `_render_residual_definition`.
 
-- [ ] **Type environment not propagated through `choice` branches**: When descending into `choice b1 b2` (`gen_func_residual.py:1361`), the type environment is passed through unchanged, but the result type of the choice expression is not inferred for surrounding bind contexts. This can cause missing type annotations on captured identifiers when the callee appears inside a choice branch nested within a bind.
+  **Plan**: Inline the call — replace all uses of `_render_polished_residual_definition` (only in `polish_residual_segment`) with `_render_residual_definition` directly, then delete the wrapper function.
 
-- [ ] **Only one callee supported per invocation**: The API takes a single `callee_M` name. If a caller invokes multiple different callees, the tool must be run once per callee. The document does not mention this limitation, and the CLI provides no batch mode for multiple callees.
+- [x] **`_strip_leading_fun` in `_collect_residuals` discards all `fun` layers without recording binders**: At `gen_func_residual.py:1211`, type info for inner parameters is lost.
 
-- [ ] **Document does not describe behavior for recursive callers**: If the caller definition is (mutually) recursive, the `seen_defs` guard (`gen_func_residual.py:1426`) prevents infinite unfolding but silently skips recursive call sites. The document should describe this behavior and its implications for residual completeness.
+  **Plan**: Replace the `_strip_leading_fun` call in `_collect_residuals` with a loop that uses `_parse_leading_fun` repeatedly. For each peeled `fun binder => body` layer, bind the binder into `type_env` using the definition's signature (via `_split_top_level_arrow_type` on the current block's signature, consuming one arg type per layer). This mirrors what `_infer_initial_type_environment` does but works for direct traversal entry points. Add a test where a curried `fun a b =>` body contains a callee, and assert the captured identifier types are inferred.
+
+- [x] **`_parse_parameter_signatures` only matches single-line Parameter declarations**: The regex (`gen_func_residual.py:137`) requires everything on one line.
+
+  **Plan**: Change the regex to first join continuation lines (lines starting with whitespace after a `Parameter` line) before matching. Alternatively, pre-process the file text to collapse multi-line Parameter declarations onto single lines before the regex runs. Add a test with a two-line `Parameter` declaration and assert its signature is parsed.
+
+- [x] **`_collect_locally_bound_identifiers` uses a fragile regex for match patterns**: The regex `\|\s*(.*?)=>` (`gen_func_residual.py:994`) is non-greedy and single-line.
+
+  **Plan**: Replace the regex-based match-pattern scan with a call to `_parse_top_level_match` (which already handles nesting correctly). Collect all patterns from the parsed branches and pass them through `_collect_pattern_bound_identifiers`. This reuses the robust structural parser instead of a fragile regex. Add a test with a multi-line match pattern and verify the bound identifiers are correct.
+
+- [ ] **Type environment not propagated through `choice` branches**: (`gen_func_residual.py:1361`) type env is unchanged through choice.
+
+  **Plan**: This is low-impact because `choice` branches don't introduce new bindings — the issue is only about the *result type* of the choice for an outer bind. The fix belongs in `_infer_application_result_type`: add a `choice` case that infers the result type as the type of either branch (they should agree). This allows an outer `x <- choice(...) ;; k` to give `x` a type. Add a test where a callee is inside a choice that's bound to a variable, and assert the variable's type propagates.
+
+- [ ] **Only one callee supported per invocation**: The API takes a single `callee_M`. Multiple callees require multiple runs.
+
+  **Plan**: Add a `--CALLEE` repeat option to the CLI (accept comma-separated or multiple `--CALLEE` flags). In the API, add `append_func_residual_definitions_multi(coqfilepath, callees, caller)` that loops over callees, accumulates all entries with a shared `position_ref` counter, then appends them all at once. The single-callee API remains unchanged for backward compatibility. Document the limitation in this file's "Current Scope" section until the multi-callee API is implemented.
+
+- [ ] **Document does not describe behavior for recursive callers**: The `seen_defs` guard (`gen_func_residual.py:1426`) silently skips recursive call sites.
+
+  **Plan**: Add a "Limitations" subsection to this document describing: (1) recursive definitions are unfolded at most once per traversal path via `seen_defs`, (2) callee calls reachable only through a second recursive unfolding are not discovered, (3) this is correct for the current pipeline because generated `_rel_lib.v` definitions are non-recursive (loops use `repeat_break`, not recursion). No code change needed — documentation only.

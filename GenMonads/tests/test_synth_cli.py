@@ -6,6 +6,13 @@ from GenMonads.absprog import synth_cli
 
 
 def test_synth_cli_accepts_alias_flags_for_single_input(monkeypatch, tmp_path, capsys):
+    # The CLI argparse normalizes paths; the underlying pipeline is mocked
+    # so the file does not need to be a real source.  Use a tmp_path file
+    # to keep the test self-contained.
+    c_file = tmp_path / "demo.c"
+    c_file.write_text("int demo(void) { return 0; }\n", encoding="utf-8")
+    output_dir = tmp_path / "out"
+
     calls = {}
 
     def fake_run(**kwargs):
@@ -28,16 +35,16 @@ def test_synth_cli_accepts_alias_flags_for_single_input(monkeypatch, tmp_path, c
     monkeypatch.setattr(synth_cli, "run_synthesis_pipeline", fake_run)
     monkeypatch.setattr(sys, "argv", [
         "llm4pv-synth",
-        "--C_DIR=shape_invdataset/sll/sll_reverse.c",
-        f"--OUTPUT_PATH={tmp_path}",
+        f"--C_DIR={c_file}",
+        f"--OUTPUT_PATH={output_dir}",
         "--max-retries=2",
         "--no-check",
     ])
 
     synth_cli.main()
 
-    assert calls["kwargs"]["input_path"] == "shape_invdataset/sll/sll_reverse.c"
-    assert calls["kwargs"]["output_dir"] == str(tmp_path)
+    assert calls["kwargs"]["input_path"] == str(c_file)
+    assert calls["kwargs"]["output_dir"] == str(output_dir)
     assert calls["kwargs"]["max_retries"] == 2
     assert calls["kwargs"]["run_check"] is False
     captured = capsys.readouterr()
@@ -45,6 +52,10 @@ def test_synth_cli_accepts_alias_flags_for_single_input(monkeypatch, tmp_path, c
 
 
 def test_synth_cli_accepts_file_alias_for_single_input(monkeypatch, tmp_path, capsys):
+    c_file = tmp_path / "demo.c"
+    c_file.write_text("int demo(void) { return 0; }\n", encoding="utf-8")
+    output_dir = tmp_path / "out"
+
     calls = {}
 
     def fake_run(**kwargs):
@@ -59,14 +70,14 @@ def test_synth_cli_accepts_file_alias_for_single_input(monkeypatch, tmp_path, ca
     monkeypatch.setattr(synth_cli, "run_synthesis_pipeline", fake_run)
     monkeypatch.setattr(sys, "argv", [
         "llm4pv-synth",
-        "--FILE=shape_invdataset/sll/sll_reverse.c",
-        f"--OUTPUT_PATH={tmp_path}",
+        f"--FILE={c_file}",
+        f"--OUTPUT_PATH={output_dir}",
     ])
 
     synth_cli.main()
 
-    assert calls["kwargs"]["input_path"] == "shape_invdataset/sll/sll_reverse.c"
-    assert calls["kwargs"]["output_dir"] == str(tmp_path)
+    assert calls["kwargs"]["input_path"] == str(c_file)
+    assert calls["kwargs"]["output_dir"] == str(output_dir)
     captured = capsys.readouterr()
     assert "Status: passed" in captured.out
 
@@ -188,13 +199,15 @@ def test_synth_cli_directory_mode_parallelizes_per_c_file(monkeypatch, tmp_path,
     assert f"done {input_dir / 'beta.c'}" in captured.out
 
 
-def test_synth_cli_reports_precise_missing_output_error(monkeypatch, capsys):
+def test_synth_cli_reports_precise_missing_output_error(monkeypatch, tmp_path, capsys):
+    c_file = tmp_path / "demo.c"
+    c_file.write_text("int demo(void) { return 0; }\n", encoding="utf-8")
     monkeypatch.setattr(
         sys,
         "argv",
         [
             "llm4pv-synth",
-            "--FILE=shape_invdataset/sll/sll_reverse.c",
+            f"--FILE={c_file}",
         ],
     )
 

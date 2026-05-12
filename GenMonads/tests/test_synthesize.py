@@ -7,6 +7,8 @@ from GenMonads.absprog.context import collect_synthesis_context
 from GenMonads.absprog.parse_coq import parse_synthesized_components
 from GenMonads.absprog.synthesize import (
     _append_missing_residual_decls_to_rel_c,
+    _eliminate_mretty_in_rel_c,
+    _extract_mretty_type,
     _promote_rel_lib_if_accepted,
     _sync_residual_artifacts,
     generate_candidate_response,
@@ -15,13 +17,140 @@ from GenMonads.absprog.synthesize import (
 from GenMonads.absprog.templates import render_prompt, render_repair_prompt
 
 
-def _load_example():
-    with open("few-shot-examples/absprog/sll_reverse.auto.json", "r", encoding="utf-8") as f:
-        return json.load(f)
+_GOLD_DATA = {
+    "MretTy": "list Z",
+    "components": {
+        "M_loop_before": (
+            "Definition sll_reverse_M_loop_before : list Z -> MONAD (list Z * list Z) :=\n"
+            "  fun l => return (nil, l)."
+        ),
+        "M_1": (
+            "Definition sll_reverse_M_loop_M1 : (list Z * list Z) -> MONAD MretTy:=\n"
+            "  fun '(l1,l2) => return l1."
+        ),
+        "M_2": (
+            "Definition sll_reverse_M_loop_M2 : (list Z * list Z) -> MONAD (list Z * list Z) :=\n"
+            "  fun '(l1,l2) =>\n"
+            "    match l2 with\n"
+            "    | nil => return (l1,l2)\n"
+            "    | v :: l2' => return (v :: l1, l2')\n"
+            "    end."
+        ),
+        "M_loop_end": (
+            "Definition sll_reverse_M_loop_end : MretTy -> MONAD (list Z):=\n"
+            "  fun l => return l."
+        ),
+    },
+}
 
 
-def test_render_prompt_uses_actual_context_schema():
-    example = _load_example()
+# Synthetic in-test C sources mirroring the shapes used by the synthesis
+# pipeline tests.  Kept in the test module so the suite is self-contained.
+_SLL_REVERSE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list* sll_reverse(struct list* head)\n'
+    '/*@\n'
+    '      Require listrep(head)\n'
+    '      Ensure  listrep(__return)\n'
+    '*/\n'
+    '{\n'
+    '    struct list* prev = (void *)0;\n'
+    '    struct list* curr = head;\n'
+    '    /*@ Inv listrep(prev) * listrep(curr) */\n'
+    '    while (curr != (void *) 0) {\n'
+    '        struct list* next = curr->next;\n'
+    '        curr->next = prev;\n'
+    '        prev = curr;\n'
+    '        curr = next;\n'
+    '    }\n'
+    '    return prev;\n'
+    '}\n'
+)
+
+_SLL_MULTI_MERGE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list * sll_merge(struct list * x, struct list * y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */;\n'
+    '\n'
+    'struct list * sll_multi_merge(struct list * x, struct list * y, struct list * z)\n'
+    '/*@ Require listrep(x) * listrep(y) * listrep(z)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *t, *u;\n'
+    '    if (x == (struct list *) 0) {\n'
+    '        t = sll_merge(y, z);\n'
+    '        return t;\n'
+    '    }\n'
+    '    t = x;\n'
+    '    u = t->next;\n'
+    '    /*@ Inv exists v, v == t -> data && u == t -> next && t != 0 &&\n'
+    '            listrep(y) * listrep(z) * listrep(u) * lseg(x@pre, t) */\n'
+    '    while (u) {\n'
+    '        if (y) {\n'
+    '            t->next = y;\n'
+    '            t = y;\n'
+    '            y = y->next;\n'
+    '        } else {\n'
+    '            u = sll_merge(u, z);\n'
+    '            t->next = u;\n'
+    '            return x;\n'
+    '        }\n'
+    '        if (z) {\n'
+    '            t->next = z;\n'
+    '            t = z;\n'
+    '            z = z->next;\n'
+    '        } else {\n'
+    '            u = sll_merge(u, y);\n'
+    '            t->next = u;\n'
+    '            return x;\n'
+    '        }\n'
+    '        t->next = u;\n'
+    '        t = u;\n'
+    '        u = u->next;\n'
+    '    }\n'
+    '    u = sll_merge(y, z);\n'
+    '    t->next = u;\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+def _write_sll_reverse_c(tmp_path):
+    path = tmp_path / "sll_reverse.c"
+    path.write_text(_SLL_REVERSE_SRC, encoding="utf-8")
+    return str(path)
+
+
+def _write_sll_multi_merge_c(tmp_path):
+    path = tmp_path / "sll_multi_merge.c"
+    path.write_text(_SLL_MULTI_MERGE_SRC, encoding="utf-8")
+    return str(path)
+
+
+def _load_example(tmp_path):
+    """Build a synthesis-context dict for the ``sll_reverse`` shape from a
+    synthetic in-tmp_path C file.  Replaces reading the checked-in
+    ``few-shot-examples/absprog/sll_reverse.auto.json``.
+    """
+    c_file = _write_sll_reverse_c(tmp_path)
+    return collect_synthesis_context(c_file)
+
+
+def _load_example_with_gold(tmp_path):
+    example = _load_example(tmp_path)
+    example["gold"] = _GOLD_DATA
+    return example
+
+
+def test_render_prompt_uses_actual_context_schema(tmp_path):
+    example = _load_example_with_gold(tmp_path)
 
     prompt = render_prompt(example, [example])
 
@@ -32,16 +161,14 @@ def test_render_prompt_uses_actual_context_schema():
     assert "Definition MretTy : Type := list Z." in prompt
 
 
-def test_render_prompt_mentions_available_callees_when_present():
-    context = collect_synthesis_context(
-        "shape_invdataset/sll/sll_multi_merge.c",
-        func_name="sll_multi_merge",
-    )
+def test_render_prompt_mentions_available_callees_when_present(tmp_path):
+    c_file = _write_sll_multi_merge_c(tmp_path)
+    context = collect_synthesis_context(c_file, func_name="sll_multi_merge")
 
     prompt = render_prompt(context)
 
     assert "## Available Callees" in prompt
-    assert "`sll_merge_M`: list Z -> list Z -> MONAD (list Z)" in prompt
+    assert "`sll_merge_M` (same-file): list Z -> list Z -> MONAD (list Z)" in prompt
     assert "Use opaque callee placeholders when modeling same-file calls: sll_merge_M" in prompt
     assert "## Selected Scaffold" in prompt
     assert "Template case: both" in prompt
@@ -61,8 +188,8 @@ def test_render_prompt_mentions_available_callees_when_present():
     assert "f_M(l1, ..., lm) :=" not in prompt
 
 
-def test_render_repair_prompt_includes_failure_feedback():
-    example = _load_example()
+def test_render_repair_prompt_includes_failure_feedback(tmp_path):
+    example = _load_example(tmp_path)
 
     prompt = render_repair_prompt(
         example,
@@ -202,16 +329,13 @@ Definition foo_M_loop_end (r : MretTy) : MONAD (list Z) :=
     assert "SomeModule.helper" in blocks["M_loop_before"]
 
 
-def test_assemble_rel_lib_from_blocks_replaces_parameters():
-    example = _load_example()
+def test_assemble_rel_lib_from_blocks_replaces_parameters(tmp_path):
+    example = _load_example_with_gold(tmp_path)
     blocks = {"MretTy": f"Definition MretTy : Type := {example['gold']['MretTy']}."}
     blocks.update(example["gold"]["components"])
 
-    content = assemble_rel_lib_from_blocks(
-        "shape_invdataset/sll/sll_reverse.c",
-        "sll_reverse",
-        blocks,
-    )
+    c_file = _write_sll_reverse_c(tmp_path)
+    content = assemble_rel_lib_from_blocks(c_file, "sll_reverse", blocks)
 
     assert "Parameter MretTy : Type." not in content
     assert "Parameter sll_reverse_M_loop_before" not in content
@@ -220,7 +344,7 @@ def test_assemble_rel_lib_from_blocks_replaces_parameters():
     assert "Definition sll_reverse_M_loop_M1 : (list Z * list Z) -> MONAD MretTy:=" in content
 
 
-def test_assemble_rel_lib_from_blocks_preserves_callee_declarations():
+def test_assemble_rel_lib_from_blocks_preserves_callee_declarations(tmp_path):
     blocks = {
         "MretTy": "Definition MretTy : Type := list Z.",
         "M_loop_before": """Definition sll_multi_merge_M_loop_before
@@ -237,11 +361,8 @@ def test_assemble_rel_lib_from_blocks_preserves_callee_declarations():
   fun l => return l.""",
     }
 
-    content = assemble_rel_lib_from_blocks(
-        "shape_invdataset/sll/sll_multi_merge.c",
-        "sll_multi_merge",
-        blocks,
-    )
+    c_file = _write_sll_multi_merge_c(tmp_path)
+    content = assemble_rel_lib_from_blocks(c_file, "sll_multi_merge", blocks)
 
     assert "Parameter sll_merge_M : list Z -> list Z -> MONAD (list Z)." in content
     assert "Definition sll_multi_merge_M_loop_before" in content
@@ -379,12 +500,10 @@ Definition sll_multi_merge_M : list Z -> list Z -> list Z -> MONAD (list Z) :=
         encoding="utf-8",
     )
 
-    context = collect_synthesis_context(
-        "shape_invdataset/sll/sll_multi_merge.c",
-        func_name="sll_multi_merge",
-    )
+    c_file = _write_sll_multi_merge_c(tmp_path)
+    context = collect_synthesis_context(c_file, func_name="sll_multi_merge")
 
-    files = _sync_residual_artifacts(context, str(rel_lib))
+    files = _sync_residual_artifacts(context, str(rel_lib), rel_c_path=str(rel_c))
 
     assert files["rel_lib"] == str(rel_lib)
     assert files["rel_c"] == str(rel_c)
@@ -392,16 +511,90 @@ Definition sll_multi_merge_M : list Z -> list Z -> list Z -> MONAD (list Z) :=
     assert "Definition residual_prog_in_sll_multi_merge_M_call_2 (l4 : list Z) : list Z -> MONAD (list Z) :=" in rel_lib_content
     rel_c_content = rel_c.read_text(encoding="utf-8")
     assert "(residual_prog_in_sll_multi_merge_M_call_2: list Z -> list Z -> program unit (list Z))" in rel_c_content
+    assert "MretTy" not in rel_c_content
+    assert "program unit (early_result (list Z) (list Z))" in rel_c_content
+    assert "(sll_multi_merge_M_loop_end: (list Z) -> program unit (list Z))" in rel_c_content
+
+
+def test_eliminate_mretty_in_rel_c_replaces_and_removes_declaration(tmp_path):
+    rel_c = tmp_path / "demo_rel.c"
+    rel_c.write_text(
+        """#include "safeexec_def.h"
+
+/*@ Import Coq Require Import demo_rel_lib */
+/*@ Extern Coq (MretTy :: *) */
+/*@ Extern Coq
+               (demo_M_loop: list Z -> program unit MretTy)
+               (demo_M_loop_end: MretTy -> program unit (list Z))
+               */
+""",
+        encoding="utf-8",
+    )
+
+    result = _eliminate_mretty_in_rel_c(str(rel_c), "list Z")
+    assert result == str(rel_c)
+    content = rel_c.read_text(encoding="utf-8")
+    assert "MretTy" not in content
+    assert "/*@ Extern Coq (MretTy :: *) */" not in content
+    assert "(demo_M_loop: list Z -> program unit (list Z))" in content
+    assert "(demo_M_loop_end: (list Z) -> program unit (list Z))" in content
+
+
+def test_extract_mretty_type_reads_definition(tmp_path):
+    rel_lib = tmp_path / "x_rel_lib.v"
+    rel_lib.write_text(
+        "Parameter foo : nat.\nDefinition MretTy : Type := list Z.\n",
+        encoding="utf-8",
+    )
+    assert _extract_mretty_type(str(rel_lib)) == "list Z"
+
+
+def test_extract_mretty_type_strips_percent_type_notation(tmp_path):
+    rel_lib = tmp_path / "x_rel_lib.v"
+    rel_lib.write_text(
+        "Definition MretTy : Type := (list Z * list Z * Z)%type.\n",
+        encoding="utf-8",
+    )
+    assert _extract_mretty_type(str(rel_lib)) == "(list Z * list Z * Z)"
+
+
+def test_eliminate_mretty_in_rel_c_handles_tuple_concrete_type(tmp_path):
+    rel_c = tmp_path / "demo_rel.c"
+    rel_c.write_text(
+        """/*@ Extern Coq (MretTy :: *) */
+/*@ Extern Coq
+               (demo_M_loop: list Z -> program unit MretTy)
+               (demo_M_loop_end: MretTy -> program unit (list Z))
+               */
+""",
+        encoding="utf-8",
+    )
+
+    _eliminate_mretty_in_rel_c(str(rel_c), "(list Z * list Z * Z)")
+    content = rel_c.read_text(encoding="utf-8")
+    assert "MretTy" not in content
+    assert "%type" not in content
+    assert "(demo_M_loop: list Z -> program unit (list Z * list Z * Z))" in content
+    assert "(demo_M_loop_end: (list Z * list Z * Z) -> program unit (list Z))" in content
+
+
+def _write_example_with_gold(tmp_path):
+    """Write a temporary example JSON that includes inline gold data."""
+    example = _load_example_with_gold(tmp_path)
+    path = tmp_path / "sll_reverse_with_gold.json"
+    path.write_text(json.dumps(example), encoding="utf-8")
+    return str(path)
 
 
 def test_run_synthesis_pipeline_replay_backend_writes_artifacts(tmp_path):
     output_dir = tmp_path / "synth"
+    example_path = _write_example_with_gold(tmp_path)
 
     summary = run_synthesis_pipeline(
-        input_path="few-shot-examples/absprog/sll_reverse.auto.json",
+        input_path=example_path,
         output_dir=str(output_dir),
         backend="gold-example",
-        few_shot_paths=["few-shot-examples/absprog/sll_reverse.auto.json"],
+        few_shot_paths=[example_path],
         run_check=False,
     )
 
@@ -411,7 +604,7 @@ def test_run_synthesis_pipeline_replay_backend_writes_artifacts(tmp_path):
     assert (output_dir / "sll_reverse.response.txt").exists()
     assert (output_dir / "sll_reverse.parsed.json").exists()
     assert (output_dir / "sll_reverse_rel_lib.v").exists()
-    assert files["context"] == "few-shot-examples/absprog/sll_reverse.auto.json"
+    assert files["context"] == example_path
 
     assembled = (output_dir / "sll_reverse_rel_lib.v").read_text(encoding="utf-8")
     assert "Definition MretTy : Type := list Z." in assembled
@@ -422,7 +615,7 @@ def test_run_synthesis_pipeline_replay_backend_writes_artifacts(tmp_path):
 
 
 def test_generate_candidate_response_command_backend_uses_stdin_and_placeholders(monkeypatch, tmp_path):
-    example = _load_example()
+    example = _load_example(tmp_path)
     prompt_file = tmp_path / "prompt.txt"
     context_file = tmp_path / "context.json"
     prompt_text = "PROMPT CONTENT"
@@ -463,16 +656,16 @@ def test_generate_candidate_response_command_backend_uses_stdin_and_placeholders
 
 
 def test_run_synthesis_pipeline_command_backend_writes_artifacts(monkeypatch, tmp_path):
-    example = _load_example()
+    gold = _GOLD_DATA
     output_dir = tmp_path / "synth"
     response_text = "\n".join(
         [
             "```coq",
-            f"Definition MretTy : Type := {example['gold']['MretTy']}.",
-            example["gold"]["components"]["M_loop_before"],
-            example["gold"]["components"]["M_1"],
-            example["gold"]["components"]["M_2"],
-            example["gold"]["components"]["M_loop_end"],
+            f"Definition MretTy : Type := {gold['MretTy']}.",
+            gold["components"]["M_loop_before"],
+            gold["components"]["M_1"],
+            gold["components"]["M_2"],
+            gold["components"]["M_loop_end"],
             "```",
             "",
         ]
@@ -488,8 +681,9 @@ def test_run_synthesis_pipeline_command_backend_writes_artifacts(monkeypatch, tm
 
     monkeypatch.setattr("GenMonads.absprog.synthesize.subprocess.run", fake_run)
 
+    example_path = _write_example_with_gold(tmp_path)
     summary = run_synthesis_pipeline(
-        input_path="few-shot-examples/absprog/sll_reverse.auto.json",
+        input_path=example_path,
         output_dir=str(output_dir),
         backend="command",
         command="codex exec",
@@ -524,8 +718,9 @@ def test_run_synthesis_pipeline_rejects_missing_opaque_callee_usage(tmp_path):
         encoding="utf-8",
     )
 
+    c_file = _write_sll_multi_merge_c(tmp_path)
     summary = run_synthesis_pipeline(
-        input_path="shape_invdataset/sll/sll_multi_merge.c",
+        input_path=c_file,
         output_dir=str(output_dir),
         func_name="sll_multi_merge",
         backend="response-file",
@@ -562,8 +757,9 @@ def test_run_synthesis_pipeline_rejects_missing_early_return_scaffold(tmp_path):
         encoding="utf-8",
     )
 
+    c_file = _write_sll_multi_merge_c(tmp_path)
     summary = run_synthesis_pipeline(
-        input_path="shape_invdataset/sll/sll_multi_merge.c",
+        input_path=c_file,
         output_dir=str(output_dir),
         func_name="sll_multi_merge",
         backend="response-file",
@@ -577,7 +773,7 @@ def test_run_synthesis_pipeline_rejects_missing_early_return_scaffold(tmp_path):
 
 
 def test_run_synthesis_pipeline_retries_after_parse_failure(monkeypatch, tmp_path):
-    example = _load_example()
+    gold = _GOLD_DATA
     output_dir = tmp_path / "repair-parse"
     responses = iter(
         [
@@ -585,11 +781,11 @@ def test_run_synthesis_pipeline_retries_after_parse_failure(monkeypatch, tmp_pat
             "\n".join(
                 [
                     "```coq",
-                    f"Definition MretTy : Type := {example['gold']['MretTy']}.",
-                    example["gold"]["components"]["M_loop_before"],
-                    example["gold"]["components"]["M_1"],
-                    example["gold"]["components"]["M_2"],
-                    example["gold"]["components"]["M_loop_end"],
+                    f"Definition MretTy : Type := {gold['MretTy']}.",
+                    gold["components"]["M_loop_before"],
+                    gold["components"]["M_1"],
+                    gold["components"]["M_2"],
+                    gold["components"]["M_loop_end"],
                     "```",
                     "",
                 ]
@@ -602,8 +798,9 @@ def test_run_synthesis_pipeline_retries_after_parse_failure(monkeypatch, tmp_pat
 
     monkeypatch.setattr("GenMonads.absprog.synthesize.generate_candidate_response", fake_generate)
 
+    example_path = _write_example_with_gold(tmp_path)
     summary = run_synthesis_pipeline(
-        input_path="few-shot-examples/absprog/sll_reverse.auto.json",
+        input_path=example_path,
         output_dir=str(output_dir),
         backend="command",
         command="codex exec",
@@ -622,16 +819,16 @@ def test_run_synthesis_pipeline_retries_after_parse_failure(monkeypatch, tmp_pat
 
 
 def test_run_synthesis_pipeline_retries_after_rocq_failure(monkeypatch, tmp_path):
-    example = _load_example()
+    gold = _GOLD_DATA
     output_dir = tmp_path / "repair-rocq"
     response_text = "\n".join(
         [
             "```coq",
-            f"Definition MretTy : Type := {example['gold']['MretTy']}.",
-            example["gold"]["components"]["M_loop_before"],
-            example["gold"]["components"]["M_1"],
-            example["gold"]["components"]["M_2"],
-            example["gold"]["components"]["M_loop_end"],
+            f"Definition MretTy : Type := {gold['MretTy']}.",
+            gold["components"]["M_loop_before"],
+            gold["components"]["M_1"],
+            gold["components"]["M_2"],
+            gold["components"]["M_loop_end"],
             "```",
             "",
         ]
@@ -666,8 +863,9 @@ def test_run_synthesis_pipeline_retries_after_rocq_failure(monkeypatch, tmp_path
         lambda _path: next(checks),
     )
 
+    example_path = _write_example_with_gold(tmp_path)
     summary = run_synthesis_pipeline(
-        input_path="few-shot-examples/absprog/sll_reverse.auto.json",
+        input_path=example_path,
         output_dir=str(output_dir),
         backend="command",
         command="codex exec",
@@ -686,17 +884,17 @@ def test_run_synthesis_pipeline_retries_after_rocq_failure(monkeypatch, tmp_path
 
 
 def test_run_synthesis_pipeline_promotes_passed_lib_to_coq_lib_dir(monkeypatch, tmp_path):
-    example = _load_example()
+    gold = _GOLD_DATA
     output_dir = tmp_path / "promote"
     coq_lib_dir = tmp_path / "libs"
     response_text = "\n".join(
         [
             "```coq",
-            f"Definition MretTy : Type := {example['gold']['MretTy']}.",
-            example["gold"]["components"]["M_loop_before"],
-            example["gold"]["components"]["M_1"],
-            example["gold"]["components"]["M_2"],
-            example["gold"]["components"]["M_loop_end"],
+            f"Definition MretTy : Type := {gold['MretTy']}.",
+            gold["components"]["M_loop_before"],
+            gold["components"]["M_1"],
+            gold["components"]["M_2"],
+            gold["components"]["M_loop_end"],
             "```",
             "",
         ]
@@ -719,8 +917,9 @@ def test_run_synthesis_pipeline_promotes_passed_lib_to_coq_lib_dir(monkeypatch, 
         },
     )
 
+    example_path = _write_example_with_gold(tmp_path)
     summary = run_synthesis_pipeline(
-        input_path="few-shot-examples/absprog/sll_reverse.auto.json",
+        input_path=example_path,
         output_dir=str(output_dir),
         backend="command",
         command="codex exec",
@@ -743,8 +942,9 @@ def test_run_synthesis_pipeline_parse_failure_does_not_require_assembled_file(mo
         lambda *_args, **_kwargs: "```coq\nDefinition MretTy : Type := list Z.\n```",
     )
 
+    example_path = _write_example_with_gold(tmp_path)
     summary = run_synthesis_pipeline(
-        input_path="few-shot-examples/absprog/sll_reverse.auto.json",
+        input_path=example_path,
         output_dir=str(output_dir),
         backend="command",
         command="codex exec",

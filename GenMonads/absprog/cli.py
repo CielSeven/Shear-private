@@ -8,29 +8,14 @@ from GenMonads.absprog.gen_rel_lib import generate_rel_lib_for_file
 from GenMonads.cli_common import (
     add_input_path_arguments,
     add_output_path_argument,
+    read_configure_value,
     resolve_cli_value,
 )
 
 
 def _default_output_dir():
     """Read COQ_LIB_DIR from environment or CONFIGURE file."""
-    env = os.environ.get("COQ_LIB_DIR")
-    if env:
-        return env
-
-    # Try reading from CONFIGURE at repo root
-    configure = os.path.join(os.path.dirname(__file__), "..", "..", "CONFIGURE")
-    configure = os.path.normpath(configure)
-    if os.path.isfile(configure):
-        with open(configure) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("COQ_LIB_DIR="):
-                    # Parse: COQ_LIB_DIR="${COQ_LIB_DIR:-/default/path}"
-                    val = line.split(":-", 1)[-1].rstrip('}"')
-                    if val:
-                        return val
-    return None
+    return read_configure_value("COQ_LIB_DIR")
 
 
 def main():

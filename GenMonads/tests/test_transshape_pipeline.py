@@ -8,7 +8,6 @@ Tests:
 4. Complete pipeline (integrated)
 """
 
-import os
 import json
 import pytest
 
@@ -21,8 +20,60 @@ from GenMonads.transshape.process_and_translate import (
     GUARDGEN_AVAILABLE,
 )
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-SLL_DIR = os.path.join(BASE_DIR, 'shape_invdataset', 'sll')
+
+_SLL_COPY_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list *sll_copy(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(x) * listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *p, *q, *t, *y;\n'
+    '    p = x; y = (struct list *) 0; t = (struct list *) 0;\n'
+    '    /*@ Inv sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3) */\n'
+    '    while (p) {\n'
+    '        q = (struct list *) 0;\n'
+    '        q->next = y; y = q; p = p->next;\n'
+    '    }\n'
+    '    return y;\n'
+    '}\n'
+)
+
+
+_SLL_REVERSE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list* sll_reverse(struct list* head)\n'
+    '/*@\n'
+    '      Require listrep(head)\n'
+    '      Ensure  listrep(__return)\n'
+    '*/\n'
+    '{\n'
+    '    struct list* prev = (void *)0;\n'
+    '    struct list* curr = head;\n'
+    '    /*@ Inv listrep(prev) * listrep(curr) */\n'
+    '    while (curr != (void *) 0) {\n'
+    '        struct list* next = curr->next;\n'
+    '        curr->next = prev; prev = curr; curr = next;\n'
+    '    }\n'
+    '    return prev;\n'
+    '}\n'
+)
+
+
+def _write_copy(tmp_path):
+    p = tmp_path / "sll_copy.c"
+    p.write_text(_SLL_COPY_SRC, encoding="utf-8")
+    return str(p)
+
+
+def _write_reverse(tmp_path):
+    p = tmp_path / "sll_reverse.c"
+    p.write_text(_SLL_REVERSE_SRC, encoding="utf-8")
+    return str(p)
 
 
 # ============================================================================
@@ -33,20 +84,20 @@ class TestPreprocessor:
     def setup_method(self):
         self.extractor = AnnotationExtractor()
 
-    def test_funcspec_extraction(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
+    def test_funcspec_extraction(self, tmp_path):
+        file_path = _write_copy(tmp_path)
         result = self.extractor.process_file(file_path)
         assert result['funcspec'] is not None
         assert result['funcspec'].get('require')
         assert result['funcspec'].get('ensure')
 
-    def test_inner_assertion_extraction(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
+    def test_inner_assertion_extraction(self, tmp_path):
+        file_path = _write_copy(tmp_path)
         result = self.extractor.process_file(file_path)
         assert len(result['inner_assertions']) > 0
 
-    def test_command_guard_extraction(self):
-        file_path = os.path.join(SLL_DIR, 'sll_reverse.c')
+    def test_command_guard_extraction(self, tmp_path):
+        file_path = _write_reverse(tmp_path)
         result = self.extractor.process_file(file_path)
         inv_assertions = [a for a in result['inner_assertions'] if a['type'] == 'Inv']
         assert len(inv_assertions) > 0
@@ -133,8 +184,8 @@ class TestTranslator:
 
 class TestGuardGen:
     @pytest.mark.skipif(not GUARDGEN_AVAILABLE, reason="guardgen module not available")
-    def test_null_pointer_handling(self):
-        file_path = os.path.join(SLL_DIR, 'sll_reverse.c')
+    def test_null_pointer_handling(self, tmp_path):
+        file_path = _write_reverse(tmp_path)
         result = process_and_translate_file(file_path)
         inv_assertions = [a for a in result['inner_assertions'] if a['type'] == 'Inv']
         for assertion in inv_assertions:
@@ -142,8 +193,8 @@ class TestGuardGen:
                 assert 'coq_guard' in assertion, f"Guard generation failed: {assertion.get('coq_guard_error')}"
 
     @pytest.mark.skipif(not GUARDGEN_AVAILABLE, reason="guardgen module not available")
-    def test_basic_guard_generation(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
+    def test_basic_guard_generation(self, tmp_path):
+        file_path = _write_copy(tmp_path)
         result = process_and_translate_file(file_path)
         inv_assertions = [a for a in result['inner_assertions'] if a['type'] == 'Inv']
         assert len(inv_assertions) > 0
@@ -157,14 +208,14 @@ class TestGuardGen:
 # ============================================================================
 
 class TestIntegratedPipeline:
-    def test_automatic_mode(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
+    def test_automatic_mode(self, tmp_path):
+        file_path = _write_copy(tmp_path)
         result = process_and_translate_file(file_path)
         assert result['funcspec'] is not None
         assert len(result['inner_assertions']) > 0
 
-    def test_two_step_mode(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
+    def test_two_step_mode(self, tmp_path):
+        file_path = _write_copy(tmp_path)
         processor = AssertionProcessor()
 
         extraction = processor.extractor.process_file(file_path)
@@ -175,14 +226,14 @@ class TestIntegratedPipeline:
         guard_count = sum(1 for a in with_guards if 'coq_guard' in a)
         assert guard_count >= 0  # may be 0 if guardgen unavailable
 
-    def test_disabled_guards(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
+    def test_disabled_guards(self, tmp_path):
+        file_path = _write_copy(tmp_path)
         result = process_and_translate_file(file_path, generate_guards=False)
         assert not any('coq_guard' in a for a in result['inner_assertions'])
         assert not any('coq_guard_error' in a for a in result['inner_assertions'])
 
-    def test_consistency(self):
-        file_path = os.path.join(SLL_DIR, 'sll_copy.c')
+    def test_consistency(self, tmp_path):
+        file_path = _write_copy(tmp_path)
 
         result_auto = process_and_translate_file(file_path, generate_guards=True)
         auto_guards = [a.get('coq_guard') for a in result_auto['inner_assertions'] if 'coq_guard' in a]

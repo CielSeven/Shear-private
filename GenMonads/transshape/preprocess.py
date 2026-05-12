@@ -163,7 +163,8 @@ class AnnotationExtractor:
         for header_match in re.finditer(pattern, content, re.DOTALL):
             f_name = header_match.group(2)
             if f_name in ['while', 'if', 'for', 'switch', 'return']: continue
-            
+
+            return_type = (header_match.group(1) or "").strip()
             inline_spec = header_match.group(4)
             terminator = header_match.group(5)
             header_start, header_end = header_match.start(), header_match.end()
@@ -193,7 +194,12 @@ class AnnotationExtractor:
                 if brace_count == 0:
                     f_inner = self.process_func_body(content[header_end:pos-1], header_end)
             
-            functions.append({'function': f_name, 'funcspec': f_spec, 'inner_assertions': f_inner})
+            functions.append({
+                'function': f_name,
+                'return_type': return_type,
+                'funcspec': f_spec,
+                'inner_assertions': f_inner,
+            })
 
         return {
             'file': file_path,

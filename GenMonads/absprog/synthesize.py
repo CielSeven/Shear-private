@@ -16,6 +16,7 @@ from GenMonads.absprog.gen_func_residual import (
 )
 from GenMonads.absprog.parse_coq import parse_synthesized_components
 from GenMonads.absprog.templates import prompt_payload, render_prompt, render_repair_prompt
+from GenMonads.cli_common import read_configure_value
 
 
 def _load_json(path: str) -> Dict:
@@ -209,51 +210,14 @@ def _root_file(output_dir: str, context_id: str, suffix: str) -> str:
 
 
 def _default_coq_lib_dir() -> str:
-    env = os.environ.get("COQ_LIB_DIR")
-    if env:
-        return env
-
-    configure = os.path.join(os.path.dirname(__file__), "..", "..", "CONFIGURE")
-    configure = os.path.normpath(configure)
-    if os.path.isfile(configure):
-        with open(configure, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("COQ_LIB_DIR="):
-                    value = line.split(":-", 1)[-1].rstrip('}"')
-                    if value:
-                        return value
-    return os.path.join("output", "gen", "libs")
-
-
-def _default_rel_dir() -> str:
-    env = os.environ.get("REL_DIR")
-    if env:
-        return env
-
-    configure = os.path.join(os.path.dirname(__file__), "..", "..", "CONFIGURE")
-    configure = os.path.normpath(configure)
-    if os.path.isfile(configure):
-        with open(configure, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("REL_DIR="):
-                    value = line.split(":-", 1)[-1].rstrip('}"')
-                    if value:
-                        return value
-    return os.path.join("output", "gen", "rel")
-
-
-def _resolve_rel_c_path(c_file: str) -> str:
-    rel_root = _default_rel_dir()
-    normalized = c_file.replace("\\", "/")
-    marker = "shape_invdataset/"
-    if marker in normalized:
-        relative = normalized.split(marker, 1)[1]
-        rel_subpath = os.path.splitext(relative)[0] + "_rel.c"
-        return os.path.join(rel_root, rel_subpath)
-    base_name = os.path.splitext(os.path.basename(c_file))[0] + "_rel.c"
-    return os.path.join(rel_root, base_name)
+    """Return COQ_LIB_DIR from env or CONFIGURE; error if neither is set."""
+    value = read_configure_value("COQ_LIB_DIR")
+    if value is None:
+        raise RuntimeError(
+            "COQ_LIB_DIR is not set. Define it via environment variable or in "
+            "the CONFIGURE file at the repo root."
+        )
+    return value
 
 
 def _format_residual_extern_decl(entry: Dict) -> str:
@@ -327,11 +291,75 @@ def _append_missing_residual_decls_to_rel_c(rel_c_path: str, decls: List[str]) -
     return rel_c_path
 
 
-def _sync_residual_artifacts(context: Dict, assembled_rel_lib: str) -> Dict[str, str]:
+def _extract_mretty_type(rel_lib_path: str) -> str:
+    with open(rel_lib_path, "r", encoding="utf-8") as f:
+        source = f.read()
+    match = re.search(
+        r"^Definition\s+MretTy\s*:\s*Type\s*:=\s*(.+?)\.\s*$",
+        source,
+        re.MULTILINE,
+    )
+    if not match:
+        return ""
+    return re.sub(r"%type\b", "", match.group(1)).strip()
+
+
+def _wrap_type_for_substitution(concrete: str) -> str:
+    stripped = concrete.strip()
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_']*", stripped):
+        return stripped
+    if stripped.startswith("(") and stripped.endswith(")"):
+        return stripped
+    return f"({stripped})"
+
+
+def _eliminate_mretty_in_rel_c(rel_c_path: str, concrete_type: str) -> str:
+    if not rel_c_path or not os.path.isfile(rel_c_path) or not concrete_type:
+        return ""
+
+    with open(rel_c_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if "MretTy" not in content:
+        return rel_c_path
+
+    replacement = _wrap_type_for_substitution(concrete_type)
+    updated = re.sub(
+        r"^[ \t]*/\*@\s*Extern\s+Coq\s*\(\s*MretTy\s*::\s*\*\s*\)\s*\*/[ \t]*\n?",
+        "",
+        content,
+        flags=re.MULTILINE,
+    )
+    updated = re.sub(r"\bMretTy\b", replacement, updated)
+
+    if updated == content:
+        return rel_c_path
+
+    with open(rel_c_path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    return rel_c_path
+
+
+def _sync_residual_artifacts(
+    context: Dict,
+    assembled_rel_lib: str,
+    rel_c_path: Optional[str] = None,
+) -> Dict[str, str]:
     if not assembled_rel_lib or not os.path.isfile(assembled_rel_lib):
         return {}
 
+    patched_rel_c = ""
     caller_component = f"{context['summary']['func_name']}_M"
+    # Collect callee signatures from the context so cross-file callees (only
+    # imported via `Require Import`) still get a return-type annotation on
+    # their residual definitions.
+    callee_signatures: Dict[str, str] = {}
+    for callee in context.get("available_callees", []):
+        opaque_program = callee.get("opaque_program")
+        sig = (callee.get("externals") or {}).get("M")
+        if opaque_program and sig:
+            callee_signatures[opaque_program] = sig
+
     all_entries = []
     for callee in context.get("available_callees", []):
         opaque_program = callee.get("opaque_program")
@@ -341,11 +369,15 @@ def _sync_residual_artifacts(context: Dict, assembled_rel_lib: str) -> Dict[str,
             assembled_rel_lib,
             opaque_program,
             caller_component,
+            extra_signatures=callee_signatures,
         )
         all_entries.extend(entries)
 
     if not all_entries:
-        return {}
+        if rel_c_path:
+            mretty_type = _extract_mretty_type(assembled_rel_lib)
+            patched_rel_c = _eliminate_mretty_in_rel_c(rel_c_path, mretty_type)
+        return {"rel_c": patched_rel_c}
 
     all_entries = [polish_residual_segment(entry) for entry in all_entries]
     rendered_defs = [
@@ -362,11 +394,13 @@ def _sync_residual_artifacts(context: Dict, assembled_rel_lib: str) -> Dict[str,
     with open(assembled_rel_lib, "w", encoding="utf-8") as f:
         f.write(new_content)
 
-    rel_c_path = _resolve_rel_c_path(context["source"]["c_file"])
-    patched_rel_c = _append_missing_residual_decls_to_rel_c(
-        rel_c_path,
-        [_format_residual_extern_decl(entry) for entry in all_entries],
-    )
+    if rel_c_path:
+        patched_rel_c = _append_missing_residual_decls_to_rel_c(
+            rel_c_path,
+            [_format_residual_extern_decl(entry) for entry in all_entries],
+        ) or rel_c_path
+        mretty_type = _extract_mretty_type(assembled_rel_lib)
+        _eliminate_mretty_in_rel_c(rel_c_path, mretty_type)
 
     return {
         "rel_lib": assembled_rel_lib,
@@ -470,6 +504,7 @@ def _build_final_summary(
     attempts: List[Dict],
     final_attempt: Dict,
     status: str,
+    promote_rel_lib: bool = True,
 ) -> Dict:
     final_files = _copy_final_attempt_files(final_attempt, output_dir, context["id"])
     summary = {
@@ -484,11 +519,12 @@ def _build_final_summary(
         "check": final_attempt["check"],
         "status": status,
     }
-    promoted_path = _promote_rel_lib_if_accepted(
-        final_attempt["files"].get("assembled_rel_lib", ""), context["id"], status
-    )
-    if promoted_path:
-        summary["files"]["promoted_rel_lib"] = promoted_path
+    if promote_rel_lib:
+        promoted_path = _promote_rel_lib_if_accepted(
+            final_attempt["files"].get("assembled_rel_lib", ""), context["id"], status
+        )
+        if promoted_path:
+            summary["files"]["promoted_rel_lib"] = promoted_path
     summary_file = _root_file(output_dir, context["id"], "summary.json")
     _write_json(summary_file, summary)
     summary["files"]["summary"] = summary_file
@@ -506,6 +542,8 @@ def run_synthesis_pipeline(
     few_shot_paths: Optional[List[str]] = None,
     run_check: bool = True,
     max_retries: int = 0,
+    rel_c_path: Optional[str] = None,
+    promote_rel_lib: bool = True,
 ) -> Dict:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -604,7 +642,12 @@ def run_synthesis_pipeline(
             continue
 
         try:
-            blocks = parse_synthesized_components(response_text, context["summary"]["func_name"])
+            required = context.get("control_flow", {}).get("required_components")
+            blocks = parse_synthesized_components(
+                response_text,
+                context["summary"]["func_name"],
+                required=required,
+            )
             _write_json(parsed_file, blocks)
             files["parsed"] = parsed_file
         except Exception as exc:
@@ -630,7 +673,9 @@ def run_synthesis_pipeline(
         if not run_check or check_result.get("status") == "passed":
             residual_files = {}
             try:
-                residual_files = _sync_residual_artifacts(context, assembled_file)
+                residual_files = _sync_residual_artifacts(
+                    context, assembled_file, rel_c_path=rel_c_path
+                )
             except Exception as exc:
                 failure_kind = "residual_sync"
                 failure_message = str(exc)
@@ -677,4 +722,5 @@ def run_synthesis_pipeline(
     return _build_final_summary(
         input_path, output_dir, context, backend, max_retries,
         attempts, final_attempt, _final_status_from_attempt(final_attempt),
+        promote_rel_lib=promote_rel_lib,
     )

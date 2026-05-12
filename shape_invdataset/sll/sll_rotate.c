@@ -13,8 +13,7 @@ struct list * sll_rotate_left(struct list * x)
     }
     t = x;
     u = t->next;
-    /*@ Inv exists w, t != 0 && t -> data == w && t -> next == u && u != 0 &&
-            listrep(u -> next) * lseg(x@pre, t) */
+    /*@ Inv Assert exists w wu, x == x@pre && x@pre != 0 && t != 0 && t -> data == w && t -> next == u && u != 0 && u -> data == wu && listrep(u -> next) * lseg(x@pre, t) * lseg(u, u) */
     while (u->next) {
         t = u;
         u = u->next;
@@ -38,7 +37,7 @@ struct list * sll_rotate_right(struct list * x)
     head->next = 0;
     t = new_head;
     u = t->next;
-    /*@ Inv exists w, t != 0 && t -> data == w && t -> next == u &&
+    /*@ Inv Assert exists w, t != 0 && t -> data == w && t -> next == u &&
             listrep(head) * listrep(u) * lseg(new_head, t) */
     while (u) {
         t = u;

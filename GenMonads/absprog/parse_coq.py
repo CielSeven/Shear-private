@@ -1,5 +1,5 @@
 import re
-from typing import Dict
+from typing import Dict, List, Optional
 
 _IDENT_CHAR = re.compile(r"[A-Za-z0-9_']")
 
@@ -95,11 +95,41 @@ def _extract_definition_block(coq_source: str, name: str) -> str:
     raise ValueError(f"Definition '{name}' does not terminate with '.'")
 
 
-def parse_synthesized_components(response_text: str, func_name: str) -> Dict[str, str]:
+_COMPONENT_PARAMETER_SUFFIX = {
+    "MretTy": "MretTy",                 # Special: not "{fn}_MretTy" form here.
+    "M_loop_before": "M_loop_before",
+    "M_1": "M_loop_M1",
+    "M_2": "M_loop_M2",
+    "M_loop_end": "M_loop_end",
+    "M_before": "M_before",
+    "M_normal": "M_normal",
+    "M": "M",
+}
+
+
+def _component_parameter_name(component: str, func_name: str) -> str:
+    suffix = _COMPONENT_PARAMETER_SUFFIX.get(component, component)
+    if component == "MretTy":
+        return "MretTy"
+    return f"{func_name}_{suffix}"
+
+
+def parse_synthesized_components(
+    response_text: str,
+    func_name: str,
+    required: Optional[list] = None,
+) -> Dict[str, str]:
+    """Extract Coq Definition blocks from an LLM response.
+
+    By default, extracts the loop-bearing component set
+    (``MretTy``, ``M_loop_before``, ``M_1``, ``M_2``, ``M_loop_end``).  When
+    *required* is given, extracts exactly those components.
+    """
+    if required is None:
+        required = ["MretTy", "M_loop_before", "M_1", "M_2", "M_loop_end"]
     return {
-        "MretTy": _extract_definition_block(response_text, "MretTy"),
-        "M_loop_before": _extract_definition_block(response_text, f"{func_name}_M_loop_before"),
-        "M_1": _extract_definition_block(response_text, f"{func_name}_M_loop_M1"),
-        "M_2": _extract_definition_block(response_text, f"{func_name}_M_loop_M2"),
-        "M_loop_end": _extract_definition_block(response_text, f"{func_name}_M_loop_end"),
+        component: _extract_definition_block(
+            response_text, _component_parameter_name(component, func_name)
+        )
+        for component in required
     }

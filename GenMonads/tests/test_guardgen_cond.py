@@ -228,3 +228,36 @@ class TestGuardPredicateRegistryConfig:
         payload = spec.parse_args(["x", "y", "l1"])
         assert spec.to_coq_segment_eq(payload, True, False) == "l1 = []"
         assert spec.to_coq_segment_eq(payload, False, False) == "l1 <> []"
+
+    def test_json_loaded_field_deref_null_rule_for_sll_next(self):
+        spec = PREDICATES["sll"]
+        payload = spec.parse_args(["x", "l1"])
+        assert spec.to_coq_field_deref_null is not None
+        assert spec.to_coq_field_deref_null(payload, "next", True) == "tl l1 = []"
+        assert spec.to_coq_field_deref_null(payload, "next", False) == "tl l1 <> []"
+
+    def test_sll_field_deref_unsupported_field_raises(self):
+        spec = PREDICATES["sll"]
+        payload = spec.parse_args(["x", "l1"])
+        with pytest.raises(ValueError):
+            spec.to_coq_field_deref_null(payload, "prev", False)
+
+    def test_gen_coq_guard_x_next_via_sll_root(self):
+        # Loop guard `x->next != 0` with invariant `sll(x, l2)` resolves via
+        # the field-deref handler: the loop continues while the tail of l2
+        # is non-empty (i.e. the list has ≥ 2 elements).
+        inv = "exists l1 l2, x != 0 && sllseg(x@pre, x, l1) * sll(x, l2)"
+        result = gen_coq_guard(inv, "x->next != 0")
+        assert "tl l2 <> []" in result
+        assert "Parameter" not in result
+
+    def test_gen_coq_guard_single_var_binds_directly(self):
+        # When the invariant has exactly one abstract variable, the guard
+        # body references that variable name (``l1``) — the lambda binder
+        # must use that name, not the fresh ``a``, otherwise the body's
+        # ``l1`` is unbound.
+        inv = "exists l1, sll(x, l1)"
+        result = gen_coq_guard(inv, "x != 0")
+        assert "fun l1 =>" in result
+        assert "let '(" not in result
+        assert "l1 <> []" in result

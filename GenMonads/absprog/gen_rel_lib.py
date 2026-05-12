@@ -18,7 +18,56 @@ from typing import Dict, List, Optional
 
 from GenMonads.early_return import detect_early_return_shape
 from GenMonads.transshape.process_and_translate import process_and_translate_file
-from GenMonads.translate_c_file import collect_func_extern_info, collect_callee_functions
+from GenMonads.translate_c_file import (
+    _extract_function_body,
+    _strip_c_comments,
+    collect_func_extern_info,
+    collect_callee_functions,
+)
+
+
+_C_KEYWORDS_AND_BUILTINS = {
+    "if", "else", "for", "while", "do", "switch", "case", "default",
+    "return", "break", "continue", "goto", "sizeof", "typedef",
+    "struct", "union", "enum", "static", "extern", "const", "volatile",
+    "register", "auto", "inline", "void", "char", "short", "int",
+    "long", "float", "double", "signed", "unsigned", "_Bool",
+    "malloc", "free", "calloc", "realloc", "memcpy", "memset",
+    "printf", "fprintf", "scanf", "assert",
+}
+
+
+def _collect_cross_file_callees(
+    input_path: str,
+    func_names: List[str],
+    content: str,
+) -> List[str]:
+    """Return sorted callee names invoked by any of `func_names` whose
+    definition lives in a sibling `.c` file in the same directory."""
+    input_dir = os.path.dirname(os.path.abspath(input_path))
+    own_basename = os.path.splitext(os.path.basename(input_path))[0]
+    siblings = set()
+    try:
+        for entry in os.listdir(input_dir):
+            if entry.endswith(".c"):
+                stem = os.path.splitext(entry)[0]
+                if stem != own_basename:
+                    siblings.add(stem)
+    except OSError:
+        return []
+
+    call_names = set()
+    local_names = set(func_names)
+    for caller in func_names:
+        body = _extract_function_body(content, caller)
+        if body is None:
+            continue
+        stripped = _strip_c_comments(body)
+        for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", stripped):
+            call_names.add(match.group(1))
+
+    callees = call_names & siblings - local_names - _C_KEYWORDS_AND_BUILTINS
+    return sorted(callees)
 
 
 COQ_IMPORTS = """\
@@ -153,6 +202,7 @@ def collect_early_return_shape_for_function(content: str, func_name: str) -> Dic
             "has_top_level_loop": False,
             "has_pre_loop_early_return": False,
             "has_loop_body_early_return": False,
+            "has_no_loop_early_return": False,
             "needs_early_result": False,
         }
     return detect_early_return_shape(source)
@@ -186,8 +236,18 @@ def generate_func_block(func_name: str, require_var_count: int,
                         ensure_var_types: Optional[List[str]] = None,
                         coq_guard: Optional[str] = None,
                         has_pre_loop_early_return: bool = False,
-                        has_loop_body_early_return: bool = False) -> str:
-    """Generate the abstract program skeleton for one function."""
+                        has_loop_body_early_return: bool = False,
+                        mretty_name: str = "MretTy",
+                        declare_mretty: bool = False) -> str:
+    """Generate the abstract program skeleton for one function.
+
+    Args:
+        mretty_name: name of the MretTy type in this block (``"MretTy"`` for
+            single-function libraries, ``f"{func_name}_MretTy"`` for
+            multi-function libraries).
+        declare_mretty: if True, emit ``Parameter {mretty_name} : Type.`` at
+            the start of the block (used for per-function MretTy scoping).
+    """
     fn = func_name
     k = inv_var_count
     m = require_var_count
@@ -197,7 +257,9 @@ def generate_func_block(func_name: str, require_var_count: int,
     st = _tuple_type(inv_types)
     ret = _return_type(ens_types)
     before_result = _early_result_type(st, ret) if has_pre_loop_early_return else st
-    loop_result = _early_result_type("MretTy", ret) if has_loop_body_early_return else "MretTy"
+    loop_result = (
+        _early_result_type(mretty_name, ret) if has_loop_body_early_return else mretty_name
+    )
     m2_result = _early_result_type(st, ret) if has_loop_body_early_return else st
     guard_name = f"{fn}_guardP"
 
@@ -205,12 +267,17 @@ def generate_func_block(func_name: str, require_var_count: int,
     lines.append(f"(* ---- Abstract program segments for {fn} ---- *)")
     lines.append("")
 
+    if declare_mretty:
+        lines.append(f"Parameter {mretty_name} : Type.")
+        lines.append("")
+
+    st_arg = _type_arg(st)
     # Parameters: M1, M2, loop_end (LLM-generated components)
-    lines.append(f"Parameter {fn}_M_loop_M1 : {st} -> MONAD MretTy.")
+    lines.append(f"Parameter {fn}_M_loop_M1 : {st} -> MONAD {mretty_name}.")
     if has_loop_body_early_return:
         lines.append(f"Parameter {fn}_M_loop_M2 : {st} -> MONAD ({m2_result}).")
     else:
-        lines.append(f"Parameter {fn}_M_loop_M2 : {st} -> MONAD {st}.")
+        lines.append(f"Parameter {fn}_M_loop_M2 : {st} -> MONAD {st_arg}.")
     lines.append("")
 
     # Function-scoped guard: concrete Definition from GuardGen, or Parameter as fallback
@@ -227,7 +294,7 @@ def generate_func_block(func_name: str, require_var_count: int,
         lines.append(f"Parameter {guard_name} : {st} -> Prop.")
     lines.append("")
 
-    lines.append(f"Parameter {fn}_M_loop_end : MretTy -> MONAD ({ret}).")
+    lines.append(f"Parameter {fn}_M_loop_end : {mretty_name} -> MONAD ({ret}).")
     lines.append("")
 
     if has_loop_body_early_return:
@@ -242,10 +309,10 @@ def generate_func_block(func_name: str, require_var_count: int,
     # Concrete scaffolding: loop_body using choice/assume/break/continue
     if has_loop_body_early_return:
         lines.append(
-            f"Definition {fn}_M_loop_body : {st} -> MONAD (CntOrBrk {st} ({loop_result})) :="
+            f"Definition {fn}_M_loop_body : {st} -> MONAD (CntOrBrk {st_arg} ({loop_result})) :="
         )
     else:
-        lines.append(f"Definition {fn}_M_loop_body : {st} -> MONAD (CntOrBrk {st} MretTy) :=")
+        lines.append(f"Definition {fn}_M_loop_body : {st} -> MONAD (CntOrBrk {st_arg} {mretty_name}) :=")
     lines.append(f"  fun a =>")
     if has_loop_body_early_return:
         lines.append(
@@ -273,7 +340,7 @@ def generate_func_block(func_name: str, require_var_count: int,
     if has_loop_body_early_return:
         lines.append(f"Definition {fn}_M_loop : {curried}program unit ({loop_result}) :=")
     else:
-        lines.append(f"Definition {fn}_M_loop : {curried}program unit MretTy :=")
+        lines.append(f"Definition {fn}_M_loop : {curried}program unit {mretty_name} :=")
     lines.append(f"  fun {lam} => {fn}_M_loop_aux {tup}.")
     lines.append("")
 
@@ -282,7 +349,7 @@ def generate_func_block(func_name: str, require_var_count: int,
     if has_pre_loop_early_return:
         lines.append(f"Parameter {fn}_M_loop_before : {m_curried}MONAD ({before_result}).")
     else:
-        lines.append(f"Parameter {fn}_M_loop_before : {m_curried}MONAD {st}.")
+        lines.append(f"Parameter {fn}_M_loop_before : {m_curried}MONAD {st_arg}.")
     lines.append("")
 
     # M: concrete composition of loop_before → loop → loop_end
@@ -333,6 +400,55 @@ def generate_simple_func_block(func_name: str,
     return "\n".join(lines)
 
 
+def generate_no_loop_early_return_block(func_name: str,
+                                        require_var_count: int,
+                                        ensure_var_count: int = 1,
+                                        require_var_types: Optional[List[str]] = None,
+                                        ensure_var_types: Optional[List[str]] = None,
+                                        mretty_name: str = "MretTy",
+                                        declare_mretty: bool = False) -> str:
+    """Generate the abstract-program scaffold for a function with no loop but
+    at least one early-return branch.
+
+    Splits the function into ``{fn}_M_before`` (initial dispatch returning
+    ``early_result {mretty_name} {ret}``) and ``{fn}_M_normal``
+    (the non-early-return continuation).  ``{fn}_M`` composes them.
+    """
+    fn = func_name
+    m = require_var_count
+    req_types = _normalize_var_types(require_var_types, require_var_count)
+    ens_types = _normalize_var_types(ensure_var_types, ensure_var_count)
+    ret = _return_type(ens_types)
+    m_curried = _curried_args(req_types)
+    m_lam = _lambda_vars(m)
+    before_result = _early_result_type(mretty_name, ret)
+
+    lines = []
+    lines.append(f"(* ---- Abstract program segments for {fn} ---- *)")
+    lines.append("")
+
+    if declare_mretty:
+        lines.append(f"Parameter {mretty_name} : Type.")
+        lines.append("")
+
+    lines.append(
+        f"Parameter {fn}_M_before : {m_curried}MONAD ({before_result})."
+    )
+    lines.append(f"Parameter {fn}_M_normal : {mretty_name} -> MONAD ({ret}).")
+    lines.append("")
+
+    lines.append(f"Definition {fn}_M : {m_curried}MONAD ({ret}) :=")
+    lines.append(f"  fun {m_lam} =>")
+    lines.append(f"    e <- {fn}_M_before {m_lam};;")
+    lines.append(f"    match e with")
+    lines.append(f"    | Continue s => {fn}_M_normal s")
+    lines.append(f"    | ReturnNow r => return r")
+    lines.append(f"    end.")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def _collect_func_info_with_guard(func_data: Dict, include_helpers: bool = False) -> Optional[Dict]:
     """Like collect_func_extern_info but also extracts coq_guard."""
     info = collect_func_extern_info(func_data, include_helpers=include_helpers)
@@ -353,7 +469,11 @@ def _collect_func_info_with_guard(func_data: Dict, include_helpers: bool = False
     return info
 
 
-def generate_rel_lib(basename: str, func_infos: List[Dict]) -> str:
+def generate_rel_lib(
+    basename: str,
+    func_infos: List[Dict],
+    imported_rel_libs: Optional[List[str]] = None,
+) -> str:
     """Generate a complete _rel_lib.v skeleton file.
 
     Args:
@@ -363,15 +483,38 @@ def generate_rel_lib(basename: str, func_infos: List[Dict]) -> str:
     parts = []
     parts.append(COQ_IMPORTS)
     parts.append("")
+    for callee in (imported_rel_libs or []):
+        parts.append(f"Require Import {callee}_rel_lib.")
+    if imported_rel_libs:
+        parts.append("")
     if any(info.get('ensure_var_count', 1) > 1 for info in func_infos):
         parts.append("Definition maketuple {A B} (a : A) (b : B) : (A * B) := (a, b).")
         parts.append("")
-    parts.append("Parameter MretTy : Type.")
-    parts.append("")
+
+    # A function "needs MretTy" if it has a loop, or if it has no loop but
+    # uses the split early-return scaffold (which also needs an intermediate
+    # type).  Scope MretTy per-function when more than one function in the
+    # file needs it; otherwise keep a single shared `MretTy` parameter for
+    # backward compatibility.
+    def _needs_mretty(info: Dict) -> bool:
+        if info.get('has_loop_program', info['inv_var_count'] > 0):
+            return True
+        if info.get('has_no_loop_early_return'):
+            return True
+        return False
+
+    mretty_users = [info for info in func_infos if _needs_mretty(info)]
+    scope_mretty_per_function = len(mretty_users) > 1
+
+    if mretty_users and not scope_mretty_per_function:
+        parts.append("Parameter MretTy : Type.")
+        parts.append("")
+
     if any(
         info.get("needs_early_result")
         or info.get("has_pre_loop_early_return")
         or info.get("has_loop_body_early_return")
+        or info.get("has_no_loop_early_return")
         for info in func_infos
     ):
         parts.append(
@@ -384,9 +527,14 @@ def generate_rel_lib(basename: str, func_infos: List[Dict]) -> str:
         parts.append("")
 
     for info in func_infos:
-        if info.get('has_loop_program', info['inv_var_count'] > 0):
+        fn = info['func_name']
+        has_loop = info.get('has_loop_program', info['inv_var_count'] > 0)
+        has_no_loop_early_return = info.get('has_no_loop_early_return', False)
+        mretty_name = f"{fn}_MretTy" if scope_mretty_per_function else "MretTy"
+
+        if has_loop:
             parts.append(generate_func_block(
-                info['func_name'],
+                fn,
                 info['require_var_count'],
                 info['inv_var_count'],
                 info.get('ensure_var_count', 1),
@@ -396,10 +544,22 @@ def generate_rel_lib(basename: str, func_infos: List[Dict]) -> str:
                 info.get('coq_guard'),
                 has_pre_loop_early_return=info.get('has_pre_loop_early_return', False),
                 has_loop_body_early_return=info.get('has_loop_body_early_return', False),
+                mretty_name=mretty_name,
+                declare_mretty=scope_mretty_per_function,
+            ))
+        elif has_no_loop_early_return:
+            parts.append(generate_no_loop_early_return_block(
+                fn,
+                info['require_var_count'],
+                info.get('ensure_var_count', 1),
+                info.get('require_var_types'),
+                info.get('ensure_var_types'),
+                mretty_name=mretty_name,
+                declare_mretty=scope_mretty_per_function,
             ))
         else:
             parts.append(generate_simple_func_block(
-                info['func_name'],
+                fn,
                 info['require_var_count'],
                 info.get('ensure_var_count', 1),
                 info.get('require_var_types'),
@@ -433,12 +593,10 @@ def generate_rel_lib_for_file(input_path: str, output_dir: str) -> Optional[str]
     with open(input_path, 'r', encoding='utf-8') as f:
         content = f.read()
     if 'functions' in result and result['functions']:
-        callee_functions = collect_callee_functions(content, result['functions'])
         for func_data in result['functions']:
-            include_helpers = (
-                not func_data.get('inner_assertions')
-                and func_data['function'] in callee_functions
-            )
+            # Include any function with a funcspec; emit the appropriate
+            # scaffold (loop, no-loop early-return, or simple Parameter).
+            include_helpers = not func_data.get('inner_assertions')
             info = _collect_func_info_with_guard(
                 func_data,
                 include_helpers=include_helpers,
@@ -447,11 +605,7 @@ def generate_rel_lib_for_file(input_path: str, output_dir: str) -> Optional[str]
                 info = _enrich_func_info_with_early_return_shape(content, info)
                 func_infos.append(info)
     else:
-        callee_functions = collect_callee_functions(content, [{'function': result['function']}])
-        include_helpers = (
-            not result.get('inner_assertions')
-            and result['function'] in callee_functions
-        )
+        include_helpers = not result.get('inner_assertions')
         info = _collect_func_info_with_guard(
             result,
             include_helpers=include_helpers,
@@ -465,7 +619,9 @@ def generate_rel_lib_for_file(input_path: str, output_dir: str) -> Optional[str]
         return None
 
     src_basename = os.path.splitext(os.path.basename(input_path))[0]
-    content = generate_rel_lib(src_basename, func_infos)
+    func_names = [info['func_name'] for info in func_infos]
+    imported_rel_libs = _collect_cross_file_callees(input_path, func_names, content)
+    content = generate_rel_lib(src_basename, func_infos, imported_rel_libs)
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"{src_basename}_rel_lib.v")

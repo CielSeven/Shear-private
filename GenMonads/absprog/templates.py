@@ -50,6 +50,8 @@ def _render_signature_lines(context: Dict) -> List[str]:
             "M_loop_M2",
             "M_after_loop",
             "M_loop_end",
+            "M_before",
+            "M_normal",
             "M",
         ]
         lines = []
@@ -118,10 +120,19 @@ def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = N
     opaque_call_obligations = context.get("opaque_call_obligations", [])
     generation_policy = context.get("generation_policy", {})
 
+    template_case = control_flow.get("template_case", "none")
+    no_loop = template_case in ("no_loop_early_return", "no_loop_simple")
+    intro_constraint = (
+        "This function has no loop; provide the abstract program directly "
+        "for the requested components."
+        if no_loop
+        else "For now, only consider C functions with exactly one loop."
+    )
+
     lines: List[str] = [
         "You are generating Coq monadic abstract programs for formal verification.",
         "",
-        "For now, only consider C functions with exactly one loop.",
+        intro_constraint,
         "",
         "## Function Summary",
         f"Function: {summary['func_name']}",
@@ -171,10 +182,17 @@ def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = N
     if available_callees:
         lines.extend([
             "## Available Callees",
-            "Treat the following same-file callees as opaque abstract programs.",
+            "Treat the following callees as opaque abstract programs.",
+            "Cross-file callees are imported via `Require Import {callee}_rel_lib.` at the top of the generated rel-lib; do not redeclare their `Parameter`.",
         ])
         for callee in available_callees:
-            lines.append(f"- `{callee['opaque_program']}`: {callee.get('externals', {}).get('M', '')}")
+            origin = "cross-file" if callee.get("cross_file") else "same-file"
+            lines.append(
+                f"- `{callee['opaque_program']}` ({origin}): "
+                f"{callee.get('externals', {}).get('M', '')}"
+            )
+            if callee.get("cross_file") and callee.get("defined_in"):
+                lines.append(f"  Defined in: `{callee['defined_in']}`")
             spec = callee.get("spec", {})
             if spec.get("require"):
                 lines.append(f"  Base Require: `{spec['require']}`")
@@ -197,11 +215,55 @@ def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = N
             )
         lines.append("")
 
-    lines.extend([
-        "## Instructions",
-        "Use the Selected Scaffold above as the authoritative composition rule for this target.",
-        "Generate `MretTy` and the 4 non-guard components so the composed abstract program simulates the C source.",
-    ])
+    must_define = generation_policy.get("must_define", [])
+
+    lines.append("## Instructions")
+    lines.append("Use the Selected Scaffold above as the authoritative composition rule for this target.")
+    if no_loop:
+        if template_case == "no_loop_early_return":
+            lines.append(
+                "Generate `MretTy` plus `M_before` (which returns `early_result MretTy ret` "
+                "for the normal/early-return dispatch) and `M_normal` (the non-early-return "
+                "continuation), so the composed `M` simulates the C source."
+            )
+            lines.extend([
+                "",
+                "Use the plain `return EXPR` form for monadic returns; never write "
+                "`@ret _ T x` with placeholder underscores — the `MONAD` notation has "
+                "hidden implicit arguments that Coq cannot infer from `_`.",
+                "",
+                "Reference output shape (adapt types/expressions to your function):",
+                "```coq",
+                "Definition MretTy : Type := list Z.",
+                "",
+                f"Definition {summary['func_name']}_M_before",
+                "  : <args> -> MONAD (early_result MretTy <ret>) :=",
+                "  fun <args> =>",
+                "    match <branch-input> with",
+                "    | <early-case>  => return (ReturnNow <early-value>)",
+                "    | <normal-case> => return (Continue <intermediate>)",
+                "    end.",
+                "",
+                f"Definition {summary['func_name']}_M_normal",
+                "  : MretTy -> MONAD <ret> :=",
+                "  fun s => return <normal-result-expression>.",
+                "```",
+            ])
+        else:
+            lines.append(
+                "Generate the abstract program `M` directly so it simulates the C source. "
+                "No `MretTy` or intermediate components are required."
+            )
+            lines.extend([
+                "",
+                "Use the plain `return EXPR` form for monadic returns; never write "
+                "`@ret _ T x` with placeholder underscores.",
+            ])
+    else:
+        lines.append(
+            "Generate `MretTy` and the 4 non-guard components so the composed abstract "
+            "program simulates the C source."
+        )
     if generation_policy.get("generated_scaffolding"):
         lines.append(
             "The following definitions are already generated by the scaffold. Do not redefine them: "
@@ -212,14 +274,20 @@ def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = N
             "Use opaque callee placeholders when modeling same-file calls: "
             + ", ".join(generation_policy["opaque_external_programs"])
         )
-    lines.extend([
-        "Return Coq definitions only for:",
-        "- `MretTy`",
-        f"- `{summary['func_name']}_M_loop_before`",
-        f"- `{summary['func_name']}_M_loop_M1`",
-        f"- `{summary['func_name']}_M_loop_M2`",
-        f"- `{summary['func_name']}_M_loop_end`",
-    ])
+
+    if must_define:
+        lines.append("Return Coq definitions only for:")
+        for name in must_define:
+            lines.append(f"- `{name}`")
+    else:
+        lines.extend([
+            "Return Coq definitions only for:",
+            "- `MretTy`",
+            f"- `{summary['func_name']}_M_loop_before`",
+            f"- `{summary['func_name']}_M_loop_M1`",
+            f"- `{summary['func_name']}_M_loop_M2`",
+            f"- `{summary['func_name']}_M_loop_end`",
+        ])
 
     if few_shot_examples:
         lines.extend(["", "## Examples"])

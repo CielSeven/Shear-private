@@ -5,6 +5,94 @@ import pytest
 from GenMonads.absprog import context as context_mod
 
 
+_SLL_REVERSE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list* sll_reverse(struct list* head)\n'
+    '/*@\n'
+    '      Require listrep(head)\n'
+    '      Ensure  listrep(__return)\n'
+    '*/\n'
+    '{\n'
+    '    struct list* prev = (void *)0;\n'
+    '    struct list* curr = head;\n'
+    '    /*@ Inv listrep(prev) * listrep(curr) */\n'
+    '    while (curr != (void *) 0) {\n'
+    '        struct list* next = curr->next;\n'
+    '        curr->next = prev;\n'
+    '        prev = curr;\n'
+    '        curr = next;\n'
+    '    }\n'
+    '    return prev;\n'
+    '}\n'
+)
+
+
+_SLL_COPY_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list *sll_copy(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(x) * listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *p, *q, *t, *y;\n'
+    '    p = x; y = (struct list *) 0; t = (struct list *) 0;\n'
+    '    /*@ Inv sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3) */\n'
+    '    while (p) {\n'
+    '        q = (struct list *) 0;\n'
+    '        q->next = y; y = q; p = p->next;\n'
+    '    }\n'
+    '    return y;\n'
+    '}\n'
+)
+
+
+_SLL_MULTI_MERGE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list * sll_merge(struct list * x, struct list * y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */;\n'
+    '\n'
+    'struct list * sll_multi_merge(struct list * x, struct list * y, struct list * z)\n'
+    '/*@ Require listrep(x) * listrep(y) * listrep(z)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *t, *u;\n'
+    '    if (x == (struct list *) 0) {\n'
+    '        t = sll_merge(y, z);\n'
+    '        return t;\n'
+    '    }\n'
+    '    t = x;\n'
+    '    u = t->next;\n'
+    '    /*@ Inv exists v, v == t -> data && u == t -> next && t != 0 &&\n'
+    '            listrep(y) * listrep(z) * listrep(u) * lseg(x@pre, t) */\n'
+    '    while (u) {\n'
+    '        if (y) { t->next = y; t = y; y = y->next; }\n'
+    '        else { u = sll_merge(u, z); t->next = u; return x; }\n'
+    '        if (z) { t->next = z; t = z; z = z->next; }\n'
+    '        else { u = sll_merge(u, y); t->next = u; return x; }\n'
+    '        t->next = u; t = u; u = u->next;\n'
+    '    }\n'
+    '    u = sll_merge(y, z);\n'
+    '    t->next = u;\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+def _write_src(tmp_path, name, src):
+    p = tmp_path / name
+    p.write_text(src, encoding="utf-8")
+    return str(p)
+
+
 def test_normalize_block_trims_outer_blank_lines_and_trailing_spaces():
     text = "\n  first line   \n    second line\t \n\n"
 
@@ -133,11 +221,12 @@ def test_has_segment_predicate_detects_any_segment_shape():
     assert not context_mod._has_segment_predicate("sll(x, l1) * dll(y, l2)")
 
 
-def test_collect_synthesis_context_matches_sll_reverse_fixture():
-    ctx = context_mod.collect_synthesis_context("shape_invdataset/sll/sll_reverse.c")
+def test_collect_synthesis_context_matches_sll_reverse_fixture(tmp_path):
+    c_file = _write_src(tmp_path, "sll_reverse.c", _SLL_REVERSE_SRC)
+    ctx = context_mod.collect_synthesis_context(c_file)
 
     assert ctx["id"] == "sll_reverse"
-    assert ctx["source"]["c_file"] == "shape_invdataset/sll/sll_reverse.c"
+    assert ctx["source"]["c_file"] == c_file
     assert ctx["predicate_family"] == "sll"
     assert ctx["summary"]["func_name"] == "sll_reverse"
     assert ctx["features"] == {
@@ -172,8 +261,9 @@ def test_collect_synthesis_context_matches_sll_reverse_fixture():
     }
 
 
-def test_collect_synthesis_context_captures_multi_return_copy_shape():
-    ctx = context_mod.collect_synthesis_context("shape_invdataset/sll/sll_copy.c")
+def test_collect_synthesis_context_captures_multi_return_copy_shape(tmp_path):
+    c_file = _write_src(tmp_path, "sll_copy.c", _SLL_COPY_SRC)
+    ctx = context_mod.collect_synthesis_context(c_file)
 
     assert ctx["predicate_family"] == "sllseg"
     assert ctx["summary"]["func_name"] == "sll_copy"
@@ -187,27 +277,53 @@ def test_collect_synthesis_context_captures_multi_return_copy_shape():
     assert ctx["signatures"]["M"] == "list Z -> MONAD ((list Z * list Z))"
 
 
-def test_collect_synthesis_context_requires_function_name_for_multifunction_file():
+def test_collect_synthesis_context_requires_function_name_for_multifunction_file(tmp_path):
+    # Synthetic multi-function fixture: two loop-bearing functions, the
+    # second invariant carries an extra data witness (``t -> data == w``)
+    # so we can verify inv_var_count widens by 1.
+    c_file = tmp_path / "two_loops.c"
+    c_file.write_text(
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list *func_a(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x != 0) { x = x->next; }\n'
+        '    return x;\n'
+        '}\n'
+        '\n'
+        'struct list *func_b(struct list *t)\n'
+        '/*@ Require listrep(t)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    /*@ Inv exists w, t != 0 && t -> data == w && listrep(t) */\n'
+        '    while (t != 0) { t = t->next; }\n'
+        '    return t;\n'
+        '}\n'
+    )
+
     with pytest.raises(ValueError, match="Function name is required for multi-function files"):
-        context_mod.collect_synthesis_context("shape_invdataset/sll/sll_rotate.c")
+        context_mod.collect_synthesis_context(str(c_file))
 
-    left = context_mod.collect_synthesis_context(
-        "shape_invdataset/sll/sll_rotate.c", func_name="sll_rotate_left"
-    )
-    right = context_mod.collect_synthesis_context(
-        "shape_invdataset/sll/sll_rotate.c", func_name="sll_rotate_right"
-    )
+    a = context_mod.collect_synthesis_context(str(c_file), func_name="func_a")
+    b = context_mod.collect_synthesis_context(str(c_file), func_name="func_b")
 
-    assert left["id"] == "sll_rotate_left"
-    assert left["summary"]["func_name"] == "sll_rotate_left"
-    assert left["features"]["inv_var_count"] == 3  # l1, l2 + data witness w
-    assert right["id"] == "sll_rotate_right"
-    assert right["summary"]["func_name"] == "sll_rotate_right"
-    assert right["features"]["inv_var_count"] == 4  # l1, l2, l3 + data witness w
+    assert a["id"] == "func_a"
+    assert a["summary"]["func_name"] == "func_a"
+    assert a["features"]["inv_var_count"] == 1  # only the predicate-generated l1
+    assert b["id"] == "func_b"
+    assert b["summary"]["func_name"] == "func_b"
+    assert b["features"]["inv_var_count"] == 2  # l1 + data witness w
 
 
-def test_collect_file_synthesis_manifest_tracks_targets_and_callees():
-    manifest = context_mod.collect_file_synthesis_manifest("shape_invdataset/sll/sll_multi_merge.c")
+def test_collect_file_synthesis_manifest_tracks_targets_and_callees(tmp_path):
+    c_file = _write_src(tmp_path, "sll_multi_merge.c", _SLL_MULTI_MERGE_SRC)
+    manifest = context_mod.collect_file_synthesis_manifest(c_file)
 
     assert manifest["file_id"] == "sll_multi_merge"
     assert manifest["targets"] == ["sll_multi_merge"]
@@ -221,9 +337,10 @@ def test_collect_file_synthesis_manifest_tracks_targets_and_callees():
     assert funcs["sll_multi_merge"]["summary"]["func_name"] == "sll_multi_merge"
 
 
-def test_collect_synthesis_context_includes_available_callees_for_target():
+def test_collect_synthesis_context_includes_available_callees_for_target(tmp_path):
+    c_file = _write_src(tmp_path, "sll_multi_merge.c", _SLL_MULTI_MERGE_SRC)
     ctx = context_mod.collect_synthesis_context(
-        "shape_invdataset/sll/sll_multi_merge.c",
+        c_file,
         func_name="sll_multi_merge",
     )
 
@@ -252,6 +369,41 @@ def test_collect_synthesis_context_includes_available_callees_for_target():
     assert "match e with" in ctx["control_flow"]["template"]["top_level"]
 
 
+def test_collect_file_synthesis_manifest_discovers_cross_file_callees(tmp_path):
+    helper_c = tmp_path / "list_tail.c"
+    helper_c.write_text(
+        '#include "h.h"\n'
+        'struct list *list_tail(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{ return x; }\n'
+    )
+    caller_c = tmp_path / "list_append_raw.c"
+    caller_c.write_text(
+        '#include "h.h"\n'
+        'struct list *list_append_raw(struct list *x, struct list *y)\n'
+        '/*@ Require listrep(x) * listrep(y)\n'
+        '    Ensure  listrep(__return)\n'
+        ' */\n'
+        '{\n'
+        '    struct list *tail;\n'
+        '    tail = list_tail(x);\n'
+        '    return tail;\n'
+        '}\n'
+    )
+
+    manifest = context_mod.collect_file_synthesis_manifest(str(caller_c))
+    funcs = {entry["func_name"]: entry for entry in manifest["functions"]}
+
+    assert "list_tail" in funcs
+    assert funcs["list_tail"]["cross_file"] is True
+    assert funcs["list_tail"]["defined_in"] == str(helper_c)
+    assert funcs["list_tail"]["should_synthesize"] is False
+    assert funcs["list_tail"]["externals"]["M"] == "list Z -> MONAD (list Z)"
+    assert funcs["list_append_raw"]["calls"] == ["list_tail"]
+
+
 def test_collect_synthesis_context_raises_pipeline_error(monkeypatch):
     monkeypatch.setattr(
         context_mod,
@@ -263,14 +415,17 @@ def test_collect_synthesis_context_raises_pipeline_error(monkeypatch):
         context_mod.collect_synthesis_context("demo.c")
 
 
-def test_collect_synthesis_context_rejects_functions_without_loop_invariants(monkeypatch):
+def test_collect_synthesis_context_rejects_functions_without_funcspec(monkeypatch):
+    # A function with no funcspec is not synthesizable.  Functions with a
+    # funcspec but no loop invariants are now synthesizable via the Option-C
+    # no-loop scaffold (see test_collect_synthesis_context_handles_no_loop_function).
     monkeypatch.setattr(
         context_mod,
         "process_and_translate_file",
         lambda *_args, **_kwargs: {"file": "demo.c", "function": "demo", "inner_assertions": []},
     )
 
-    with pytest.raises(ValueError, match="Function 'demo' has no loop invariants"):
+    with pytest.raises(ValueError, match="has no funcspec to synthesize"):
         context_mod.collect_synthesis_context("demo.c")
 
 

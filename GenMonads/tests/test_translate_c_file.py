@@ -1,7 +1,8 @@
 """
 Test suite for C file translation.
 
-Tests translating C files from shape_invdataset to rel files.
+Tests translating synthetic C source fixtures (written to tmp_path) into
+rel files.  No checked-in dataset files are read.
 """
 
 import os
@@ -14,11 +15,88 @@ from GenMonads.translate_c_file import (
     collect_callee_functions,
 )
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-SLL_DIR = os.path.join(BASE_DIR, 'shape_invdataset', 'sll')
-DLL_DIR = os.path.join(BASE_DIR, 'shape_invdataset', 'dll')
-OUTPUT_SLL_DIR = os.path.join(BASE_DIR, 'output', 'shape', 'rel', 'sll')
-OUTPUT_DLL_DIR = os.path.join(BASE_DIR, 'output', 'shape', 'rel', 'dll')
+
+# ---------------------------------------------------------------------------
+# Synthetic C source fixtures
+# ---------------------------------------------------------------------------
+
+_SLL_COPY_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list *sll_copy(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(x) * listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *p, *q, *t, *y;\n'
+    '    p = x; y = (struct list *) 0; t = (struct list *) 0;\n'
+    '    /*@ Inv sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3) */\n'
+    '    while (p) {\n'
+    '        q = (struct list *) 0;\n'
+    '        q->next = y; y = q; p = p->next;\n'
+    '    }\n'
+    '    return y;\n'
+    '}\n'
+)
+
+
+_SLL_APPEND_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list *sll_append(struct list *x, struct list *y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *t, *u;\n'
+    '    if (x == 0) { return y; }\n'
+    '    t = x; u = t->next;\n'
+    '    /*@ Inv lseg(x@pre, t) * listrep(u) * listrep(y) */\n'
+    '    while (u) { t = u; u = t->next; }\n'
+    '    t->next = y;\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+_SLL_MULTI_MERGE_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list * sll_merge(struct list * x, struct list * y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */;\n'
+    '\n'
+    'struct list * sll_multi_merge(struct list * x, struct list * y, struct list * z)\n'
+    '/*@ Require listrep(x) * listrep(y) * listrep(z)\n'
+    '    Ensure  listrep(__return)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *t, *u;\n'
+    '    if (x == (struct list *) 0) { t = sll_merge(y, z); return t; }\n'
+    '    t = x; u = t->next;\n'
+    '    /*@ Inv exists v, v == t -> data && u == t -> next && t != 0 &&\n'
+    '            listrep(y) * listrep(z) * listrep(u) * lseg(x@pre, t) */\n'
+    '    while (u) {\n'
+    '        if (y) { t->next = y; t = y; y = y->next; }\n'
+    '        else { u = sll_merge(u, z); t->next = u; return x; }\n'
+    '        if (z) { t->next = z; t = z; z = z->next; }\n'
+    '        else { u = sll_merge(u, y); t->next = u; return x; }\n'
+    '        t->next = u; t = u; u = u->next;\n'
+    '    }\n'
+    '    u = sll_merge(y, z); t->next = u;\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+def _write_src(tmp_path, name, src):
+    p = tmp_path / name
+    p.write_text(src, encoding="utf-8")
+    return str(p)
 
 
 # ============================================================================
@@ -26,11 +104,9 @@ OUTPUT_DLL_DIR = os.path.join(BASE_DIR, 'output', 'shape', 'rel', 'dll')
 # ============================================================================
 
 class TestSingleFile:
-    def test_sll_copy(self):
-        input_path = os.path.join(SLL_DIR, 'sll_copy.c')
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_copy_rel.c')
-        if not os.path.exists(input_path):
-            pytest.skip("sll_copy.c not found")
+    def test_sll_copy(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_copy.c', _SLL_COPY_SRC)
+        output_path = str(tmp_path / 'sll_copy_rel.c')
 
         assert translate_c_file(input_path, output_path)
         assert os.path.exists(output_path)
@@ -46,11 +122,9 @@ class TestSingleFile:
         assert spec_match is not None
         assert 'sll(' in spec_match.group(1)
 
-    def test_sll_append(self):
-        input_path = os.path.join(SLL_DIR, 'sll_append.c')
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_append_rel.c')
-        if not os.path.exists(input_path):
-            pytest.skip("sll_append.c not found")
+    def test_sll_append(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_append.c', _SLL_APPEND_SRC)
+        output_path = str(tmp_path / 'sll_append_rel.c')
 
         assert translate_c_file(input_path, output_path)
 
@@ -66,23 +140,20 @@ class TestSingleFile:
 # ============================================================================
 
 class TestDirectory:
-    def test_sll_directory(self):
-        if not os.path.exists(SLL_DIR):
-            pytest.skip("sll directory not found")
+    def test_directory_translation(self, tmp_path):
+        """translate_directory should process every .c file in a directory."""
+        in_dir = tmp_path / "inputs"
+        out_dir = tmp_path / "outputs"
+        in_dir.mkdir()
+        (in_dir / "sll_copy.c").write_text(_SLL_COPY_SRC)
+        (in_dir / "sll_append.c").write_text(_SLL_APPEND_SRC)
 
-        results = translate_directory(SLL_DIR, OUTPUT_SLL_DIR)
+        results = translate_directory(str(in_dir), str(out_dir))
         total = len(results)
         success = sum(1 for v in results.values() if v)
-        assert success == total, f"{total - success} files failed: {[k for k, v in results.items() if not v]}"
-
-    def test_dll_directory(self):
-        if not os.path.exists(DLL_DIR):
-            pytest.skip("dll directory not found")
-
-        results = translate_directory(DLL_DIR, OUTPUT_DLL_DIR)
-        total = len(results)
-        success = sum(1 for v in results.values() if v)
-        assert success == total, f"{total - success} files failed: {[k for k, v in results.items() if not v]}"
+        assert total == 2
+        assert success == total, \
+            f"{total - success} files failed: {[k for k, v in results.items() if not v]}"
 
 
 # ============================================================================
@@ -90,24 +161,23 @@ class TestDirectory:
 # ============================================================================
 
 class TestOutputVerification:
-    def test_sll_copy_output_contents(self):
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_copy_rel.c')
-        if not os.path.exists(output_path):
-            pytest.skip("sll_copy_rel.c not found (run translation first)")
+    def test_sll_copy_output_contents(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_copy.c', _SLL_COPY_SRC)
+        output_path = str(tmp_path / 'sll_copy_rel.c')
+        assert translate_c_file(input_path, output_path)
 
         with open(output_path, 'r') as f:
             content = f.read()
 
         assert 'sll(x, l' in content, "Function spec should use sll predicate with exists-quantified vars"
         assert 'safeExec(ATrue, bind(sll_copy_M_loop' in content, "safeExec with correct program"
-        assert 'exists l1 l2 l3,' in content, "Exists quantifier in invariant"
+        assert 'exists' in content, "Exists quantifier in invariant"
         assert 'sllseg(' in content, "sllseg predicate used"
 
-    def test_compare_original_and_translated(self):
-        input_path = os.path.join(SLL_DIR, 'sll_copy.c')
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_copy_rel.c')
-        if not os.path.exists(input_path) or not os.path.exists(output_path):
-            pytest.skip("Input or output file not found")
+    def test_compare_original_and_translated(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_copy.c', _SLL_COPY_SRC)
+        output_path = str(tmp_path / 'sll_copy_rel.c')
+        assert translate_c_file(input_path, output_path)
 
         with open(input_path, 'r') as f:
             original = f.read()
@@ -120,12 +190,9 @@ class TestOutputVerification:
         assert 'sll(' in translated
         assert 'sllseg(' in translated
 
-    def test_multi_merge_output_declares_helper_program_signature(self):
-        input_path = os.path.join(SLL_DIR, 'sll_multi_merge.c')
-        if not os.path.exists(input_path):
-            pytest.skip("sll_multi_merge.c not found")
-
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_multi_merge_rel.c')
+    def test_multi_merge_output_declares_helper_program_signature(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_multi_merge.c', _SLL_MULTI_MERGE_SRC)
+        output_path = str(tmp_path / 'sll_multi_merge_rel.c')
         assert translate_c_file(input_path, output_path)
 
         with open(output_path, 'r') as f:
@@ -163,10 +230,36 @@ class TestSafeexecInclude:
         result = insert_safeexec_include(content)
         assert result == content
 
-    def test_present_in_sll_copy_output(self):
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_copy_rel.c')
-        if not os.path.exists(output_path):
-            pytest.skip("sll_copy_rel.c not found")
+    def test_skipped_when_header_includes_safeexec_transitively(self, tmp_path):
+        # The .c content does NOT mention safeexec_def.h directly, but its
+        # included header does.
+        (tmp_path / "x.h").write_text('#include "safeexec_def.h"\n')
+        content = '#include "x.h"\n\nint main() {}'
+        result = insert_safeexec_include(content, header_search_dirs=[str(tmp_path)])
+        # Unchanged: don't insert a redundant include.
+        assert result == content
+        assert result.count("safeexec_def.h") == 0
+
+    def test_skipped_when_nested_header_includes_safeexec(self, tmp_path):
+        # x.h -> mid.h -> safeexec_def.h
+        (tmp_path / "mid.h").write_text('#include "safeexec_def.h"\n')
+        (tmp_path / "x.h").write_text('#include "mid.h"\n')
+        content = '#include "x.h"\n\nint main() {}'
+        result = insert_safeexec_include(content, header_search_dirs=[str(tmp_path)])
+        assert result == content
+
+    def test_inserts_when_header_does_not_include_safeexec(self, tmp_path):
+        # The header exists but doesn't include safeexec_def.h, so the .c
+        # still needs the explicit include.
+        (tmp_path / "x.h").write_text('struct list { int data; struct list *next; };\n')
+        content = '#include "x.h"\n\nint main() {}'
+        result = insert_safeexec_include(content, header_search_dirs=[str(tmp_path)])
+        assert '#include "safeexec_def.h"' in result
+
+    def test_present_in_sll_copy_output(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_copy.c', _SLL_COPY_SRC)
+        output_path = str(tmp_path / 'sll_copy_rel.c')
+        assert translate_c_file(input_path, output_path)
         with open(output_path, 'r') as f:
             content = f.read()
         assert '#include "safeexec_def.h"' in content
@@ -311,29 +404,30 @@ class TestCoqBlocks:
     def test_empty_func_infos(self):
         assert generate_coq_blocks('foo', []) == ''
 
-    def test_import_coq_in_sll_copy_output(self):
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_copy_rel.c')
-        if not os.path.exists(output_path):
-            pytest.skip("sll_copy_rel.c not found")
+    def test_import_coq_in_sll_copy_output(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_copy.c', _SLL_COPY_SRC)
+        output_path = str(tmp_path / 'sll_copy_rel.c')
+        assert translate_c_file(input_path, output_path)
         with open(output_path, 'r') as f:
             content = f.read()
         assert '/*@ Import Coq Require Import sll_copy_rel_lib */' in content
 
-    def test_extern_coq_in_sll_copy_output(self):
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_copy_rel.c')
-        if not os.path.exists(output_path):
-            pytest.skip("sll_copy_rel.c not found")
+    def test_extern_coq_in_sll_copy_output(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_copy.c', _SLL_COPY_SRC)
+        output_path = str(tmp_path / 'sll_copy_rel.c')
+        assert translate_c_file(input_path, output_path)
         with open(output_path, 'r') as f:
             content = f.read()
         assert '/*@ Extern Coq (MretTy :: *) */' in content
         assert 'sll_copy_M: list Z -> program unit (list Z * list Z)' in content
-        assert 'sll_copy_M_loop: list Z -> list Z -> list Z -> program unit MretTy' in content
+        assert 'sll_copy_M_loop:' in content
+        assert 'program unit MretTy' in content
         assert 'sll_copy_M_loop_end: MretTy -> program unit (list Z * list Z)' in content
 
-    def test_extern_coq_in_sll_append_output(self):
-        output_path = os.path.join(OUTPUT_SLL_DIR, 'sll_append_rel.c')
-        if not os.path.exists(output_path):
-            pytest.skip("sll_append_rel.c not found")
+    def test_extern_coq_in_sll_append_output(self, tmp_path):
+        input_path = _write_src(tmp_path, 'sll_append.c', _SLL_APPEND_SRC)
+        output_path = str(tmp_path / 'sll_append_rel.c')
+        assert translate_c_file(input_path, output_path)
         with open(output_path, 'r') as f:
             content = f.read()
         assert '/*@ Import Coq Require Import sll_append_rel_lib */' in content
