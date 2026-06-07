@@ -8,13 +8,17 @@ _TOKEN_REGEX = re.compile(
         (?P<OR>\|\|)|
         (?P<NE1>!=)|
         (?P<NE2><>)|
+        (?P<LE><=)|
+        (?P<GE>>=)|
+        (?P<ARROW>->)|
+        (?P<LT><)|
+        (?P<GT>>)|
         (?P<NOT>!)|
         (?P<LPAREN>\()|
         (?P<RPAREN>\))|
         (?P<EQ>==)|
-        (?P<ARROW>->)|
         (?P<ID>[A-Za-z_][A-Za-z0-9_]*)|
-        (?P<NUM>0)
+        (?P<NUM>\d+)
     """, re.VERBOSE
 )
 

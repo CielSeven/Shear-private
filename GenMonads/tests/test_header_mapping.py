@@ -2,6 +2,9 @@
 Test header mapping functionality.
 """
 
+import pytest
+
+from GenMonads import header_mapping
 from GenMonads.header_mapping import (
     get_header_mappings,
     add_header_mapping,
@@ -12,8 +15,15 @@ from GenMonads.header_mapping import (
 )
 
 
-def setup_function():
-    """Reset mappings before each test."""
+@pytest.fixture(autouse=True)
+def _isolate_header_mapping_file(tmp_path, monkeypatch):
+    """Redirect the on-disk config to a tmp path so tests never mutate the
+    user's ``GenMonads/data/header_mappings.json``.  Then reset to defaults
+    inside that isolated file before each test runs."""
+    monkeypatch.setattr(
+        header_mapping, "_CONFIG_FILE", str(tmp_path / "header_mappings.json")
+    )
+    monkeypatch.setattr(header_mapping, "_CONFIG_DIR", str(tmp_path))
     reset_header_mappings()
 
 

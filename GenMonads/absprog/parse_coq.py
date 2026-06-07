@@ -104,6 +104,7 @@ _COMPONENT_PARAMETER_SUFFIX = {
     "M_before": "M_before",
     "M_normal": "M_normal",
     "M": "M",
+    "guardP": "guardP",
 }
 
 

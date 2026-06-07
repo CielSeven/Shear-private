@@ -4,9 +4,11 @@ import re
 from typing import Dict, List, Optional
 
 from GenMonads.addabstract import add_safeexec_predicate, process_funcspec_with_safeexec
+from GenMonads.absprog.gen_rel_lib import needs_mretty
+from GenMonads.absprog.loop_forest import build_loop_templates
 from GenMonads.early_return import detect_early_return_shape
 from GenMonads.transshape.process_and_translate import process_and_translate_file
-from GenMonads.translate_c_file import collect_func_extern_info
+from GenMonads.translate_c_file import _extract_function_body, collect_func_extern_info
 
 
 def _normalize_block(text: str) -> str:
@@ -18,6 +20,21 @@ def _tuple_type(types: List[str]) -> str:
     if len(types) == 1:
         return types[0]
     return "(" + " * ".join(types) + ")"
+
+
+def _type_arg(type_expr: str) -> str:
+    """Parenthesize ``type_expr`` if it would be mis-parsed as multiple
+    tokens when used as an argument in a type application (``MONAD t``,
+    ``CntOrBrk t s``, ``early_result t r``).  Single-token types and
+    already-parenthesized types are returned unchanged."""
+    expr = type_expr.strip()
+    if not expr:
+        return expr
+    if expr.startswith("(") and expr.endswith(")"):
+        return expr
+    if " " in expr:
+        return f"({expr})"
+    return expr
 
 
 def _curried_type(types: List[str]) -> str:
@@ -217,20 +234,23 @@ def _build_control_flow_template(
     return_type: str,
     has_pre_loop_early_return: bool,
     has_loop_body_early_return: bool,
+    guard_available: bool = True,
+    loop_condition: str = "",
 ) -> Dict:
     state_type = _tuple_type(inv_types)
+    state_arg = _type_arg(state_type)
     req_args = _curried_type(require_types)
     inv_args = _curried_type(inv_types)
     loop_ret_type = f"early_result MretTy ({return_type})" if has_loop_body_early_return else "MretTy"
     loop_before_type = (
-        f"{req_args}MONAD (early_result {state_type} ({return_type}))"
+        f"{req_args}MONAD (early_result {state_arg} ({return_type}))"
         if has_pre_loop_early_return
-        else f"{req_args}MONAD {state_type}"
+        else f"{req_args}MONAD {state_arg}"
     )
     loop_body_type = (
-        f"{state_type} -> MONAD (CntOrBrk {state_type} (early_result MretTy ({return_type})))"
+        f"{state_type} -> MONAD (CntOrBrk {state_arg} (early_result MretTy ({return_type})))"
         if has_loop_body_early_return
-        else f"{state_type} -> MONAD (CntOrBrk {state_type} MretTy)"
+        else f"{state_type} -> MONAD (CntOrBrk {state_arg} MretTy)"
     )
     loop_type = f"{inv_args}program unit ({loop_ret_type})"
     after_loop_type = (
@@ -317,10 +337,11 @@ def _build_control_flow_template(
 
     m1_type = f"{state_type} -> MONAD MretTy"
     m2_type = (
-        f"{state_type} -> MONAD (early_result {state_type} ({return_type}))"
+        f"{state_type} -> MONAD (early_result {state_arg} ({return_type}))"
         if has_loop_body_early_return
-        else f"{state_type} -> MONAD {state_type}"
+        else f"{state_type} -> MONAD {state_arg}"
     )
+    guard_type = f"{state_type} -> Prop"
 
     prompt_signatures = {
         "M_loop_before": loop_before_type,
@@ -332,6 +353,14 @@ def _build_control_flow_template(
         "M_after_loop": after_loop_type,
         "M": top_level_type,
     }
+
+    # When GuardGen could not produce a concrete guard, the skeleton emits a
+    # `Parameter {fn}_guardP` placeholder.  Ask the LLM to fill it in, but pin
+    # its signature so downstream scaffolding (M_loop_body) keeps type-checking.
+    required_components = ["MretTy", "M_loop_before", "M_1", "M_2", "M_loop_end"]
+    if not guard_available:
+        required_components.append("guardP")
+        prompt_signatures["guardP"] = guard_type
 
     return {
         "template_case": (
@@ -352,7 +381,10 @@ def _build_control_flow_template(
         "prompt_signatures": prompt_signatures,
         # Component keys the LLM must supply; consumed by parser, assembler,
         # and prompt rendering.
-        "required_components": ["MretTy", "M_loop_before", "M_1", "M_2", "M_loop_end"],
+        "required_components": required_components,
+        "guard_available": guard_available,
+        "guard_signature": guard_type,
+        "loop_condition": loop_condition,
         "template": {
             "loop_body_definition": loop_body_definition,
             "top_level": top_level_definition,
@@ -431,6 +463,188 @@ def _build_no_loop_control_flow_template(
     }
 
 
+def _build_loop_templates(
+    func_name: str,
+    c_source: str,
+    inv_assertions: List[Dict],
+) -> List[Dict]:
+    """Per-loop control-flow descriptors — thin wrapper over the canonical
+    :func:`loop_forest.build_loop_templates` so context.py callers keep the
+    historical entry-point name while consolidating the implementation."""
+    return build_loop_templates(func_name, c_source, inv_assertions)
+
+
+def _attach_per_loop_safeexec(func_name: str, loop_templates: List[Dict]) -> None:
+    """Populate each template's ``loop_invariant_with_safeexec`` field — the
+    translated invariant wrapped in
+    ``safeExec(ATrue, bind(<M_loop{k}>(...), <M_loop{root}_end>), X)``.
+
+    Single-loop functions use the legacy unsuffixed names
+    (``{fn}_M_loop`` / ``{fn}_M_loop_end``); multi-loop functions use the
+    forest per-loop / per-root names that match ``_rel.c`` and the lib.
+    """
+    if not loop_templates:
+        return
+    by_idx = {t["loop_index"]: t for t in loop_templates}
+
+    def _root(loop_idx: int) -> int:
+        cur = loop_idx
+        while by_idx[cur]["parent"] is not None:
+            cur = by_idx[cur]["parent"]
+        return cur
+
+    forest_mode = len(loop_templates) > 1
+    for t in loop_templates:
+        k = t["loop_index"] + 1
+        root_k = _root(t["loop_index"]) + 1
+        if forest_mode:
+            program_loop = f"{func_name}_M_loop{k}"
+            program_end = f"{func_name}_M_loop{root_k}_end"
+        else:
+            program_loop = f"{func_name}_M_loop"
+            program_end = f"{func_name}_M_loop_end"
+        translated = t.get("loop_invariant_translated", "")
+        if not translated:
+            t["loop_invariant_with_safeexec"] = ""
+            continue
+        t["loop_invariant_with_safeexec"] = add_safeexec_predicate(
+            translated, t.get("inv_variables", []), program_loop, program_end,
+        )
+
+
+def _forest_required_components(
+    func_name: str,
+    require_types: List[str],
+    return_type: str,
+    loop_templates: List[Dict],
+) -> tuple:
+    """Compute the LLM-required component list + per-component Coq
+    signatures for the forest scaffold (task #22).
+
+    Mirrors the structure emitted by
+    :func:`gen_rel_lib.generate_forest_func_block` so every Parameter the
+    skeleton leaves open is paired with a required Definition the LLM must
+    supply (and its expected type).  Component keys are the suffix portion
+    (without ``{func_name}_``); :func:`parse_coq._component_parameter_name`
+    re-prefixes them when extracting Definitions from the response.
+    """
+    if not loop_templates:
+        return [], {}
+
+    by_idx = {t["loop_index"]: t for t in loop_templates}
+    top_levels = sorted(
+        (t for t in loop_templates if t["parent"] is None),
+        key=lambda t: t["loop_index"],
+    )
+
+    required: List[str] = ["MretTy"]
+    sigs: Dict[str, str] = {"MretTy": "Type"}
+
+    # Intermediate result types between sequential top-level loops.
+    res_ty_for: Dict[int, str] = {}
+    if len(top_levels) > 1:
+        for t in top_levels[:-1]:
+            k = t["loop_index"] + 1
+            name = f"loop{k}_ResTy"
+            required.append(name)
+            sigs[name] = "Type"
+            res_ty_for[t["loop_index"]] = f"{func_name}_loop{k}_ResTy"
+
+    for t in loop_templates:
+        k = t["loop_index"] + 1
+        Sk = t["state_type"]
+        Sk_arg = _type_arg(Sk)
+
+        if not t.get("guard_available"):
+            name = f"loop{k}_guardP"
+            required.append(name)
+            sigs[name] = f"{Sk} -> Prop"
+
+        m1 = f"M_loop{k}_M1"
+        required.append(m1)
+        sigs[m1] = f"{Sk} -> MONAD MretTy"
+
+        if not t.get("children"):
+            m2 = f"M_loop{k}_M2"
+            required.append(m2)
+            sigs[m2] = f"{Sk} -> MONAD {Sk_arg}"
+        else:
+            for c_idx in t["children"]:
+                ck = c_idx + 1
+                Sc_arg = _type_arg(by_idx[c_idx]["state_type"])
+                ti = f"M_loop{k}_to_inner_{ck}"
+                required.append(ti)
+                sigs[ti] = f"{Sk} -> MONAD {Sc_arg}"
+                ai = f"M_loop{k}_after_inner_{ck}"
+                required.append(ai)
+                sigs[ai] = f"{Sk} -> MretTy -> MONAD {Sk_arg}"
+
+    req_curried = _curried_type(require_types) if require_types else ""
+    for i, t in enumerate(top_levels):
+        k = t["loop_index"] + 1
+        Sk_arg = _type_arg(t["state_type"])
+        before = f"M_loop{k}_before"
+        required.append(before)
+        if i == 0:
+            sigs[before] = f"{req_curried}MONAD {Sk_arg}"
+        else:
+            prev_res = res_ty_for[top_levels[i - 1]["loop_index"]]
+            sigs[before] = f"{prev_res} -> MONAD {Sk_arg}"
+
+    for i, t in enumerate(top_levels):
+        k = t["loop_index"] + 1
+        end = f"M_loop{k}_end"
+        required.append(end)
+        if i == len(top_levels) - 1:
+            sigs[end] = f"MretTy -> MONAD ({return_type})"
+        else:
+            res = res_ty_for[t["loop_index"]]
+            sigs[end] = f"MretTy -> MONAD {res}"
+
+    return required, sigs
+
+
+def _scoped_mretty_name(fn: str, manifest: Dict) -> str:
+    """Return the actual ``MretTy`` Parameter name the skeleton emits for *fn*.
+
+    Mirrors ``gen_rel_lib.generate_rel_lib``: when two or more functions in
+    the file need a ``MretTy``, the skeleton scopes the name per-function as
+    ``{fn}_MretTy`` to avoid collisions; otherwise the shared bare ``MretTy``
+    is used.  The synthesis prompt's must_define list — and therefore the
+    workdir validator — has to use the same name.
+
+    Defensive: a manifest without function-list info collapses to bare
+    ``MretTy``, matching the legacy single-function behaviour.
+
+    Cross-file sibling entries (``cross_file=True``) are excluded from the
+    count even when they themselves need a ``MretTy``.  Each cross-file lib
+    is generated independently and makes its own scoping decision based on
+    its own in-file function set; counting them here would diverge from
+    ``generate_rel_lib``'s in-file-only logic and yield a ``must_define``
+    name the skeleton doesn't actually emit.
+    """
+    funcs = manifest.get("functions") or []
+    users = sum(
+        1 for entry in funcs
+        if not entry.get("cross_file", False) and needs_mretty(entry)
+    )
+    return f"{fn}_MretTy" if users > 1 else "MretTy"
+
+
+def _loop_forest_summary(loop_templates: List[Dict]) -> List[Dict]:
+    """Minimal topology view (just what callers need for prompt / codegen)."""
+    return [
+        {
+            "loop_index": t["loop_index"],
+            "parent": t["parent"],
+            "children": list(t["children"]),
+            "keyword": t["keyword"],
+            "inv_index": t["inv_index"],
+        }
+        for t in loop_templates
+    ]
+
+
 def _collect_extern_info(func_data: Dict, include_helpers: bool = False) -> Optional[Dict]:
     try:
         return collect_func_extern_info(func_data, include_helpers=include_helpers)
@@ -474,6 +688,23 @@ def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
     has_loop_body_early_return = early_return_shape["has_loop_body_early_return"]
     has_no_loop_early_return = early_return_shape.get("has_no_loop_early_return", False)
 
+    # Self-recursive Option-C functions can't use the split scaffold: the
+    # synthesized `M_normal` would need to call the entry-point `M` which is
+    # defined further down in the lib, producing an unresolved reference.
+    # Fall back to a single opaque `Parameter {fn}_M` so the LLM provides a
+    # `Definition {fn}_M := ...` that can recurse via its own name.
+    is_recursive = False
+    try:
+        with open(c_file, "r", encoding="utf-8") as f:
+            file_content = f.read()
+        body = _extract_function_body(file_content, func_data["function"])
+        if body and re.search(
+            rf"\b{re.escape(func_data['function'])}\s*\(", body
+        ):
+            is_recursive = True
+    except (OSError, ValueError):
+        pass
+
     if has_loop_program:
         control_flow = _build_control_flow_template(
             func_data["function"],
@@ -482,16 +713,53 @@ def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
             return_type,
             has_pre_loop_early_return,
             has_loop_body_early_return,
+            guard_available=bool(first_inv.get("coq_guard")),
+            loop_condition=first_inv.get("command_guard", ""),
         )
     else:
+        effective_early_return = has_no_loop_early_return and not is_recursive
         control_flow = _build_no_loop_control_flow_template(
             func_data["function"],
             require_types,
             return_type,
-            has_early_return=has_no_loop_early_return,
+            has_early_return=effective_early_return,
         )
     control_flow["has_top_level_loop"] = early_return_shape["has_top_level_loop"]
     control_flow["has_top_level_loop"] = early_return_shape["has_top_level_loop"]
+
+    # Per-loop templates (one entry per `while` / `for` discovered in the
+    # function body) — replaces the single-first_inv assumption for the
+    # downstream nested-loop codegen.  For single-loop functions this list
+    # has exactly one entry and the legacy `control_flow` block above stays
+    # the source of truth.
+    loop_templates = _build_loop_templates(
+        func_data["function"], c_source, inv_assertions
+    )
+    # Per-loop safeExec-wrapped invariants: each loop's residual program uses
+    # its OWN ``_M_loop{k}`` and its root ancestor's ``_M_loop{root_k}_end``
+    # (mirrors what ``translate_c_file._build_per_inv_programs`` produces for
+    # the ``_rel.c`` annotations).  Single-loop functions get the legacy
+    # single-name pair, so the prompt-rendered invariant stays identical.
+    if loop_templates:
+        _attach_per_loop_safeexec(func_data["function"], loop_templates)
+    control_flow["loop_templates"] = loop_templates
+    control_flow["loop_forest"] = _loop_forest_summary(loop_templates)
+    control_flow["has_nested_loops"] = any(
+        t["parent"] is not None for t in loop_templates
+    )
+    control_flow["has_sequential_loops"] = (
+        sum(1 for t in loop_templates if t["parent"] is None) > 1
+    )
+
+    # When the function has >1 loops the forest scaffold takes over: override
+    # the LLM's required_components and prompt_signatures with per-loop holes.
+    if len(loop_templates) > 1:
+        forest_required, forest_sigs = _forest_required_components(
+            func_data["function"], require_types, return_type, loop_templates,
+        )
+        control_flow["required_components"] = forest_required
+        control_flow["prompt_signatures"] = forest_sigs
+        control_flow["template_case"] = "forest"
 
     require_translated = funcspec.get("require", {}).get("translated", "")
     ensure_translated = funcspec.get("ensure", {}).get("translated", "")
@@ -543,13 +811,15 @@ def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
             "control_flow": control_flow,
         },
         "signatures": {
-            "M_loop_before": f"{_curried_type(require_types)}MONAD {state_type}",
+            "M_loop_before": f"{_curried_type(require_types)}MONAD {_type_arg(state_type)}",
             "M_1": f"{state_type} -> MONAD MretTy",
-            "M_2": f"{state_type} -> MONAD {state_type}",
+            "M_2": f"{state_type} -> MONAD {_type_arg(state_type)}",
             "M_loop_end": f"MretTy -> MONAD ({return_type})",
             "M": f"{_curried_type(require_types)}MONAD ({return_type})",
         },
         "control_flow": control_flow,
+        "loop_templates": loop_templates,
+        "loop_forest": _loop_forest_summary(loop_templates),
     }
 
 
@@ -572,23 +842,36 @@ def _candidate_callees_in_source(source: str) -> set[str]:
 
 
 def _collect_sibling_manifest_entries(
-    c_file: str, candidate_names: set[str]
+    c_file: str,
+    candidate_names: set[str],
+    sibling_dirs: Optional[List[str]] = None,
 ) -> List[Dict]:
-    """For each name in `candidate_names`, if `{name}.c` exists as a sibling
-    in the same directory, parse it and return a manifest entry tagged
-    `cross_file=True`. Returns [] if no candidates resolve.
+    """For each name in ``candidate_names``, if ``{name}.c`` exists as a
+    sibling in one of the search directories, parse it and return a manifest
+    entry tagged ``cross_file=True``.  Returns [] if no candidates resolve.
+
+    Search directories default to ``[dirname(c_file)]``; when
+    ``sibling_dirs`` is provided, those replace the default.
     """
     if not candidate_names:
         return []
-    src_dir = os.path.dirname(os.path.abspath(c_file))
+    if sibling_dirs:
+        search_dirs = [os.path.abspath(d) for d in sibling_dirs]
+    else:
+        search_dirs = [os.path.dirname(os.path.abspath(c_file))]
     own_stem = os.path.splitext(os.path.basename(c_file))[0]
     entries: List[Dict] = []
     seen: set[str] = set()
     for name in sorted(candidate_names):
         if name == own_stem or name in seen:
             continue
-        sibling_path = os.path.join(src_dir, f"{name}.c")
-        if not os.path.isfile(sibling_path):
+        sibling_path = None
+        for d in search_dirs:
+            candidate = os.path.join(d, f"{name}.c")
+            if os.path.isfile(candidate):
+                sibling_path = candidate
+                break
+        if sibling_path is None:
             continue
         try:
             sibling_result = process_and_translate_file(sibling_path, generate_guards=False)
@@ -608,10 +891,16 @@ def _collect_sibling_manifest_entries(
             externals = {}
             if helper_info is not None:
                 externals["M"] = _build_m_signature(helper_info)
+            sibling_has_loop = _collect_extern_info(func_data) is not None
             sibling_entry = {
                 "func_name": fn_name,
                 "has_body": True,
-                "has_loop_invariants": _collect_extern_info(func_data) is not None,
+                "has_loop_invariants": sibling_has_loop,
+                "has_loop_program": sibling_has_loop,
+                # Sibling functions live in another file — we don't carry
+                # their early-return classification across, which only
+                # matters for the file-local mretty-scoping decision.
+                "has_no_loop_early_return": False,
                 "is_recursive": False,
                 "called_by": [],
                 "calls": [],
@@ -628,7 +917,11 @@ def _collect_sibling_manifest_entries(
     return entries
 
 
-def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
+def _build_file_manifest_from_result(
+    c_file: str,
+    result: Dict,
+    sibling_dirs: Optional[List[str]] = None,
+) -> Dict:
     if "error" in result:
         raise ValueError(result["error"])
 
@@ -646,7 +939,9 @@ def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
         unresolved_candidates |= _candidate_callees_in_source(source)
     unresolved_candidates -= set(function_names)
     unresolved_candidates -= _C_KEYWORDS_AND_BUILTINS
-    sibling_entries = _collect_sibling_manifest_entries(c_file, unresolved_candidates)
+    sibling_entries = _collect_sibling_manifest_entries(
+        c_file, unresolved_candidates, sibling_dirs=sibling_dirs
+    )
     sibling_names = [entry["func_name"] for entry in sibling_entries]
     callable_names = function_names + sibling_names
 
@@ -688,10 +983,28 @@ def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
         if helper_info is not None:
             externals["M"] = _build_m_signature(helper_info)
 
+        # Flags driving the file-wide MretTy-scoping decision (shared with
+        # gen_rel_lib via :func:`needs_mretty`).  We compute them eagerly
+        # here — for helpers/cross-file decls we still know whether the
+        # function has invariants AND whether its body (if available)
+        # carries a no-loop early-return shape.
+        entry_has_loop_program = has_loop_invariants
+        entry_has_no_loop_early_return = False
+        if has_body and not entry_has_loop_program:
+            try:
+                shape = detect_early_return_shape(function_sources[func_name])
+                entry_has_no_loop_early_return = shape.get(
+                    "has_no_loop_early_return", False
+                )
+            except (KeyError, ValueError):
+                pass
+
         entry = {
             "func_name": func_name,
             "has_body": has_body,
             "has_loop_invariants": has_loop_invariants,
+            "has_loop_program": entry_has_loop_program,
+            "has_no_loop_early_return": entry_has_no_loop_early_return,
             "is_recursive": func_name in call_graph.get(func_name, []),
             "called_by": sorted(called_by.get(func_name, [])),
             "calls": call_graph.get(func_name, []),
@@ -731,9 +1044,12 @@ def _build_file_manifest_from_result(c_file: str, result: Dict) -> Dict:
     }
 
 
-def collect_file_synthesis_manifest(c_file: str) -> Dict:
+def collect_file_synthesis_manifest(
+    c_file: str,
+    sibling_dirs: Optional[List[str]] = None,
+) -> Dict:
     result = process_and_translate_file(c_file, generate_guards=True)
-    return _build_file_manifest_from_result(c_file, result)
+    return _build_file_manifest_from_result(c_file, result, sibling_dirs=sibling_dirs)
 
 
 def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str] = None) -> Dict:
@@ -750,7 +1066,28 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
         if callee_entry is None:
             continue
         opaque_program = callee_name + "_M"
-        available_callees.append({
+        # Include the C body of the callee when it's available so the LLM
+        # can match the call's semantics — not just its signature.  Bodies
+        # are only included when ``has_body`` is set AND we can locate the
+        # source: same-file callees use ``manifest["source"]["c_file"]``;
+        # cross-file callees use ``defined_in``.  Truly external callees
+        # (declaration-only, no defined_in) have no body to include —
+        # we simply omit it.
+        callee_c_source = None
+        if callee_entry.get("has_body"):
+            body_src_file = (
+                callee_entry.get("defined_in")
+                if callee_entry.get("cross_file")
+                else manifest["source"]["c_file"]
+            )
+            if body_src_file:
+                try:
+                    callee_c_source = _extract_function_source(
+                        body_src_file, callee_name
+                    )
+                except (ValueError, OSError):
+                    callee_c_source = None
+        entry = {
             "func_name": callee_name,
             "opaque_program": opaque_program,
             "has_body": callee_entry["has_body"],
@@ -760,7 +1097,10 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
             "call_sites": func_entry.get("call_sites", {}).get(callee_name, []),
             "cross_file": callee_entry.get("cross_file", False),
             "defined_in": callee_entry.get("defined_in"),
-        })
+        }
+        if callee_c_source:
+            entry["c_source"] = callee_c_source
+        available_callees.append(entry)
 
     opaque_call_obligations = []
     for callee in available_callees:
@@ -781,10 +1121,11 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
     required = control_flow.get("required_components", [
         "MretTy", "M_loop_before", "M_1", "M_2", "M_loop_end",
     ])
+    mretty_name = _scoped_mretty_name(fn, manifest)
     must_define = []
     for component in required:
         if component == "MretTy":
-            must_define.append("MretTy")
+            must_define.append(mretty_name)
         elif component == "M_1":
             must_define.append(f"{fn}_M_loop_M1")
         elif component == "M_2":
@@ -808,6 +1149,10 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
         ],
     }
 
+    control_flow_dict = func_entry.get("control_flow", {})
+    loop_templates = control_flow_dict.get("loop_templates", [])
+    loop_forest = control_flow_dict.get("loop_forest", [])
+
     target = {
         "func_name": func_entry["func_name"],
         "has_body": func_entry["has_body"],
@@ -822,7 +1167,9 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
         "features": func_entry["features"],
         "prompt_context": func_entry["prompt_context"],
         "signatures": func_entry["signatures"],
-        "control_flow": func_entry.get("control_flow", {}),
+        "control_flow": control_flow_dict,
+        "loop_templates": loop_templates,
+        "loop_forest": loop_forest,
     }
 
     return {
@@ -838,7 +1185,9 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
         "features": func_entry["features"],
         "prompt_context": func_entry["prompt_context"],
         "signatures": func_entry["signatures"],
-        "control_flow": func_entry.get("control_flow", {}),
+        "control_flow": control_flow_dict,
+        "loop_templates": loop_templates,
+        "loop_forest": loop_forest,
         "target": target,
         "available_callees": available_callees,
         "opaque_call_obligations": opaque_call_obligations,
@@ -854,15 +1203,22 @@ def _context_from_manifest(manifest: Dict, result: Dict, func_name: Optional[str
     }
 
 
-def collect_synthesis_context(c_file: str, func_name: Optional[str] = None) -> Dict:
+def collect_synthesis_context(
+    c_file: str,
+    func_name: Optional[str] = None,
+    sibling_dirs: Optional[List[str]] = None,
+) -> Dict:
     result = process_and_translate_file(c_file, generate_guards=True)
-    manifest = _build_file_manifest_from_result(c_file, result)
+    manifest = _build_file_manifest_from_result(c_file, result, sibling_dirs=sibling_dirs)
     return _context_from_manifest(manifest, result, func_name)
 
 
-def collect_all_synthesis_contexts(c_file: str) -> List[Dict]:
+def collect_all_synthesis_contexts(
+    c_file: str,
+    sibling_dirs: Optional[List[str]] = None,
+) -> List[Dict]:
     result = process_and_translate_file(c_file, generate_guards=True)
-    manifest = _build_file_manifest_from_result(c_file, result)
+    manifest = _build_file_manifest_from_result(c_file, result, sibling_dirs=sibling_dirs)
     contexts = []
     for target_name in manifest["targets"]:
         contexts.append(_context_from_manifest(manifest, result, target_name))
@@ -870,9 +1226,10 @@ def collect_all_synthesis_contexts(c_file: str) -> List[Dict]:
 
 
 def write_synthesis_context(
-    c_file: str, output_path: str, func_name: Optional[str] = None
+    c_file: str, output_path: str, func_name: Optional[str] = None,
+    sibling_dirs: Optional[List[str]] = None
 ) -> Dict:
-    context = collect_synthesis_context(c_file, func_name=func_name)
+    context = collect_synthesis_context(c_file, func_name=func_name, sibling_dirs=sibling_dirs)
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)

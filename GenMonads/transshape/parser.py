@@ -356,8 +356,29 @@ class AssertionParser:
                     self.pos = peek_pos
                     break
             else:
-                # No comma after this identifier - shouldn't happen in well-formed exists
-                # But we'll be lenient and assume this is the last variable
+                # No comma: could be space-separated Coq-style `exists x y z, body`
+                # (treat the next identifier as another variable if it isn't
+                # followed by an operator), or this is the final variable.
+                peek_pos = self.pos
+                next_ident = self.parse_identifier()
+                if next_ident is not None:
+                    self.skip_whitespace()
+                    next_char = self.current_char()
+                    if next_char == ',':
+                        # `exists x y,` — current var is intermediate, restart loop.
+                        vars.append(var)
+                        self.pos = peek_pos
+                        continue
+                    is_more_vars = (
+                        next_char is not None
+                        and next_char not in '=!-(*&|<>'
+                        and (next_char.isalpha() or next_char == '_')
+                    )
+                    self.pos = peek_pos
+                    if is_more_vars:
+                        vars.append(var)
+                        continue
+                self.pos = peek_pos
                 vars.append(var)
                 break
 

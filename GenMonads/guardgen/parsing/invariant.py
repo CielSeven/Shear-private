@@ -17,6 +17,12 @@ def normalize_inv(inv: str) -> str:
 
 _PRED_CALL_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)\((.*)\)$')
 
+# Memory-state predicates describe raw allocator state (e.g. ``store(&v, T, x)``,
+# ``undef_data_at(&v, T)``), not list/tree shape.  They never root at the loop
+# pointer, so they are irrelevant to the guard — skip them rather than treating
+# them as unknown shape predicates.
+_MEMORY_STATE_PREDICATES = {"store", "undef_data_at"}
+
 # Matches pure equalities like "u -> next == w", "t == p", "x != 0"
 _PURE_EQ_RE = re.compile(
     r'^([\w][\w\s]*(?:\s*->\s*\w+)?)\s*==\s*([\w][\w\s]*(?:\s*->\s*\w+)?)$'
@@ -46,6 +52,9 @@ def parse_invariant(inv: str) -> list[ShAtom]:
             # pure part like "x=3" — ignore
             continue
         name, inner = m.group(1), m.group(2)
+        if name in _MEMORY_STATE_PREDICATES:
+            # Not a shape predicate; irrelevant to the loop guard.
+            continue
         spec = PREDICATES.get(name)
         if spec is None:
             raise ValueError(f"Unknown predicate '{name}' (not registered)")
@@ -55,6 +64,31 @@ def parse_invariant(inv: str) -> list[ShAtom]:
         payload = spec.parse_args(args)
         atoms.append(ShAtom(spec=spec, payload=payload))
     return atoms
+
+
+_STORE_CALL_RE = re.compile(
+    r"store\(\s*&\s*(.+?)\s*,\s*[^,]+?\s*,\s*([A-Za-z_]\w*)\s*\)"
+)
+
+
+def extract_store_bindings(inv: str) -> dict[str, str]:
+    """Map each C lvalue stored in the invariant to its abstract scalar var.
+
+    ``store(&i, int, vi)``        -> ``{"i": "vi"}``
+    ``store(&sum, long, s)``      -> ``{"sum": "s"}``
+    ``store(&(p->data), int, v)`` -> ``{"p->data": "v"}``
+
+    The lvalue is normalised: surrounding parens stripped and ``->`` spacing
+    collapsed, matching the keys produced by the condition parser.
+    """
+    bindings: dict[str, str] = {}
+    for m in _STORE_CALL_RE.finditer(inv):
+        lvalue = m.group(1).strip()
+        while lvalue.startswith("(") and lvalue.endswith(")"):
+            lvalue = lvalue[1:-1].strip()
+        lvalue = re.sub(r"\s*->\s*", "->", lvalue)
+        bindings[lvalue] = m.group(2).strip()
+    return bindings
 
 
 def extract_pure_aliases(inv: str) -> dict[str, str]:

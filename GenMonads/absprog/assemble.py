@@ -4,30 +4,21 @@ from typing import Dict, List, Optional
 
 from GenMonads.absprog.gen_rel_lib import (
     _collect_cross_file_callees,
+    _collect_func_info_with_guard,
+    _extract_function_source,
     collect_early_return_shape_for_function,
     generate_rel_lib,
 )
 from GenMonads.transshape.process_and_translate import process_and_translate_file
-from GenMonads.translate_c_file import collect_callee_functions, collect_func_extern_info
+from GenMonads.translate_c_file import collect_callee_functions
 
 
-def _collect_func_info_with_guard(func_data: Dict, include_helpers: bool = False) -> Optional[Dict]:
-    info = collect_func_extern_info(func_data, include_helpers=include_helpers)
-    if info is None:
-        return None
-
-    inner = func_data.get("inner_assertions", [])
-    inv_assertions = [a for a in inner if a.get("type") == "Inv" and "variables" in a]
-    coq_guard = None
-    for assertion in inv_assertions:
-        if "coq_guard" in assertion:
-            coq_guard = assertion["coq_guard"]
-            break
-    info["coq_guard"] = coq_guard
-    return info
-
-
-def generate_rel_lib_skeleton_for_file(input_path: str) -> str:
+def generate_rel_lib_skeleton_for_file(
+    input_path: str,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    coq_lib_dir: Optional[str] = None,
+) -> str:
     result = process_and_translate_file(input_path, generate_guards=True)
     if "error" in result:
         raise ValueError(result["error"])
@@ -35,19 +26,34 @@ def generate_rel_lib_skeleton_for_file(input_path: str) -> str:
     func_infos: List[Dict] = []
     with open(input_path, "r", encoding="utf-8") as f:
         content = f.read()
+
+    def _safe_func_source(fn_name: str) -> Optional[str]:
+        if not fn_name:
+            return None
+        try:
+            return _extract_function_source(content, fn_name)
+        except ValueError:
+            return None
+
     if result.get("functions"):
         for func_data in result["functions"]:
             # Include any function with a funcspec: loop-bearing functions
             # get the full scaffold, no-loop functions get either the
             # early-return split or a single opaque Parameter declaration.
             include_helpers = not func_data.get("inner_assertions")
-            info = _collect_func_info_with_guard(func_data, include_helpers=include_helpers)
+            func_source = _safe_func_source(func_data.get("function", ""))
+            info = _collect_func_info_with_guard(
+                func_data, include_helpers=include_helpers, c_source=func_source,
+            )
             if info:
                 info.update(collect_early_return_shape_for_function(content, info["func_name"]))
                 func_infos.append(info)
     else:
         include_helpers = not result.get("inner_assertions")
-        info = _collect_func_info_with_guard(result, include_helpers=include_helpers)
+        func_source = _safe_func_source(result.get("function", ""))
+        info = _collect_func_info_with_guard(
+            result, include_helpers=include_helpers, c_source=func_source,
+        )
         if info:
             info.update(collect_early_return_shape_for_function(content, info["func_name"]))
             func_infos.append(info)
@@ -56,10 +62,17 @@ def generate_rel_lib_skeleton_for_file(input_path: str) -> str:
         raise ValueError(f"No abstract program signatures found in {input_path}")
 
     func_names = [info["func_name"] for info in func_infos]
-    imported_rel_libs = _collect_cross_file_callees(input_path, func_names, content)
+    imported_rel_libs = _collect_cross_file_callees(
+        input_path, func_names, content, sibling_dirs=sibling_dirs
+    )
+    from GenMonads.absprog.gen_rel_lib import _build_in_file_call_graph
+    call_graph = _build_in_file_call_graph(content, func_names)
 
     basename = os.path.splitext(os.path.basename(input_path))[0]
-    return generate_rel_lib(basename, func_infos, imported_rel_libs)
+    return generate_rel_lib(
+        basename, func_infos, imported_rel_libs, call_graph,
+        monad=monad, coq_lib_dir=coq_lib_dir,
+    )
 
 
 def _replace_parameter_with_definition(content: str, parameter_name: str, definition: str) -> str:
@@ -95,10 +108,18 @@ _COMPONENT_PARAMETER_NAME = {
     "M_before": "M_before",
     "M_normal": "M_normal",
     "M": "M",
+    "guardP": "guardP",
 }
 
 
-def assemble_rel_lib_from_blocks(c_file: str, func_name: str, blocks: Dict[str, str]) -> str:
+def assemble_rel_lib_from_blocks(
+    c_file: str,
+    func_name: str,
+    blocks: Dict[str, str],
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    coq_lib_dir: Optional[str] = None,
+) -> str:
     """Substitute LLM-provided Definitions into the rel_lib skeleton.
 
     Recognized keys in *blocks* (only those present are substituted):
@@ -107,7 +128,9 @@ def assemble_rel_lib_from_blocks(c_file: str, func_name: str, blocks: Dict[str, 
     - ``M_before``, ``M_normal`` (no-loop early-return scaffold)
     - ``M`` (no-loop straight-line scaffold; replaces ``Parameter {fn}_M``)
     """
-    content = generate_rel_lib_skeleton_for_file(c_file)
+    content = generate_rel_lib_skeleton_for_file(
+        c_file, sibling_dirs=sibling_dirs, monad=monad, coq_lib_dir=coq_lib_dir,
+    )
 
     # Determine the MretTy name used by the skeleton for this function.
     # Multi-function skeletons use a scoped `{func}_MretTy`; single-function
@@ -125,10 +148,15 @@ def assemble_rel_lib_from_blocks(c_file: str, func_name: str, blocks: Dict[str, 
         )
         content = _replace_mretty(content, mretty_block, mretty_name=mretty_name)
 
-    for component, suffix in _COMPONENT_PARAMETER_NAME.items():
-        block = blocks.get(component)
-        if not block:
+    for component, block in blocks.items():
+        if component == "MretTy" or not block:
             continue
+        # Known single-loop / no-loop components have a fixed suffix mapping;
+        # forest components (``M_loop2_M1``, ``loop1_guardP``,
+        # ``M_loop1_to_inner_2``, …) are loop-indexed and pass through
+        # verbatim — the LLM's Definition uses the same name as the skeleton's
+        # Parameter so the replacement is a direct lookup.
+        suffix = _COMPONENT_PARAMETER_NAME.get(component, component)
         renamed = _rename_mretty(block, mretty_name)
         content = _replace_parameter_with_definition(
             content, f"{func_name}_{suffix}", renamed
@@ -137,9 +165,13 @@ def assemble_rel_lib_from_blocks(c_file: str, func_name: str, blocks: Dict[str, 
 
 
 def write_assembled_rel_lib(
-    c_file: str, func_name: str, blocks: Dict[str, str], output_path: str
+    c_file: str, func_name: str, blocks: Dict[str, str], output_path: str,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
 ) -> str:
-    content = assemble_rel_lib_from_blocks(c_file, func_name, blocks)
+    content = assemble_rel_lib_from_blocks(
+        c_file, func_name, blocks, sibling_dirs=sibling_dirs, monad=monad
+    )
     output_dir = os.path.dirname(output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
@@ -153,11 +185,37 @@ def write_assembled_rel_lib(
 # ---------------------------------------------------------------------------
 
 _LLM_PARAMETER_SUFFIXES = (
+    # Loop scaffold (the common case)
     "_M_loop_before",
     "_M_loop_M1",
     "_M_loop_M2",
     "_M_loop_end",
+    # Option C no-loop early-return scaffold
+    "_M_before",
+    "_M_normal",
+    # LLM-synthesized loop guard (when GuardGen could not produce one)
+    "_guardP",
+    # Straight-line function: single `Parameter {fn}_M` to fill in
+    "_M",
 )
+
+
+# Forest scaffold (task #20) — loop-indexed components.  Names like
+# ``f_M_loop1_M1``, ``f_M_loop2_to_inner_2``, ``f_loop1_guardP`` are
+# recognised by suffix pattern instead of an exact literal.
+_LLM_PARAMETER_SUFFIX_PATTERNS = (
+    re.compile(r"_M_loop\d+_M[12]$"),
+    re.compile(r"_M_loop\d+_(before|end)$"),
+    re.compile(r"_M_loop\d+_(to_inner|after_inner)_\d+$"),
+    re.compile(r"_loop\d+_guardP$"),
+    re.compile(r"_loop\d+_ResTy$"),
+)
+
+
+def _is_llm_parameter_name(name: str) -> bool:
+    if any(name.endswith(suffix) for suffix in _LLM_PARAMETER_SUFFIXES):
+        return True
+    return any(pat.search(name) for pat in _LLM_PARAMETER_SUFFIX_PATTERNS)
 
 
 _TOP_LEVEL_START_RE = re.compile(
@@ -198,12 +256,13 @@ def _extract_mretty_definitions(content: str) -> Dict[str, str]:
 
 
 def _extract_llm_definitions(content: str) -> Dict[str, str]:
-    """Return {name: block_text} for LLM-replaceable Definitions (M_loop_*)."""
+    """Return {name: block_text} for LLM-replaceable Definitions (M_loop_*
+    and forest-scaffold ``M_loop\\d+_*`` / ``loop\\d+_guardP`` / ``ResTy``)."""
     result: Dict[str, str] = {}
     for kind, name, block in _iter_top_level_blocks(content):
         if kind != "Definition":
             continue
-        if not any(name.endswith(suffix) for suffix in _LLM_PARAMETER_SUFFIXES):
+        if not _is_llm_parameter_name(name):
             continue
         result[name] = block
     return result
@@ -222,6 +281,9 @@ def merge_rel_libs_into_file(
     c_file: str,
     per_function_assembled_paths: List[str],
     output_path: str,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    coq_lib_dir: Optional[str] = None,
 ) -> str:
     """Merge per-function assembled lib files into one multi-function file.
 
@@ -236,7 +298,9 @@ def merge_rel_libs_into_file(
     if not per_function_assembled_paths:
         raise ValueError("No per-function assembled lib files to merge")
 
-    merged = generate_rel_lib_skeleton_for_file(c_file)
+    merged = generate_rel_lib_skeleton_for_file(
+        c_file, sibling_dirs=sibling_dirs, monad=monad, coq_lib_dir=coq_lib_dir,
+    )
 
     # Gather function names from the skeleton by scanning its section headers.
     func_names = re.findall(
@@ -260,7 +324,22 @@ def merge_rel_libs_into_file(
             if owning:
                 break
 
-        scoped_mretty = f"{owning}_MretTy" if owning else "MretTy"
+        # Only rename to the per-function scoped form when the skeleton
+        # actually uses it.  Single-MretTy-user files keep the bare `MretTy`
+        # name (the skeleton emits `Parameter MretTy : Type.`), so renaming
+        # substituted definitions to `{owning}_MretTy` would introduce an
+        # undeclared identifier.
+        if owning:
+            scoped_token = f"{owning}_MretTy"
+            if re.search(
+                rf"Parameter\s+{re.escape(scoped_token)}\s*:\s*Type\b",
+                merged,
+            ):
+                scoped_mretty = scoped_token
+            else:
+                scoped_mretty = "MretTy"
+        else:
+            scoped_mretty = "MretTy"
 
         for name, definition in definitions.items():
             substituted = _rename_mretty(definition, scoped_mretty)

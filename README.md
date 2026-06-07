@@ -7,28 +7,56 @@ Translating C programs with shape assertions to data predicates and abstract pro
 Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Translate a single C file
-uv run llm4pv shape_invdataset/sll/sll_copy.c output/shape/rel/sll/sll_copy_rel.c
-uv run llm4pv --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=output/shape/rel/sll/sll_copy_rel.c
+# End-to-end pipeline (default): translate -> rel_lib template -> synthesis.
+# Stage 3 uses backend=command with `codex exec - --output-last-message {response_file}`
+# by default; --max-retries defaults to 2; --patch-rel-c is on by default.
+uv run llm4pv \
+  shape_invdataset/sll/sll_copy.c \
+  output/shape/rel/sll/sll_copy_rel.c \
+  --synth-output-dir output/gen/synth/sll_copy
 
-# Translate an entire directory
-uv run llm4pv shape_invdataset/sll output/shape/rel/sll
+# Translate-only (skip rel_lib + synth)
+uv run llm4pv shape_invdataset/sll/sll_copy.c output/shape/rel/sll/sll_copy_rel.c \
+  --no-rel-lib --no-synth
 
-# Generate abstract program Rocq libs
-uv run llm4pv-rellib shape_invdataset/sll
+# Translate + rel_lib template, skip synthesis
+uv run llm4pv shape_invdataset/sll/sll_copy.c output/shape/rel/sll/sll_copy_rel.c --no-synth
 
-# Generate synthesis contexts for abstract-program generation
-uv run llm4pv-context shape_invdataset/sll/sll_copy.c ./output/gen/context/sll_copy.auto.json
+# Directory mode (same flags apply per file).
+# Files are topologically ordered so callees are translated, scaffolded, and
+# synthesized before their callers — required because each caller's rel_lib
+# does `Require Import <callee>_rel_lib.` on sibling .c files.
+uv run llm4pv shape_invdataset/sll output/shape/rel/sll \
+  --synth-output-dir output/gen/synth/sll
 
-# Run the abstract-program synthesis pipeline
-uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy
-
-# Generate a Rocq guard from an invariant and loop condition
-uv run llm4pv-guard "sll(p, l1) * sll(y, l2)" "p != null"
+# Stage-isolated entry points (still available)
+uv run llm4pv-rellib shape_invdataset/sll                  # rel_lib templates only
+uv run llm4pv-context shape_invdataset/sll/sll_copy.c \
+  ./output/gen/context/sll_copy.auto.json                  # synthesis contexts
+uv run llm4pv-synth shape_invdataset/sll/sll_copy.c \
+  ./output/gen/synth/sll_copy                              # synthesis only
+uv run llm4pv-guard "sll(p, l1) * sll(y, l2)" "p != null"  # one-off Rocq guard
 
 # Run tests
 uv run --with pytest pytest
 ```
+
+### `llm4pv` flags
+
+The end-to-end command exposes per-stage opt-outs and synthesis passthrough flags:
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--no-rel-lib` | off | Skip stage 2. Incompatible with default synth — pair with `--no-synth`. |
+| `--coq-lib-dir DIR` | `COQ_LIB_DIR` from env/CONFIGURE | Where `_rel_lib.v` templates land. |
+| `--no-synth` | off | Skip stage 3. |
+| `--synth-output-dir DIR` | — | Required unless `--no-synth`. |
+| `--backend` | `command` | `gold-example`, `response-file`, or `command`. |
+| `--command` | `codex exec - --output-last-message {response_file}` | Shell command for the `command` backend. |
+| `--few-shot` | — | Repeatable few-shot JSON. |
+| `--max-retries` | `2` | Repair attempts after the first try. |
+| `--no-patch-rel-c` | off | Skip post-synth patching of the generated `_rel.c`. |
+| `--no-check` | off | Skip the Rocq syntax check inside synthesis. |
 
 ## What It Does
 
@@ -106,10 +134,22 @@ guard = gen_coq_guard("sll(p, l1) * sll(y, l2)", "p != null")
 
 ## Pipeline Stages
 
-1. **TransShape** (`GenMonads/transshape/`) — Extract `/*@ ... */` annotations and translate shape predicates to data predicates (`listrep` -> `sll`, `lseg` -> `sllseg`), adding list variables (`?l1`, `?l2`, ...). Supports multiple functions per file and variable prefixing for multi-loop disambiguation. Pure data-field clauses like `t -> data == w` promote `w` (type `Z`) into the abstract loop state via the configurable `GenMonads/data/data_fields.json` (`data`, `key`, `val` by default).
+1. **TransShape** (`GenMonads/transshape/`) — Extract `/*@ ... */` annotations and translate shape predicates to data predicates (`listrep` -> `sll`, `lseg` -> `sllseg`), adding list variables (`?l1`, `?l2`, ...). Supports multiple functions per file and variable prefixing for multi-loop disambiguation. Field-equality clauses like `t -> data == w` are desugared into typed `store(&(t->data), int, w)` predicates (field types resolved from `struct` declarations in the source / locally-includable headers); scalar-typed `store` witnesses are promoted into the abstract loop state, pointer-typed ones are spliced verbatim but not carried.
 2. **GuardGen** (`GenMonads/guardgen/`) — Generate Rocq guard functions from loop conditions: null checks, pointer equality, bare `p`/`!p` sugar, and field dereferences. `<root>-><field>` comparisons resolve through a per-predicate field-deref handler (e.g. `x->next != 0` with `sll(x, l)` ⇒ `tl l <> []`). Also resolves pointer aliases from pure equalities in invariants (e.g., `u->next == w`).
 3. **AddAbstract** (`GenMonads/addabstract/`) — Wrap loop invariants with `safeExec(ATrue, bind(...), X)` and `exists`. Require existentials are lifted into the `With` clause; Ensure keeps the `exists` quantifier. When the function has a non-void return type and the Ensure has no `__return` predicate, a witness `r` is synthesized and the abstract program's return type widens accordingly. Functions whose abstract return type is `unit` emit `return(tt)` rather than a bare `return`.
 4. **C File Translation** (`GenMonads/translate_c_file.py`) — Orchestrate stages 1-3, replace annotations in the original C file, translate header includes. Handles multi-function files and annotations placed before or after function headers. Auto-inserts `#include "safeexec_def.h"` and generates `Import Coq` / `Extern Coq` declaration blocks.
+5. **Abstract Program Skeleton** (`GenMonads/absprog/`) — Generate `{basename}_rel_lib.v` with concrete monadic scaffolding (`M_loop_body`, `M_loop_aux`, `M_loop`, `M`) plus the LLM-provided `Parameter`s (`MretTy`, `M_loop_before`, `M_loop_M1`, `M_loop_M2`, `M_loop_end`).
+6. **Synthesis** (`GenMonads/absprog/synthesize.py`) — Run the LLM synthesis loop to replace the template `Parameter`s with `Definition`s, optionally patch the `_rel.c` to drop opaque `MretTy` and append residual program signatures.
+
+`uv run llm4pv` runs stages 1–4 (translate to `_rel.c`), then 5 (rel_lib template), then 6 (synthesis) in one pass. Pass `--no-rel-lib`/`--no-synth` to stop earlier; use `llm4pv-rellib`/`llm4pv-synth` for stage-isolated runs.
+
+### Cross-file callees and directory ordering
+
+When a function in `a.c` calls a function defined in sibling `b.c`, the caller's `a_rel_lib.v` emits `Require Import b_rel_lib.` instead of an opaque `Parameter b_M`. For Rocq to compile the merged libs, `b_rel_lib.v` must be filled in (stage 6) before `a` is synthesized.
+
+In directory mode, `llm4pv` builds a dependency graph from sibling `.c` calls and processes files in topological order — callees first. The chosen order is printed as `Processing order (callees first): ...`. A cyclic dependency triggers a warning and falls back to alphabetical order; you'll need to break the cycle manually (e.g., synthesize one side once with `--no-synth`, then come back).
+
+Truly external callees (defined outside the directory, e.g. libc) stay as opaque `Parameter callee_M : <type>.` in the caller's lib — no ordering is needed for them.
 
 ## Predicate Mappings
 
@@ -120,7 +160,7 @@ guard = gen_coq_guard("sll(p, l1) * sll(y, l2)", "p != null")
 | `dlistrep(x)` | `dll(x, ?l1)` |
 | `dlseg(x, p, n, y)` | `dllseg(x, p, n, y, ?l1)` |
 
-Mappings are configured in `GenMonads/data/predicate_mappings.json`.  Guard-side translations (root-null, segment-eq, field-deref) for the same predicates live in `GenMonads/data/guard_predicates.json`, and the list of struct fields treated as "data" (for invariant data-witness extraction) is in `GenMonads/data/data_fields.json`.
+Mappings are configured in `GenMonads/data/predicate_mappings.json`. Guard-side translations (root-null, segment-eq, field-deref) for the same predicates live in `GenMonads/data/guard_predicates.json`. Data-witness extraction no longer relies on a hand-maintained field list — it walks `store(addr, T, var)` predicates (typed from the C `struct` definitions) and carries `var` iff `T` is a scalar/boolean type.
 
 ## Abstract Program Lib Generation
 

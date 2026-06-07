@@ -57,25 +57,39 @@ class Parser:
         atom = self.parse_atomic_cond()
         return BoolNode("atom", atom=atom)
 
+    def _parse_operand(self) -> str:
+        """Parse an lvalue operand (``id`` or ``id->field``)."""
+        tok = self.eat("ID")
+        name = tok.text
+        if self.peek() and self.peek().kind == "ARROW":
+            self.eat("ARROW")
+            field_tok = self.eat("ID")
+            name = f"{name}->{field_tok.text}"
+        return name
+
     def parse_atomic_cond(self) -> AtomCond:
         """
         Accept a bare identifier "p" as sugar for "p != null".
         Also accept "p->field" as a compound pointer name (sugar for "p->field != null").
-        The translation layer will validate that the pointer is a spatial root pointer.
+        Ordering comparisons (``<``, ``<=``, ``>``, ``>=``) and ``==``/``!=``
+        against a non-zero numeric literal produce a SCALAR_CMP atom.  The
+        translation layer validates pointers against spatial predicates and
+        resolves scalar operands against store bindings.
         """
-        left_tok = self.eat("ID")
-        left = left_tok.text
-
-        # Handle field dereference: p->next becomes compound name "p->next"
-        if self.peek() and self.peek().kind == "ARROW":
-            self.eat("ARROW")
-            field_tok = self.eat("ID")
-            left = f"{left}->{field_tok.text}"
+        left = self._parse_operand()
 
         op = self.peek()
         # If no operator (or boundary), treat "p" as "p != null"
         if (op is None) or (op.kind in ("RPAREN", "AND", "OR")):
             return AtomCond(AtomKind.PTR_NE_NULL, ptr1=left)
+
+        # Ordering operators are unambiguously scalar comparisons.
+        _ORDER_OPS = {"LT": "<", "LE": "<=", "GT": ">", "GE": ">="}
+        if op.kind in _ORDER_OPS:
+            self.eat(op.kind)
+            right = self._parse_scalar_rhs()
+            return AtomCond(AtomKind.SCALAR_CMP, ptr1=left, ptr2=right,
+                            op=_ORDER_OPS[op.kind])
 
         if op.kind == "EQ":
             self.eat("EQ")
@@ -87,14 +101,17 @@ class Parser:
                 if idtxt in ("null", "nullptr"):
                     self.eat("ID")
                     return AtomCond(AtomKind.PTR_EQ_NULL, ptr1=left)
-                else:
-                    self.eat("ID")
-                    return AtomCond(AtomKind.PTR_EQ_PTR, ptr1=left, ptr2=rhs.text)
-            elif rhs.kind == "NUM":  # 0
+                right = self._parse_operand()
+                return AtomCond(AtomKind.PTR_EQ_PTR, ptr1=left, ptr2=right)
+            elif rhs.kind == "NUM":
                 self.eat("NUM")
-                return AtomCond(AtomKind.PTR_EQ_NULL, ptr1=left)
+                if rhs.text == "0":
+                    # ``p == 0`` is null by default; the translator falls back
+                    # to a scalar ``v = 0`` when ``p`` is a store-bound scalar.
+                    return AtomCond(AtomKind.PTR_EQ_NULL, ptr1=left)
+                return AtomCond(AtomKind.SCALAR_CMP, ptr1=left, ptr2=rhs.text, op="==")
             else:
-                raise ValueError("RHS must be null/0 or pointer")
+                raise ValueError("RHS must be null/0, pointer, or number")
 
         elif op.kind in ("NE1", "NE2"):
             self.eat(op.kind)
@@ -106,17 +123,30 @@ class Parser:
                 if idtxt in ("null", "nullptr"):
                     self.eat("ID")
                     return AtomCond(AtomKind.PTR_NE_NULL, ptr1=left)
-                else:
-                    self.eat("ID")
-                    return AtomCond(AtomKind.PTR_NE_PTR, ptr1=left, ptr2=rhs.text)
+                right = self._parse_operand()
+                return AtomCond(AtomKind.PTR_NE_PTR, ptr1=left, ptr2=right)
             elif rhs.kind == "NUM":
                 self.eat("NUM")
-                return AtomCond(AtomKind.PTR_NE_NULL, ptr1=left)
+                if rhs.text == "0":
+                    return AtomCond(AtomKind.PTR_NE_NULL, ptr1=left)
+                return AtomCond(AtomKind.SCALAR_CMP, ptr1=left, ptr2=rhs.text, op="!=")
             else:
-                raise ValueError("RHS must be null/0 or pointer")
+                raise ValueError("RHS must be null/0, pointer, or number")
 
         else:
             raise ValueError(f"Unsupported operator {op.text}")
+
+    def _parse_scalar_rhs(self) -> str:
+        """Parse the RHS of an ordering comparison: an lvalue or a number."""
+        rhs = self.peek()
+        if not rhs:
+            raise ValueError("Missing RHS")
+        if rhs.kind == "NUM":
+            self.eat("NUM")
+            return rhs.text
+        if rhs.kind == "ID":
+            return self._parse_operand()
+        raise ValueError("Scalar comparison RHS must be a variable or number")
 
 
 def parse_cond_full(cond: str) -> BoolNode:

@@ -7,7 +7,12 @@ import sys
 
 from GenMonads.absprog.assemble import merge_rel_libs_into_file
 from GenMonads.absprog.context import collect_all_synthesis_contexts
-from GenMonads.absprog.synthesize import _default_coq_lib_dir, run_synthesis_pipeline
+from GenMonads.absprog.synthesize import (
+    _default_coq_lib_dir,
+    _eliminate_mretty_in_rel_c,
+    _extract_mretty_type,
+    run_synthesis_pipeline,
+)
 from GenMonads.cli_common import (
     add_input_path_arguments,
     add_output_path_argument,
@@ -47,7 +52,9 @@ def _run_batch_for_file(c_file: str, output_dir: str, args):
     failures = []
 
     try:
-        contexts = collect_all_synthesis_contexts(c_file)
+        contexts = collect_all_synthesis_contexts(
+            c_file, sibling_dirs=(args.sibling_dir or None)
+        )
     except Exception as exc:
         stderr_lines.append(f"Failed: {c_file} ({exc})")
         failures.append(c_file)
@@ -68,6 +75,10 @@ def _run_batch_for_file(c_file: str, output_dir: str, args):
                 few_shot_paths=args.few_shot,
                 run_check=not args.no_check,
                 max_retries=args.max_retries,
+                command_timeout=(args.command_timeout or None),
+                sibling_dirs=(args.sibling_dir or None),
+                monad=args.monad,
+                coq_lib_dir=args.coq_lib_dir,
             )
         except Exception as exc:
             stderr_lines.append(f"Failed: {context['id']} ({exc})")
@@ -151,9 +162,8 @@ def main() -> None:
     parser.add_argument(
         "--command",
         help=(
-            "Shell command for the command backend. The rendered prompt is sent on stdin. "
-            "You may also use placeholders like {prompt_file}, {context_file}, {response_file}, "
-            "{output_dir}, {context_id}, {func_name}, and {c_file}."
+            "Deprecated.  Workdir-mode owns the codex invocation now; this "
+            "flag is ignored.  The codex CLI must be on PATH."
         ),
     )
     parser.add_argument(
@@ -172,6 +182,43 @@ def main() -> None:
         type=int,
         default=0,
         help="Number of repair attempts after the initial generation attempt",
+    )
+    from GenMonads.absprog.synthesize import DEFAULT_COMMAND_TIMEOUT_SECONDS
+    parser.add_argument(
+        "--command-timeout",
+        type=int,
+        default=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        help=(
+            f"Timeout (in seconds) for each command-backend invocation. "
+            f"Default {DEFAULT_COMMAND_TIMEOUT_SECONDS}s.  Pass 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--sibling-dir",
+        action="append",
+        default=[],
+        help=(
+            "Directory to search for sibling callee .c files (repeatable). "
+            "Replaces the default of the input file's own directory."
+        ),
+    )
+    parser.add_argument(
+        "--coq-lib-dir",
+        default=None,
+        help=(
+            "Directory holding already-synthesized peer _rel_lib.v files. "
+            "When set, overrides COQ_LIB_DIR for the workdir pre-spawn check "
+            "that verifies every cross-file callee lib is on disk."
+        ),
+    )
+    parser.add_argument(
+        "--monad",
+        choices=["staterel", "staterr"],
+        default="staterel",
+        help=(
+            "Monad backend for the generated rel_lib: 'staterel' (StateRelMonad, "
+            "default) or 'staterr' (error-aware MonadErr)."
+        ),
     )
     parser.add_argument(
         "--exclude",
@@ -218,16 +265,24 @@ def main() -> None:
     # functions, synthesize each one into its own subdirectory.
     if not args.func_name and input_path.endswith(".c"):
         try:
-            contexts = collect_all_synthesis_contexts(input_path)
+            contexts = collect_all_synthesis_contexts(
+                input_path, sibling_dirs=(args.sibling_dir or None)
+            )
         except Exception as exc:
             print(str(exc), file=sys.stderr)
             sys.exit(1)
 
+        # When the file has exactly one synthesizable target but multiple
+        # detected functions (e.g. a callee declaration), pick the lone
+        # target explicitly so the single-call path doesn't trip the
+        # "Function name is required for multi-function files" guard.
+        if len(contexts) == 1:
+            args.func_name = contexts[0]["summary"]["func_name"]
+
         if len(contexts) > 1:
-            if args.patch_rel_c:
-                parser.error("--patch-rel-c is not supported when synthesizing multiple functions")
             failures = []
             passed_assembled_paths = []
+            mretty_by_func = {}
             for context in contexts:
                 func_name = context["summary"]["func_name"]
                 target_dir = os.path.join(output_dir, context["id"])
@@ -244,7 +299,11 @@ def main() -> None:
                         few_shot_paths=args.few_shot,
                         run_check=not args.no_check,
                         max_retries=args.max_retries,
+                        command_timeout=(args.command_timeout or None),
+                        sibling_dirs=(args.sibling_dir or None),
                         promote_rel_lib=False,
+                        monad=args.monad,
+                        coq_lib_dir=args.coq_lib_dir,
                     )
                 except Exception as exc:
                     print(f"Failed: {context['id']} ({exc})", file=sys.stderr)
@@ -257,15 +316,24 @@ def main() -> None:
                 assembled = summary["files"].get("assembled_rel_lib")
                 if summary["status"] == "passed" and assembled:
                     passed_assembled_paths.append(assembled)
+                    mretty_type = _extract_mretty_type(assembled)
+                    if mretty_type:
+                        mretty_by_func[func_name] = mretty_type
 
             # Merge per-function passed libs into a single {basename}_rel_lib.v
             if passed_assembled_paths:
                 basename = os.path.splitext(os.path.basename(input_path))[0]
-                libs_dir = _default_coq_lib_dir()
+                # Honor the per-invocation --coq-lib-dir override (matches the
+                # promotion target picked by _promote_rel_lib_if_accepted).
+                # Without this, the merged multi-function lib silently lands
+                # in the CONFIGURE default while the user's flag is ignored.
+                libs_dir = args.coq_lib_dir or _default_coq_lib_dir()
                 merged_target = os.path.join(libs_dir, f"{basename}_rel_lib.v")
                 try:
                     merge_rel_libs_into_file(
-                        input_path, passed_assembled_paths, merged_target
+                        input_path, passed_assembled_paths, merged_target,
+                        sibling_dirs=(args.sibling_dir or None),
+                        monad=args.monad,
                     )
                     print(f"\nMerged rel_lib: {merged_target}")
                 except Exception as exc:
@@ -287,6 +355,14 @@ def main() -> None:
                                 print(f"Removed stale per-function lib: {stale}")
                             except OSError as exc:
                                 print(f"Warning: could not remove {stale} ({exc})", file=sys.stderr)
+
+            # Patch the single _rel.c with per-function MretTy substitutions.
+            # The codegen for multi-target files emits `{func}_MretTy` per
+            # function (matching the merged rel_lib), so apply the mapping.
+            if args.patch_rel_c and mretty_by_func:
+                _eliminate_mretty_in_rel_c(args.rel_c_path, mretty_by_func)
+                print(f"Patched rel.c: {args.rel_c_path}")
+
             sys.exit(1 if failures else 0)
 
     try:
@@ -301,7 +377,11 @@ def main() -> None:
             few_shot_paths=args.few_shot,
             run_check=not args.no_check,
             max_retries=args.max_retries,
+            command_timeout=(args.command_timeout or None),
+            sibling_dirs=(args.sibling_dir or None),
             rel_c_path=args.rel_c_path if args.patch_rel_c else None,
+            monad=args.monad,
+            coq_lib_dir=args.coq_lib_dir,
         )
     except Exception as exc:
         print(str(exc), file=sys.stderr)

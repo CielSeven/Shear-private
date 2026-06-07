@@ -5,7 +5,7 @@ from GenMonads.guardgen.cond.lexer import lex_cond
 from GenMonads.guardgen.cond.parser import parse_cond_full
 from GenMonads.guardgen.cond.ast import AtomKind
 from GenMonads.guardgen import gen_coq_guard
-from GenMonads.guardgen.parsing.invariant import extract_pure_aliases
+from GenMonads.guardgen.parsing.invariant import extract_pure_aliases, parse_invariant
 
 
 # ---------------------------------------------------------------------------
@@ -261,3 +261,154 @@ class TestGuardPredicateRegistryConfig:
         assert "fun l1 =>" in result
         assert "let '(" not in result
         assert "l1 <> []" in result
+
+
+class TestMemoryStatePredicatesIgnored:
+    """Memory-state predicates (``store``, ``undef_data_at``) are not shape
+    predicates and must be skipped by the invariant parser rather than raising
+    `Unknown predicate`.  They never root at the loop pointer, so the guard is
+    derived purely from the shape atoms."""
+
+    def test_parse_invariant_skips_store(self):
+        atoms = parse_invariant(
+            "exists s l1 l2, store(&sum, long, s) * sllseg(h, c, l1) * sll(c, l2)"
+        )
+        names = [a.spec.name for a in atoms]
+        assert names == ["sllseg", "sll"]
+
+    def test_parse_invariant_skips_undef_data_at(self):
+        atoms = parse_invariant(
+            "exists l, undef_data_at(&tmp, int) * sll(p, l)"
+        )
+        assert [a.spec.name for a in atoms] == ["sll"]
+
+    def test_parse_invariant_still_rejects_unknown_shape_predicate(self):
+        with pytest.raises(ValueError, match="Unknown predicate 'bogus'"):
+            parse_invariant("exists l, bogus(p, l) * sll(p, l)")
+
+    def test_gen_coq_guard_with_store_clause(self):
+        # A sum-accumulator loop: the `store(&acc, ...)` clause must not block
+        # guard generation; the guard comes from `sll(cur, l2)`.
+        inv = "exists s l1 l2, store(&acc, long, s) * sllseg(head, cur, l1) * sll(cur, l2)"
+        result = gen_coq_guard(inv, "cur != 0", extra_vars=["s"])
+        assert "l2 <> []" in result
+        assert "Parameter" not in result
+
+    def test_gen_coq_guard_with_desugared_field_store(self):
+        # `p->data == v` desugars to `store(&(p->data), int, v)`; guard still
+        # resolves from the `sll(p, l)` atom.
+        inv = "exists v l, store(&(p->data), int, v) * sll(p, l)"
+        result = gen_coq_guard(inv, "p != 0", extra_vars=["v"])
+        assert "l <> []" in result
+        assert "Parameter" not in result
+
+
+# ---------------------------------------------------------------------------
+# Scalar loop-condition support (while (i < n), etc.)
+# ---------------------------------------------------------------------------
+
+from GenMonads.guardgen.cond.ast import AtomKind as _AK
+from GenMonads.guardgen.cond.parser import parse_cond_full as _parse_cond
+from GenMonads.guardgen.parsing.invariant import extract_store_bindings
+
+
+class TestScalarLexer:
+    def test_lexes_ordering_operators(self):
+        assert [t.kind for t in lex_cond("i < n")] == ["ID", "LT", "ID"]
+        assert [t.kind for t in lex_cond("i <= n")] == ["ID", "LE", "ID"]
+        assert [t.kind for t in lex_cond("i > n")] == ["ID", "GT", "ID"]
+        assert [t.kind for t in lex_cond("i >= n")] == ["ID", "GE", "ID"]
+
+    def test_lexes_multi_digit_numbers(self):
+        toks = lex_cond("i < 100")
+        assert toks[-1].kind == "NUM"
+        assert toks[-1].text == "100"
+
+    def test_arrow_not_confused_with_gt(self):
+        assert [t.kind for t in lex_cond("p->next")] == ["ID", "ARROW", "ID"]
+
+    def test_ne2_not_confused_with_lt(self):
+        # `<>` must lex as a single NE2 token, not LT followed by GT.
+        assert [t.kind for t in lex_cond("x <> 0")] == ["ID", "NE2", "NUM"]
+
+
+class TestScalarParser:
+    def test_ordering_produces_scalar_cmp(self):
+        node = _parse_cond("i < n")
+        assert node.kind == "atom"
+        assert node.atom.kind == _AK.SCALAR_CMP
+        assert (node.atom.ptr1, node.atom.op, node.atom.ptr2) == ("i", "<", "n")
+
+    def test_nonzero_eq_is_scalar(self):
+        node = _parse_cond("i == 5")
+        assert node.atom.kind == _AK.SCALAR_CMP
+        assert node.atom.op == "=="
+
+    def test_zero_eq_stays_pointer_null(self):
+        node = _parse_cond("p == 0")
+        assert node.atom.kind == _AK.PTR_EQ_NULL
+
+    def test_ident_eq_stays_pointer(self):
+        node = _parse_cond("p == q")
+        assert node.atom.kind == _AK.PTR_EQ_PTR
+
+
+class TestStoreBindings:
+    def test_simple_var(self):
+        b = extract_store_bindings("exists vi, store(&i, int, vi) * sll(x, l)")
+        assert b == {"i": "vi"}
+
+    def test_multiple_and_field(self):
+        b = extract_store_bindings(
+            "store(&i,int,vi) * store(&sum,long,s) * store(&(p->data),int,v)"
+        )
+        assert b == {"i": "vi", "sum": "s", "p->data": "v"}
+
+
+class TestScalarGuard:
+    INV = "exists vi vn, store(&i, int, vi) * store(&n, int, vn)"
+
+    def test_less_than(self):
+        out = gen_coq_guard(self.INV, "i < n", extra_vars=["vi", "vn"])
+        assert "vi < vn" in out
+        assert "Parameter" not in out
+
+    def test_less_equal(self):
+        out = gen_coq_guard(self.INV, "i <= n", extra_vars=["vi", "vn"])
+        assert "vi <= vn" in out
+
+    def test_greater_than_literal(self):
+        out = gen_coq_guard(self.INV, "i > 0", extra_vars=["vi", "vn"])
+        assert "vi > 0" in out
+
+    def test_eq_literal(self):
+        out = gen_coq_guard(self.INV, "i == 5", extra_vars=["vi", "vn"])
+        assert "vi = 5" in out
+
+    def test_ne_zero_scalar_fallback(self):
+        # `i != 0` with `i` store-bound is a scalar check, not a null check.
+        out = gen_coq_guard(self.INV, "i != 0", extra_vars=["vi", "vn"])
+        assert "vi <> 0" in out
+
+    def test_eq_between_scalars(self):
+        out = gen_coq_guard(self.INV, "i == n", extra_vars=["vi", "vn"])
+        assert "vi = vn" in out
+
+    def test_mixed_scalar_and_shape_state_order(self):
+        inv = "exists vi vn l, store(&i,int,vi) * store(&n,int,vn) * sll(cur, l)"
+        out = gen_coq_guard(inv, "cur != 0 && i < n", extra_vars=["vi", "vn"])
+        # shape var first (from sll), then the scalar witnesses.
+        assert "let '(l, vi, vn) := a in" in out
+        assert "l <> []" in out
+        assert "vi < vn" in out
+
+    def test_unbound_scalar_operand_errors(self):
+        # `j` has no store binding -> cannot resolve.
+        with pytest.raises(ValueError, match="not a store-bound scalar"):
+            gen_coq_guard(self.INV, "i < j", extra_vars=["vi", "vn"])
+
+    def test_pointer_null_still_works(self):
+        # Regression: no scalar bindings, plain list guard unaffected.
+        out = gen_coq_guard("exists l, sll(x, l)", "x != 0")
+        assert "l <> []" in out
+        assert "Parameter" not in out

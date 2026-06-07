@@ -54,6 +54,8 @@ _SLL_MULTI_MERGE_SRC = (
     '#include "verification_list.h"\n'
     '#include "sll_shape_def.h"\n'
     '\n'
+    'struct list { int data; struct list *next; };\n'
+    '\n'
     'struct list * sll_merge(struct list * x, struct list * y)\n'
     '/*@ Require listrep(x) * listrep(y)\n'
     '    Ensure  listrep(__return)\n'
@@ -158,6 +160,81 @@ def test_select_function_handles_single_and_multi_function_results():
 
     with pytest.raises(ValueError, match="Function 'missing' not found in multi.c"):
         context_mod._select_function(multi, "missing")
+
+
+def test_prompt_signatures_parenthesize_single_element_state_type(tmp_path):
+    """When the loop invariant has a single ``list Z`` variable, the prompt
+    template's signatures and scaffold snippets must wrap the state type in
+    parens for type-application positions (``MONAD (list Z)``,
+    ``CntOrBrk (list Z) ...``).  Without the parens Coq parses ``MONAD list Z``
+    as ``(MONAD list) Z`` and the LLM faithfully reproduces the broken form.
+    """
+    src = (
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'long demo(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(x@pre)\n'
+        ' */\n'
+        '{\n'
+        '    long sum = 0;\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x != 0) { sum += x->data; x = x->next; }\n'
+        '    return sum;\n'
+        '}\n'
+    )
+    c_file = tmp_path / "demo.c"
+    c_file.write_text(src, encoding="utf-8")
+    ctx = context_mod.collect_synthesis_context(str(c_file))
+
+    sigs = ctx["signatures"]
+    assert "MONAD list Z" not in sigs["M_loop_before"]
+    assert "MONAD list Z" not in sigs["M_2"]
+    assert sigs["M_loop_before"].endswith("MONAD (list Z)")
+    assert sigs["M_2"].endswith("MONAD (list Z)")
+
+    prompt_sigs = ctx["control_flow"]["prompt_signatures"]
+    for key, sig in prompt_sigs.items():
+        assert "MONAD list Z" not in sig, f"{key}: {sig}"
+        assert "CntOrBrk list Z" not in sig, f"{key}: {sig}"
+
+    body_def = ctx["control_flow"]["template"]["loop_body_definition"]
+    assert "MONAD list Z" not in body_def
+    assert "CntOrBrk list Z" not in body_def
+    assert "CntOrBrk (list Z)" in body_def
+
+
+def test_recursive_no_loop_early_return_uses_simple_parameter(tmp_path):
+    """Self-recursive Option-C functions can't use the split (M_before /
+    M_normal) scaffold: the LLM's `M_normal` would call the entry-point `M`
+    which is defined below the Parameters → unresolved reference.  Detect
+    self-calls and fall back to a single opaque ``Parameter {fn}_M``.
+    Regression for ``glibc_slist_iter_back.c``.
+    """
+    src = (
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'long iter_back(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(x@pre)\n'
+        ' */\n'
+        '{\n'
+        '    long sum;\n'
+        '    if (x == 0) { return 0; }\n'
+        '    sum = iter_back(x->next);\n'
+        '    return sum + x->data;\n'
+        '}\n'
+    )
+    c_file = tmp_path / "demo.c"
+    c_file.write_text(src, encoding="utf-8")
+    ctx = context_mod.collect_synthesis_context(str(c_file))
+    cf = ctx["control_flow"]
+    assert cf["template_case"] == "no_loop_simple", \
+        f"recursive Option-C should fall back to opaque Parameter, got: {cf['template_case']}"
+    assert cf["required_components"] == ["M"]
+    assert "M_before" not in cf["prompt_signatures"]
+    assert "M_normal" not in cf["prompt_signatures"]
 
 
 def test_extract_function_source_ignores_prototypes_and_call_sites(tmp_path):
@@ -285,6 +362,8 @@ def test_collect_synthesis_context_requires_function_name_for_multifunction_file
     c_file.write_text(
         '#include "verification_list.h"\n'
         '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list { int data; struct list *next; };\n'
         '\n'
         'struct list *func_a(struct list *x)\n'
         '/*@ Require listrep(x)\n'
@@ -491,3 +570,331 @@ def test_collect_synthesis_context_uses_first_invariant_for_prompt_fields(monkey
     assert ctx["prompt_context"]["loop_invariant_with_safeexec"] == ""
     assert ctx["prompt_context"]["require_with_safeexec"] == "REQ"
     assert ctx["prompt_context"]["ensure_with_safeexec"] == "ENS"
+
+
+# ---------------------------------------------------------------------------
+# Per-loop control-flow templates (task #19 — replaces the first_inv-only
+# assumption for nested-/sequential-loop functions).
+# ---------------------------------------------------------------------------
+
+
+_SINGLE_LOOP_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list { int data; struct list *next; };\n'
+    '\n'
+    'struct list *single_loop(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(__return) */\n'
+    '{\n'
+    '    /*@ Inv listrep(x) */\n'
+    '    while (x) { x = x->next; }\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+_NESTED_LOOP_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list { int data; struct list *next; };\n'
+    '\n'
+    'struct list *nested(struct list *x, struct list *y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return) */\n'
+    '{\n'
+    '    /*@ Inv listrep(x) * listrep(y) */\n'
+    '    while (x) {\n'
+    '        /*@ Inv listrep(y) */\n'
+    '        while (y) { y = y->next; }\n'
+    '        x = x->next;\n'
+    '    }\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+_SEQUENTIAL_LOOPS_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list { int data; struct list *next; };\n'
+    '\n'
+    'struct list *seq_loops(struct list *x, struct list *y)\n'
+    '/*@ Require listrep(x) * listrep(y)\n'
+    '    Ensure  listrep(__return) */\n'
+    '{\n'
+    '    /*@ Inv listrep(x) */\n'
+    '    while (x) { x = x->next; }\n'
+    '    /*@ Inv listrep(y) */\n'
+    '    while (y) { y = y->next; }\n'
+    '    return x;\n'
+    '}\n'
+)
+
+
+def test_loop_templates_single_loop_has_one_top_level_entry(tmp_path):
+    c_file = _write_src(tmp_path, 'single_loop.c', _SINGLE_LOOP_SRC)
+    ctx = context_mod.collect_synthesis_context(c_file)
+    templates = ctx['loop_templates']
+    assert len(templates) == 1
+    t = templates[0]
+    assert t['parent'] is None
+    assert t['children'] == []
+    assert t['keyword'] == 'while'
+    assert t['inv_index'] == 0
+    assert ctx['control_flow']['has_nested_loops'] is False
+    assert ctx['control_flow']['has_sequential_loops'] is False
+    # Forest summary mirrors the templates.
+    assert ctx['loop_forest'] == [{
+        'loop_index': 0, 'parent': None, 'children': [],
+        'keyword': 'while', 'inv_index': 0,
+    }]
+
+
+def test_loop_templates_nested_records_parent_child_links(tmp_path):
+    c_file = _write_src(tmp_path, 'nested.c', _NESTED_LOOP_SRC)
+    ctx = context_mod.collect_synthesis_context(c_file)
+    templates = ctx['loop_templates']
+    assert len(templates) == 2
+    outer, inner = templates
+    assert outer['parent'] is None and outer['children'] == [1]
+    assert inner['parent'] == 0 and inner['children'] == []
+    # Each loop has its OWN state type drawn from its OWN invariant — not
+    # the largest-invariant collapse the legacy single-loop path used.
+    # The translator names variables ``l<loop-prefix>_<counter>`` so the
+    # outer (prefix=1) has two vars (one per listrep) and the inner
+    # (prefix=2) has one.
+    assert outer['inv_variables'] == ['l1_1', 'l1_2']
+    assert inner['inv_variables'] == ['l2_1']
+    assert outer['inv_var_types'] == ['list Z', 'list Z']
+    assert inner['inv_var_types'] == ['list Z']
+    assert ctx['control_flow']['has_nested_loops'] is True
+    assert ctx['control_flow']['has_sequential_loops'] is False
+
+
+def test_loop_templates_sequential_siblings_have_no_parent(tmp_path):
+    c_file = _write_src(tmp_path, 'seq.c', _SEQUENTIAL_LOOPS_SRC)
+    ctx = context_mod.collect_synthesis_context(c_file)
+    templates = ctx['loop_templates']
+    assert len(templates) == 2
+    assert [t['parent'] for t in templates] == [None, None]
+    assert ctx['control_flow']['has_nested_loops'] is False
+    assert ctx['control_flow']['has_sequential_loops'] is True
+
+
+def test_loop_templates_target_mirrors_top_level(tmp_path):
+    """Synth callers may read templates from either the top-level dict or the
+    nested ``target`` dict — both must agree."""
+    c_file = _write_src(tmp_path, 'nested.c', _NESTED_LOOP_SRC)
+    ctx = context_mod.collect_synthesis_context(c_file)
+    assert ctx['loop_templates'] == ctx['target']['loop_templates']
+    assert ctx['loop_forest'] == ctx['target']['loop_forest']
+
+
+def test_loop_templates_per_loop_guard_and_condition(tmp_path):
+    """Each template carries the guard/condition extracted from its own
+    invariant — not the first invariant's."""
+    c_file = _write_src(tmp_path, 'nested.c', _NESTED_LOOP_SRC)
+    ctx = context_mod.collect_synthesis_context(c_file)
+    outer, inner = ctx['loop_templates']
+    assert outer['loop_condition'] == 'x'
+    assert inner['loop_condition'] == 'y'
+    # Each loop owns a guard_available flag.
+    assert 'guard_available' in outer
+    assert 'guard_available' in inner
+
+
+# ---------------------------------------------------------------------------
+# Bug #3 fix — must_define uses the actual scoped MretTy name the skeleton
+# emits.  Single-function files keep bare "MretTy"; multi-function files
+# where ≥2 functions need an MretTy get "{fn}_MretTy".
+
+
+_TWO_LOOP_FUNCS_SRC = (
+    '#include "verification_list.h"\n'
+    '#include "sll_shape_def.h"\n'
+    '\n'
+    'struct list { int data; struct list *next; };\n'
+    '\n'
+    'struct list *func_a(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(__return) */\n'
+    '{\n'
+    '    /*@ Inv listrep(x) */\n'
+    '    while (x) { x = x->next; }\n'
+    '    return x;\n'
+    '}\n'
+    '\n'
+    'struct list *func_b(struct list *y)\n'
+    '/*@ Require listrep(y)\n'
+    '    Ensure  listrep(__return) */\n'
+    '{\n'
+    '    /*@ Inv listrep(y) */\n'
+    '    while (y) { y = y->next; }\n'
+    '    return y;\n'
+    '}\n'
+)
+
+
+def test_must_define_uses_scoped_mretty_for_multi_function_file(tmp_path):
+    """Two functions each need an MretTy ⇒ skeleton scopes per function ⇒
+    must_define must carry the scoped name so prompt + validator agree
+    with the skeleton's actual Parameter line."""
+    c_file = _write_src(tmp_path, "two_loops.c", _TWO_LOOP_FUNCS_SRC)
+    ctx_a = context_mod.collect_synthesis_context(c_file, func_name="func_a")
+    ctx_b = context_mod.collect_synthesis_context(c_file, func_name="func_b")
+    must_a = ctx_a["generation_policy"]["must_define"]
+    must_b = ctx_b["generation_policy"]["must_define"]
+    assert "func_a_MretTy" in must_a
+    assert "func_b_MretTy" in must_b
+    # Bare "MretTy" is NOT emitted when scoping is active.
+    assert "MretTy" not in must_a
+    assert "MretTy" not in must_b
+
+
+def test_must_define_keeps_bare_mretty_for_single_loop_function(tmp_path):
+    """When only one function in the file needs an MretTy, the skeleton
+    keeps the shared ``Parameter MretTy : Type.`` — must_define matches."""
+    src = (
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list { int data; struct list *next; };\n'
+        '\n'
+        'struct list *only_one(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return) */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x) { x = x->next; }\n'
+        '    return x;\n'
+        '}\n'
+    )
+    c_file = _write_src(tmp_path, "only_one.c", src)
+    ctx = context_mod.collect_synthesis_context(c_file, func_name="only_one")
+    must = ctx["generation_policy"]["must_define"]
+    assert "MretTy" in must
+    assert "only_one_MretTy" not in must
+
+
+def test_prompt_shows_scoped_mretty_name(tmp_path):
+    """The slim prompt's "## Definitions to Provide" list reflects the
+    scoped name — the agent sees the actual symbol it must replace, not
+    a different name from the one in the skeleton."""
+    from GenMonads.absprog.templates import render_prompt
+
+    c_file = _write_src(tmp_path, "two_loops.c", _TWO_LOOP_FUNCS_SRC)
+    ctx_a = context_mod.collect_synthesis_context(c_file, func_name="func_a")
+    prompt = render_prompt(ctx_a)
+    assert "- `func_a_MretTy`" in prompt
+    assert "- `MretTy`" not in prompt
+
+
+def test_manifest_entries_carry_mretty_flags(tmp_path):
+    """The manifest is what context's scoping decision reads.  Every
+    function entry must expose has_loop_program / has_no_loop_early_return
+    so the count is uniform across helpers and synth targets."""
+    c_file = _write_src(tmp_path, "two_loops.c", _TWO_LOOP_FUNCS_SRC)
+    manifest = context_mod.collect_file_synthesis_manifest(c_file)
+    for entry in manifest["functions"]:
+        assert "has_loop_program" in entry, entry
+        assert "has_no_loop_early_return" in entry, entry
+
+
+# ---------------------------------------------------------------------------
+# Bug 3 — _scoped_mretty_name must ignore cross_file sibling functions.
+# Without this, a single-in-file function that calls a cross-file
+# MretTy-using helper gets a scoped must_define name while the skeleton
+# (which only sees in-file functions) emits the bare MretTy → validator
+# rejects the agent's correct Definition.
+
+
+def test_must_define_uses_bare_mretty_when_only_sibling_is_cross_file(tmp_path):
+    """One in-file function with a no-loop early-return shape + one cross-
+    file callee that needs MretTy → must_define carries bare ``"MretTy"``
+    (matching the skeleton's bare ``Parameter MretTy``)."""
+    callee = tmp_path / "list_tail.c"
+    callee.write_text(
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list { int data; struct list *next; };\n'
+        '\n'
+        'struct list *list_tail(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return) */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x) { x = x->next; }\n'
+        '    return x;\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    caller = tmp_path / "demo.c"
+    caller.write_text(
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list { int data; struct list *next; };\n'
+        '\n'
+        'struct list *list_tail(struct list *x);\n'
+        '\n'
+        'struct list *demo(struct list *x, struct list *y)\n'
+        '/*@ Require listrep(x) * listrep(y)\n'
+        '    Ensure  listrep(__return) */\n'
+        '{\n'
+        '    struct list *tail;\n'
+        '    if (x == 0) { return y; }\n'
+        '    tail = list_tail(x);\n'
+        '    tail->next = y;\n'
+        '    return x;\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    ctx = context_mod.collect_synthesis_context(
+        str(caller), func_name="demo", sibling_dirs=[str(tmp_path)],
+    )
+    must = ctx["generation_policy"]["must_define"]
+    # Bare name expected — the in-file function count is 1 (only `demo`),
+    # so the skeleton emits `Parameter MretTy : Type.` not scoped.
+    assert "MretTy" in must, f"want bare MretTy in {must!r}"
+    assert "demo_MretTy" not in must, (
+        "scoped MretTy leaked through cross-file sibling count: " + repr(must)
+    )
+
+
+def test_must_define_keeps_scoped_mretty_for_two_in_file_users(tmp_path):
+    """Regression guard for the original Option A: when two IN-FILE
+    functions both need MretTy, the scoped name is still used."""
+    src = (
+        '#include "verification_list.h"\n'
+        '#include "sll_shape_def.h"\n'
+        '\n'
+        'struct list { int data; struct list *next; };\n'
+        '\n'
+        'struct list *func_a(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return) */\n'
+        '{\n'
+        '    /*@ Inv listrep(x) */\n'
+        '    while (x) { x = x->next; }\n'
+        '    return x;\n'
+        '}\n'
+        '\n'
+        'struct list *func_b(struct list *y)\n'
+        '/*@ Require listrep(y)\n'
+        '    Ensure  listrep(__return) */\n'
+        '{\n'
+        '    /*@ Inv listrep(y) */\n'
+        '    while (y) { y = y->next; }\n'
+        '    return y;\n'
+        '}\n'
+    )
+    c_file = _write_src(tmp_path, "two.c", src)
+    ctx = context_mod.collect_synthesis_context(c_file, func_name="func_a")
+    must = ctx["generation_policy"]["must_define"]
+    assert "func_a_MretTy" in must
+    assert "MretTy" not in must

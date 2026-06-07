@@ -65,6 +65,8 @@ _SLL_MULTI_MERGE_SRC = (
     '#include "verification_list.h"\n'
     '#include "sll_shape_def.h"\n'
     '\n'
+    'struct list { int data; struct list *next; };\n'
+    '\n'
     'struct list * sll_merge(struct list * x, struct list * y)\n'
     '/*@ Require listrep(x) * listrep(y)\n'
     '    Ensure  listrep(__return)\n'
@@ -264,6 +266,54 @@ class TestSafeexecInclude:
             content = f.read()
         assert '#include "safeexec_def.h"' in content
 
+    def test_skipped_when_mapped_data_header_in_output_dir_already_includes_safeexec(self, tmp_path, monkeypatch):
+        """When the header mapping rewrites an input header to a data header
+        that lives next to the generated _rel.c and already pulls in
+        ``safeexec_def.h``, the translator must detect that transitively and
+        skip the duplicate insertion.  Regression for the ``Glibc_slist_clean``
+        dataset where ``glibc_slist_clean.h -> glibc_slist_clean_data.h`` and
+        the data header sits in the output dir, not the input dir.
+        """
+        # Put the data header in the OUTPUT directory (not the input dir).
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / "demo_data.h").write_text(
+            'struct list { int data; struct list *next; };\n'
+            '#include "safeexec_def.h"\n'
+        )
+        # Input C uses the original (unmapped) header.  Mapping rewrites it
+        # to demo_data.h at translate time.
+        in_dir = tmp_path / "in"
+        in_dir.mkdir()
+        c_file = in_dir / "demo.c"
+        c_file.write_text(
+            '#include "demo_shape.h"\n'
+            '\n'
+            'struct list *demo(struct list *x)\n'
+            '/*@ Require listrep(x)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{ return x; }\n'
+        )
+
+        import GenMonads.header_mapping as header_mapping
+        original_load = header_mapping._load_mappings
+        monkeypatch.setattr(
+            header_mapping,
+            "_load_mappings",
+            lambda: {**original_load(), "demo_shape.h": "demo_data.h"},
+        )
+
+        output_path = str(out_dir / "demo_rel.c")
+        assert translate_c_file(str(c_file), output_path)
+        content = open(output_path).read()
+        # Mapped header is present, but safeexec_def.h must NOT be added —
+        # it's already pulled in transitively via demo_data.h next to the
+        # rel.c output.
+        assert '#include "demo_data.h"' in content
+        assert content.count('#include "safeexec_def.h"') == 0, \
+            f"duplicate safeexec_def.h insertion: {content!r}"
+
 
 # ============================================================================
 # Coq Block Generation Tests
@@ -385,6 +435,73 @@ class TestCoqBlocks:
         assert '(dll_free_M: list Z -> program unit unit)' in result
         assert '(dll_free_M_loop_end: MretTy -> program unit unit)' in result
 
+    def test_generate_per_function_mretty_for_multi_loop_file(self):
+        """When a file has two functions that both reference MretTy in their
+        Extern Coq blocks, the codegen must emit per-function `{fn}_MretTy`
+        names to match the merged rel_lib's convention."""
+        infos = [
+            {
+                'func_name': 'f1',
+                'has_loop_program': True,
+                'require_var_count': 1,
+                'require_var_types': ['list Z'],
+                'inv_var_count': 1,
+                'inv_var_types': ['list Z'],
+                'ensure_var_count': 1,
+                'ensure_var_types': ['list Z'],
+            },
+            {
+                'func_name': 'f2',
+                'has_loop_program': True,
+                'require_var_count': 1,
+                'require_var_types': ['list Z'],
+                'inv_var_count': 1,
+                'inv_var_types': ['list Z'],
+                'ensure_var_count': 1,
+                'ensure_var_types': ['list Z'],
+            },
+        ]
+        result = generate_coq_blocks('two_loops', infos)
+        assert '/*@ Extern Coq (f1_MretTy :: *) */' in result
+        assert '/*@ Extern Coq (f2_MretTy :: *) */' in result
+        assert '/*@ Extern Coq (MretTy :: *) */' not in result
+        assert 'f1_M_loop: list Z -> program unit f1_MretTy' in result
+        assert 'f2_M_loop: list Z -> program unit f2_MretTy' in result
+        assert 'f1_M_loop_end: f1_MretTy -> program unit (list Z)' in result
+        assert 'f2_M_loop_end: f2_MretTy -> program unit (list Z)' in result
+
+    def test_generate_bare_mretty_for_single_loop_function(self):
+        """A file with exactly one MretTy-using function keeps the bare
+        `MretTy` form so single-function files (the common case) stay
+        unchanged."""
+        infos = [
+            {
+                'func_name': 'only_loop',
+                'has_loop_program': True,
+                'require_var_count': 1,
+                'require_var_types': ['list Z'],
+                'inv_var_count': 1,
+                'inv_var_types': ['list Z'],
+                'ensure_var_count': 1,
+                'ensure_var_types': ['list Z'],
+            },
+            {
+                # Helper without a loop — does not reference MretTy.
+                'func_name': 'helper',
+                'has_loop_program': False,
+                'require_var_count': 1,
+                'require_var_types': ['list Z'],
+                'inv_var_count': 0,
+                'inv_var_types': [],
+                'ensure_var_count': 1,
+                'ensure_var_types': ['list Z'],
+            },
+        ]
+        result = generate_coq_blocks('one_loop_one_helper', infos)
+        assert '/*@ Extern Coq (MretTy :: *) */' in result
+        assert 'only_loop_MretTy' not in result
+        assert 'only_loop_M_loop: list Z -> program unit MretTy' in result
+
     def test_generate_helper_function_without_loop_program(self):
         infos = [{
             'func_name': 'sll_merge',
@@ -403,6 +520,26 @@ class TestCoqBlocks:
 
     def test_empty_func_infos(self):
         assert generate_coq_blocks('foo', []) == ''
+
+    def test_no_mretty_extern_when_no_function_uses_mretty(self):
+        """When every function in the file is loop-less (e.g. a recursive
+        helper), no declaration references ``MretTy``, so the shared
+        ``Extern Coq (MretTy :: *)`` line must be suppressed — otherwise the
+        emitted block carries a dangling, meaningless type declaration."""
+        infos = [{
+            'func_name': 'recursive_sum',
+            'has_loop_program': False,
+            'require_var_count': 1,
+            'require_var_types': ['list Z'],
+            'inv_var_count': 0,
+            'inv_var_types': [],
+            'ensure_var_count': 2,
+            'ensure_var_types': ['list Z', 'Z'],
+        }]
+        result = generate_coq_blocks('recursive_sum', infos)
+        assert 'MretTy' not in result
+        # Sanity: the function's own M signature is still emitted.
+        assert '(recursive_sum_M: list Z -> program unit (list Z * Z))' in result
 
     def test_import_coq_in_sll_copy_output(self, tmp_path):
         input_path = _write_src(tmp_path, 'sll_copy.c', _SLL_COPY_SRC)

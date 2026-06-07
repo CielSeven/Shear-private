@@ -13,6 +13,7 @@ from .preprocess import AnnotationExtractor
 from .translator import ShapeTranslator
 from .parser import parse_assertion, recover_assertion
 from .data_witness import extract_data_witnesses, extract_pre_existing_vars
+from .c_types import build_type_env, collect_struct_decls
 
 # Import guardgen module
 try:
@@ -29,6 +30,9 @@ class AssertionProcessor:
     def __init__(self):
         self.extractor = AnnotationExtractor()
         self.translator = ShapeTranslator()
+        self._struct_decls: Dict[str, Dict[str, str]] = {}
+        self._c_source: str = ""
+        self._type_env: Dict[str, str] = {}
 
     def translate_funcspec(self, funcspec: Dict[str, str]) -> Dict[str, Dict]:
         """Translate function specification clauses as a single unit."""
@@ -48,7 +52,10 @@ class AssertionProcessor:
         # Translate Require clause
         if funcspec['require']:
             try:
-                translated, vars = self.translator.translate_assertion(funcspec['require'], reset=True)
+                translated, vars = self.translator.translate_assertion(
+                    funcspec['require'], reset=True,
+                    type_env=self._type_env, struct_decls=self._struct_decls,
+                )
                 var_types = self.translator.last_generated_var_types[:]
                 result['require'] = {
                     'original': funcspec['require'],
@@ -66,7 +73,10 @@ class AssertionProcessor:
         # Translate Ensure clause
         if funcspec['ensure']:
             try:
-                translated, vars = self.translator.translate_assertion(funcspec['ensure'], reset=False)
+                translated, vars = self.translator.translate_assertion(
+                    funcspec['ensure'], reset=False,
+                    type_env=self._type_env, struct_decls=self._struct_decls,
+                )
                 var_types = self.translator.last_generated_var_types[:]
 
                 # Detect data-field witnesses bound by the original Ensure's
@@ -112,11 +122,13 @@ class AssertionProcessor:
             try:
                 if assertion['type'] == 'Inv':
                     translated, vars = self.translator.translate_assertion_with_exists(
-                        assertion['content'], prefix=prefix
+                        assertion['content'], prefix=prefix,
+                        type_env=self._type_env, struct_decls=self._struct_decls,
                     )
                 else:
                     translated, vars = self.translator.translate_assertion(
-                        assertion['content'], prefix=prefix
+                        assertion['content'], prefix=prefix,
+                        type_env=self._type_env, struct_decls=self._struct_decls,
                     )
 
                 var_types = self.translator.last_generated_var_types[:]
@@ -165,6 +177,20 @@ class AssertionProcessor:
         if 'error' in extraction_result:
             return extraction_result
 
+        # Pre-load C struct definitions + raw C source so the translator can
+        # resolve ``EXPR -> FIELD`` types and desugar field-equalities into
+        # typed ``store(...)`` predicates.
+        self._struct_decls = collect_struct_decls(file_path)
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                self._c_source = f.read()
+        except OSError:
+            self._c_source = ""
+        primary_func = extraction_result.get('function', '')
+        self._type_env = (
+            build_type_env(self._c_source, primary_func) if primary_func else {}
+        )
+
         # 2. Process the single-function (backward compatibility)
         translated_funcspec = self.translate_funcspec(extraction_result['funcspec'])
         translated_inner = self.translate_inner_assertions(extraction_result['inner_assertions'])
@@ -174,6 +200,10 @@ class AssertionProcessor:
         # 3. Process all functions (new functionality)
         processed_functions = []
         for func_data in extraction_result.get('functions', []):
+            func_name = func_data.get('function', '')
+            self._type_env = (
+                build_type_env(self._c_source, func_name) if func_name else {}
+            )
             f_spec = self.translate_funcspec(func_data['funcspec'])
             f_inner = self.translate_inner_assertions(func_data['inner_assertions'])
             if generate_guards:

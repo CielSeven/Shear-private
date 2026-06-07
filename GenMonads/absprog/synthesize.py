@@ -62,51 +62,166 @@ def _replay_gold_response(example: Dict) -> str:
     return "\n".join(lines)
 
 
-def _format_command(
-    command: str,
-    context: Dict,
-    prompt_file: str,
-    context_file: str,
-    output_dir: str,
-    response_file: str,
-) -> str:
-    return command.format(
-        prompt_file=prompt_file,
-        context_file=context_file,
-        output_dir=output_dir,
-        response_file=response_file,
-        context_id=context["id"],
-        func_name=context["summary"]["func_name"],
-        c_file=context["source"]["c_file"],
-    )
+# Default ceiling for any single command-backend invocation (20 minutes).
+# Workdir-mode codex may iterate coqc multiple times; the legacy 10-min
+# ceiling was too tight for that flow.
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 1200
+
+
+class PrerequisiteError(Exception):
+    """Pre-spawn / environment failure — codex missing, ``_CoqProject``
+    missing, a cross-file callee lib still unsynthesized, etc.
+
+    These conditions are deterministic: they cannot succeed after a
+    retry unless the world changes out-of-band.  The synthesis pipeline
+    catches this distinct exception type so it records one attempt with
+    ``failure_kind="prerequisite"`` and aborts the per-function retry
+    loop — instead of burning every ``--max-retries`` slot on the same
+    actionable error.
+    """
 
 
 def _run_command_backend(
-    command: str,
     prompt_text: str,
     context: Dict,
-    prompt_file: str,
-    context_file: str,
     output_dir: str,
-    response_file: str,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    timeout: Optional[int] = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    coq_lib_dir: Optional[str] = None,
 ) -> str:
-    formatted = _format_command(
-        command, context, prompt_file, context_file, output_dir, response_file
+    """Workdir-mode synthesis backend.
+
+    Builds a curated workdir under *output_dir* (which is the per-function
+    synthesis output directory — reused across retries), invokes
+    ``codex exec -C <workdir>`` sandboxed to ``workspace-write``, then
+    enforces the agent's strict replacement contract (file-system whitelist
+    + structural skeleton diff).  Returns the filled lib text as the
+    "response" the rest of the pipeline parses and assembles.
+
+    *coq_lib_dir* is the directory holding already-synthesized peer
+    ``_rel_lib.v`` files (passed through from ``--coq-lib-dir`` at the CLI
+    layer).  When ``None`` we fall back to
+    ``read_configure_value("COQ_LIB_DIR")``.
+
+    Raises:
+        PrerequisiteError: pre-spawn environment failure — codex absent
+            from PATH, ``_CoqProject`` not found, or a cross-file callee
+            lib still unsynthesized.  Deterministic; no retry will help.
+        ValueError: recoverable backend failures — codex non-zero exit,
+            timeout, contract violation in the filled skeleton.  Retried
+            with a repair prompt.
+    """
+    from GenMonads.absprog.assemble import generate_rel_lib_skeleton_for_file
+    from GenMonads.absprog import workdir as workdir_mod
+
+    codex = shutil.which("codex")
+    if not codex:
+        raise PrerequisiteError(
+            "codex executable not found in PATH.  Workdir-mode synthesis "
+            "requires the codex CLI."
+        )
+
+    c_file = context["source"]["c_file"]
+    basename = context["source"].get("file_id") or _basename_from_c_file(c_file)
+
+    # Pre-spawn hard checks (#29).  COQ_LIB_DIR must be set and every
+    # cross-file callee lib in the skeleton must already be on disk.  Use
+    # the per-invocation override when supplied; otherwise read CONFIGURE.
+    effective_coq_lib_dir = coq_lib_dir or _coq_lib_dir_or_none()
+
+    # Generate the skeleton from the C source.  This is deterministic given
+    # the input — same input → identical skeleton across retries.  Passing
+    # the lib dir lets cross-file ``Require Import`` lines pick up the
+    # canonical qualified logical path from ``_CoqProject``.
+    skeleton_text = generate_rel_lib_skeleton_for_file(
+        c_file, sibling_dirs=sibling_dirs, monad=monad,
+        coq_lib_dir=effective_coq_lib_dir,
     )
-    proc = subprocess.run(
-        formatted,
-        shell=True,
-        text=True,
-        input=prompt_text,
-        capture_output=True,
-    )
+    try:
+        workdir_mod.check_prerequisites(skeleton_text, effective_coq_lib_dir)
+    except ValueError as exc:
+        # Missing callee libs / unset COQ_LIB_DIR are deterministic env
+        # problems, not LLM mistakes — surface as PrerequisiteError.
+        raise PrerequisiteError(str(exc)) from exc
+
+    try:
+        paths = workdir_mod.prepare_workdir(
+            parent_dir=output_dir, basename=basename, skeleton_text=skeleton_text,
+        )
+    except ValueError as exc:
+        # _CoqProject not found is also a deterministic env problem.
+        raise PrerequisiteError(str(exc)) from exc
+
+    # Snapshot for the file-system whitelist (Layer 2).
+    before = workdir_mod.snapshot_workdir(paths["workdir"])
+
+    cmd = [
+        codex, "exec",
+        "-C", paths["workdir"],
+        "--skip-git-repo-check",
+        "-s", "workspace-write",
+        "-c", 'sandbox_permissions=[]',
+        "-c", "features.tool_call_mcp_elicitation=false",
+        "--color", "never",
+        "--output-last-message", paths["transcript"],
+        "-",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, text=True, input=prompt_text, capture_output=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"codex exec timed out after {timeout}s "
+            f"(set a higher --command-timeout if needed)"
+        ) from exc
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
-        raise ValueError(f"Command backend failed: {detail}")
-    if os.path.isfile(response_file):
-        with open(response_file, "r", encoding="utf-8") as f:
-            return f.read()
-    return proc.stdout
+        raise ValueError(f"codex exec failed: {detail}")
+
+    if not os.path.isfile(paths["skeleton_path"]):
+        raise ValueError(
+            "Agent did not produce a filled skeleton at "
+            f"{paths['skeleton_path']}"
+        )
+    with open(paths["skeleton_path"], "r", encoding="utf-8") as f:
+        filled_text = f.read()
+
+    must_define = _must_define_from_context(context)
+    ok, msg = workdir_mod.validate_attempt(
+        paths["workdir"], before, skeleton_text, filled_text,
+        must_define=must_define, basename=basename,
+    )
+    if not ok:
+        raise ValueError(msg)
+
+    return filled_text
+
+
+def _basename_from_c_file(c_file: str) -> str:
+    """Derive the lib basename (stem without ``.c`` / ``_rel.c``)."""
+    name = os.path.basename(c_file)
+    if name.endswith(".c"):
+        name = name[:-2]
+    if name.endswith("_rel"):
+        name = name[:-4]
+    return name
+
+
+def _coq_lib_dir_or_none() -> Optional[str]:
+    """Resolve COQ_LIB_DIR via env or CONFIGURE; ``None`` if unset."""
+    try:
+        return read_configure_value("COQ_LIB_DIR")
+    except Exception:
+        return None
+
+
+def _must_define_from_context(context: Dict) -> List[str]:
+    """The list of fully-prefixed Parameter names the LLM is expected to
+    replace, sourced from the context's ``generation_policy``."""
+    gp = context.get("generation_policy") or {}
+    return list(gp.get("must_define") or [])
 
 
 def generate_candidate_response(
@@ -120,6 +235,10 @@ def generate_candidate_response(
     replay_from: Optional[str] = None,
     response_file: Optional[str] = None,
     command: Optional[str] = None,
+    command_timeout: Optional[int] = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    coq_lib_dir: Optional[str] = None,
 ) -> str:
     if backend == "gold-example":
         if replay_from:
@@ -135,16 +254,16 @@ def generate_candidate_response(
             return f.read()
 
     if backend == "command":
-        if not command:
-            raise ValueError("command backend requires --command")
+        # The ``command`` kwarg is retained for CLI backwards-compat but
+        # ignored — workdir-mode owns the codex invocation now.
         return _run_command_backend(
-            command=command,
             prompt_text=prompt_text,
             context=context,
-            prompt_file=prompt_file,
-            context_file=context_file,
             output_dir=output_dir,
-            response_file=backend_response_file,
+            sibling_dirs=sibling_dirs,
+            monad=monad,
+            timeout=command_timeout,
+            coq_lib_dir=coq_lib_dir,
         )
 
     raise ValueError(f"Unsupported backend: {backend}")
@@ -182,6 +301,21 @@ def _validate_opaque_callee_usage(context: Dict, response_text: str) -> None:
                     )
         raise ValueError("\n".join(detail_lines))
 
+    # Reject `_ <- callee_M(...)` (or `_ <- callee_M ...`): the LLM is calling
+    # the opaque program but discarding its result, which makes the call
+    # semantically meaningless.  Force the result to be bound to a named
+    # variable so the rest of the body must reason about it.
+    discarded = []
+    for name in required_programs:
+        pattern = rf"\b_\s*<-\s*{re.escape(name)}\b"
+        if re.search(pattern, response_text):
+            discarded.append(name)
+    if discarded:
+        raise ValueError(
+            "Opaque callee result must be bound to a named variable, not `_`. "
+            "Offending call(s): " + ", ".join(discarded)
+        )
+
 
 def _validate_early_return_scaffold(context: Dict, response_text: str) -> None:
     control_flow = context.get("control_flow") or context.get("target", {}).get("control_flow", {})
@@ -195,6 +329,88 @@ def _validate_early_return_scaffold(context: Dict, response_text: str) -> None:
             "Expected the generated definitions to mention `early_result`.",
         ]
         raise ValueError("\n".join(detail_lines))
+
+
+def _normalize_coq_type(text: str) -> str:
+    """Collapse whitespace and strip redundant outer parens for comparison."""
+    text = re.sub(r"\s+", " ", text).strip()
+    while text.startswith("(") and text.endswith(")"):
+        # Only strip if the outer parens are balanced as a single group.
+        depth = 0
+        balanced = True
+        for i, ch in enumerate(text):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i != len(text) - 1:
+                    balanced = False
+                    break
+        if balanced:
+            text = text[1:-1].strip()
+        else:
+            break
+    return text
+
+
+def _validate_one_guard_signature(
+    response_text: str,
+    guard_name: str,
+    expected_sig: str,
+) -> None:
+    m = re.search(
+        rf"Definition\s+{re.escape(guard_name)}\s*:\s*(.+?)\s*:=",
+        response_text,
+        re.DOTALL,
+    )
+    if not m:
+        raise ValueError(
+            f"Missing required `Definition {guard_name} : ... :=` in synthesized "
+            "response (GuardGen could not produce this loop guard, so the LLM "
+            "must supply it)."
+        )
+    expected = _normalize_coq_type(expected_sig)
+    actual = _normalize_coq_type(m.group(1))
+    if expected and actual != expected:
+        raise ValueError(
+            f"`{guard_name}` signature must not change.\n"
+            f"Required: {expected}\n"
+            f"Got:      {actual}"
+        )
+
+
+def _validate_guard_signature(context: Dict, response_text: str) -> None:
+    """Validate every guardP the LLM is responsible for.
+
+    Single-loop case: when ``"guardP"`` is in ``required_components``, require
+    a ``Definition {fn}_guardP`` with the pinned signature.
+
+    Forest case: per-loop ``loop{k}_guardP`` Definitions, each with the
+    matching ``{Sk} -> Prop`` signature pulled from
+    ``control_flow.prompt_signatures``.
+    """
+    control_flow = context.get("control_flow") or context.get("target", {}).get("control_flow", {})
+    required = control_flow.get("required_components", [])
+    func_name = context["summary"]["func_name"]
+
+    # Single-loop guard
+    if "guardP" in required:
+        _validate_one_guard_signature(
+            response_text,
+            f"{func_name}_guardP",
+            control_flow.get("guard_signature", ""),
+        )
+
+    # Forest guards: any component matching ``loop{k}_guardP``.
+    prompt_sigs = control_flow.get("prompt_signatures", {}) or {}
+    for component in required:
+        if not re.fullmatch(r"loop\d+_guardP", component):
+            continue
+        _validate_one_guard_signature(
+            response_text,
+            f"{func_name}_{component}",
+            prompt_sigs.get(component, ""),
+        )
 
 
 def _attempt_dir(output_dir: str, attempt_index: int) -> str:
@@ -313,7 +529,16 @@ def _wrap_type_for_substitution(concrete: str) -> str:
     return f"({stripped})"
 
 
-def _eliminate_mretty_in_rel_c(rel_c_path: str, concrete_type: str) -> str:
+def _eliminate_mretty_in_rel_c(rel_c_path: str, concrete_type) -> str:
+    """Substitute synthesized ``MretTy`` types into ``_rel.c``.
+
+    ``concrete_type`` may be either:
+      - a single string: substitute the bare ``MretTy`` token (single-function
+        files emit one shared ``MretTy``).
+      - a mapping ``{func_name: concrete_type}``: substitute each per-function
+        ``{func_name}_MretTy`` token independently (multi-function files emit
+        per-function ``MretTy`` names to match the merged rel_lib).
+    """
     if not rel_c_path or not os.path.isfile(rel_c_path) or not concrete_type:
         return ""
 
@@ -323,14 +548,29 @@ def _eliminate_mretty_in_rel_c(rel_c_path: str, concrete_type: str) -> str:
     if "MretTy" not in content:
         return rel_c_path
 
-    replacement = _wrap_type_for_substitution(concrete_type)
-    updated = re.sub(
-        r"^[ \t]*/\*@\s*Extern\s+Coq\s*\(\s*MretTy\s*::\s*\*\s*\)\s*\*/[ \t]*\n?",
-        "",
-        content,
-        flags=re.MULTILINE,
-    )
-    updated = re.sub(r"\bMretTy\b", replacement, updated)
+    updated = content
+    if isinstance(concrete_type, dict):
+        for func_name, concrete in concrete_type.items():
+            if not concrete:
+                continue
+            token = f"{func_name}_MretTy"
+            replacement = _wrap_type_for_substitution(concrete)
+            updated = re.sub(
+                rf"^[ \t]*/\*@\s*Extern\s+Coq\s*\(\s*{re.escape(token)}\s*::\s*\*\s*\)\s*\*/[ \t]*\n?",
+                "",
+                updated,
+                flags=re.MULTILINE,
+            )
+            updated = re.sub(rf"\b{re.escape(token)}\b", replacement, updated)
+    else:
+        replacement = _wrap_type_for_substitution(concrete_type)
+        updated = re.sub(
+            r"^[ \t]*/\*@\s*Extern\s+Coq\s*\(\s*MretTy\s*::\s*\*\s*\)\s*\*/[ \t]*\n?",
+            "",
+            updated,
+            flags=re.MULTILINE,
+        )
+        updated = re.sub(r"\bMretTy\b", replacement, updated)
 
     if updated == content:
         return rel_c_path
@@ -408,19 +648,49 @@ def _sync_residual_artifacts(
     }
 
 
-def _promote_rel_lib_if_accepted(assembled_file: str, context_id: str, status: str) -> str:
+def _promote_rel_lib_if_accepted(
+    assembled_file: str,
+    context_id: str,
+    status: str,
+    coq_lib_dir: Optional[str] = None,
+) -> str:
+    """Copy the accepted lib into the project's ``COQ_LIB_DIR``.
+
+    *coq_lib_dir* — when supplied, overrides the CONFIGURE/env default
+    (``--coq-lib-dir`` from the CLI flows here).  Without it, the lib was
+    being silently dropped into ``./output/gen/libs/`` even when the user
+    had asked for a different directory.
+    """
     if status != "passed" or not assembled_file or not os.path.isfile(assembled_file):
         return ""
 
-    target_dir = _default_coq_lib_dir()
+    target_dir = coq_lib_dir or _default_coq_lib_dir()
     os.makedirs(target_dir, exist_ok=True)
-    source_root, _ = os.path.splitext(assembled_file)
     target_root = os.path.join(target_dir, f"{context_id}_rel_lib")
-    for ext in [".v", ".vo", ".vok", ".vos", ".glob"]:
-        source = f"{source_root}{ext}"
-        if os.path.isfile(source):
-            shutil.copyfile(source, f"{target_root}{ext}")
     target_path = f"{target_root}.v"
+
+    # Copy only the .v source; the .vo/.vok/.vos/.glob from the attempt dir
+    # were compiled without the lib dir's logical-path prefix (the attempt
+    # dir is outside `-R <target_dir> <prefix>`), so reusing them would leave
+    # a name-mismatched .vo that breaks later `Require Import`.
+    shutil.copyfile(assembled_file, target_path)
+    # Remove any stale per-file compiled artifacts from a prior run.
+    for ext in (".vo", ".vok", ".vos", ".glob"):
+        stale = f"{target_root}{ext}"
+        if os.path.isfile(stale):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+
+    # Recompile in target_dir so the project's `-R <target_dir> <prefix>`
+    # applies and the embedded library name picks up the correct prefix.
+    recheck = check_rocq_file(target_path)
+    if recheck["status"] == "failed":
+        print(
+            f"Warning: recompile of promoted {target_path} failed: "
+            f"{recheck.get('stderr', '').strip()}"
+        )
     return target_path
 
 
@@ -505,6 +775,7 @@ def _build_final_summary(
     final_attempt: Dict,
     status: str,
     promote_rel_lib: bool = True,
+    coq_lib_dir: Optional[str] = None,
 ) -> Dict:
     final_files = _copy_final_attempt_files(final_attempt, output_dir, context["id"])
     summary = {
@@ -521,7 +792,9 @@ def _build_final_summary(
     }
     if promote_rel_lib:
         promoted_path = _promote_rel_lib_if_accepted(
-            final_attempt["files"].get("assembled_rel_lib", ""), context["id"], status
+            final_attempt["files"].get("assembled_rel_lib", ""),
+            context["id"], status,
+            coq_lib_dir=coq_lib_dir,
         )
         if promoted_path:
             summary["files"]["promoted_rel_lib"] = promoted_path
@@ -544,6 +817,10 @@ def run_synthesis_pipeline(
     max_retries: int = 0,
     rel_c_path: Optional[str] = None,
     promote_rel_lib: bool = True,
+    command_timeout: Optional[int] = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    coq_lib_dir: Optional[str] = None,
 ) -> Dict:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -551,9 +828,13 @@ def run_synthesis_pipeline(
         context = _load_json(input_path)
         context_file = input_path
     else:
-        context = collect_synthesis_context(input_path, func_name=func_name)
+        context = collect_synthesis_context(
+            input_path, func_name=func_name, sibling_dirs=sibling_dirs
+        )
         context_file = _root_file(output_dir, context["id"], "context.auto.json")
-        write_synthesis_context(input_path, context_file, func_name=func_name)
+        write_synthesis_context(
+            input_path, context_file, func_name=func_name, sibling_dirs=sibling_dirs
+        )
 
     examples = [_load_json(path) for path in (few_shot_paths or [])]
     base_prompt = render_prompt(context, examples)
@@ -610,12 +891,32 @@ def run_synthesis_pipeline(
                 prompt_text=prompt,
                 prompt_file=prompt_file,
                 context_file=context_file,
-                output_dir=attempt_dir,
+                # Workdir-mode prepares ``output_dir/workdir/`` (shared
+                # across attempts) — pass the per-function dir, not the
+                # per-attempt one.
+                output_dir=output_dir,
                 backend_response_file=backend_response_file,
                 replay_from=replay_from,
                 response_file=response_file,
                 command=command,
+                command_timeout=command_timeout,
+                sibling_dirs=sibling_dirs,
+                monad=monad,
+                coq_lib_dir=coq_lib_dir,
             )
+        except PrerequisiteError as exc:
+            # Pre-spawn environment failure — codex missing, _CoqProject
+            # missing, callee lib missing.  Deterministic; retrying won't
+            # change the answer.  Record one attempt and break the loop.
+            response_text = ""
+            failure_kind = "prerequisite"
+            failure_message = str(exc)
+            _write_text(response_out_file, response_text)
+            previous_response, previous_failure_kind, previous_failure_message = _record_attempt(
+                attempt_index, attempt_dir, context["id"], files, status,
+                failure_kind, failure_message, check_result, attempts, response_text,
+            )
+            break
         except Exception as exc:
             response_text = ""
             failure_kind = "backend"
@@ -632,6 +933,7 @@ def run_synthesis_pipeline(
         try:
             _validate_opaque_callee_usage(context, response_text)
             _validate_early_return_scaffold(context, response_text)
+            _validate_guard_signature(context, response_text)
         except Exception as exc:
             failure_kind = "validation"
             failure_message = str(exc)
@@ -664,6 +966,8 @@ def run_synthesis_pipeline(
             context["summary"]["func_name"],
             blocks,
             assembled_file,
+            sibling_dirs=sibling_dirs,
+            monad=monad,
         )
         files["assembled_rel_lib"] = assembled_file
 
@@ -709,6 +1013,7 @@ def run_synthesis_pipeline(
             return _build_final_summary(
                 input_path, output_dir, context, backend, max_retries,
                 attempts, attempts[-1], status,
+                coq_lib_dir=coq_lib_dir,
             )
 
         failure_kind = "rocq"
@@ -723,4 +1028,5 @@ def run_synthesis_pipeline(
         input_path, output_dir, context, backend, max_retries,
         attempts, final_attempt, _final_status_from_attempt(final_attempt),
         promote_rel_lib=promote_rel_lib,
+        coq_lib_dir=coq_lib_dir,
     )

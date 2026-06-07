@@ -464,6 +464,56 @@ and the corresponding patched `_rel.c` declarations include:
 /*@ Extern Coq (residual_prog_in_sll_multi_merge_M_call_4: list Z -> Z -> list Z -> program unit (list Z)) */
 ```
 
+## Cross-File Callees
+
+Both the rel-lib generator and the synthesis context now resolve callees defined
+in sibling `.c` files (same directory as the input). The two changes are
+independent but both rely on the same "sibling lookup by call name" rule.
+
+### Rel-lib generator
+
+`generate_rel_lib_for_file` (`GenMonads/absprog/gen_rel_lib.py`) scans each
+function body for `IDENT(` call sites. For each candidate callee, if
+`{callee}.c` exists in the same directory, the generated rel-lib emits
+
+```coq
+Require Import {callee}_rel_lib.
+```
+
+at the top. No local `Parameter {callee}_M` is declared — it is pulled in from
+the sibling rel-lib. If no sibling `.c` exists, the candidate is skipped
+entirely.
+
+Per-file Rocq checking is no longer guaranteed to succeed in isolation: in
+directory mode `llm4pv-rellib`, run Rocq across all generated `*_rel_lib.v`
+files together so that `Require Import` references resolve.
+
+### Synthesis context
+
+`_build_file_manifest_from_result` (`GenMonads/absprog/context.py`) collects
+candidate call names from the current file's bodies, subtracts locally-defined
+names, and lazily parses only the matching sibling `.c` files via
+`process_and_translate_file`. Each sibling function becomes a manifest entry
+tagged `cross_file=True`, `should_synthesize=False`, with its full
+`externals.M` signature and low-level `spec` (Require/Ensure).
+
+`available_callees` in the synthesis context now includes cross-file callees
+with `cross_file` and `defined_in` fields. The prompt template labels each
+callee as `(same-file)` or `(cross-file)` and instructs the agent:
+
+> Cross-file callees are imported via `Require Import {callee}_rel_lib.` at the
+> top of the generated rel-lib; do not redeclare their `Parameter`.
+
+Sibling discovery is lazy: if no unresolved call names exist in the current
+file, no sibling `.c` files are parsed.
+
+### Single-file vs. directory invocation
+
+The default sibling scan uses `os.path.dirname(input_path)`. This works for the
+standard layout `shape_invdataset/<package>/<func>.c`. No `--scan-dir` flag is
+provided yet; add one only when a relocated `.c` needs to point at a different
+sibling directory.
+
 ## Current Scope
 
 This is a structural Rocq-level residual generator over synthesized abstract programs.

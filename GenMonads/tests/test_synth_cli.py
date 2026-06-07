@@ -92,7 +92,7 @@ def test_synth_cli_directory_mode_uses_exclude_and_contexts(monkeypatch, tmp_pat
     monkeypatch.setattr(
         synth_cli,
         "collect_all_synthesis_contexts",
-        lambda c_file: [
+        lambda c_file, sibling_dirs=None: [
             {"id": "alpha", "summary": {"func_name": "alpha"}}
         ] if c_file.endswith("alpha.c") else [
             {"id": "beta_left", "summary": {"func_name": "beta_left"}},

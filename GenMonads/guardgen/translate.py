@@ -1,5 +1,8 @@
 # guardgen/translate.py
-from .parsing.invariant import normalize_inv, parse_invariant, extract_pure_aliases
+import re
+from .parsing.invariant import (
+    normalize_inv, parse_invariant, extract_pure_aliases, extract_store_bindings,
+)
 from .cond.parser import parse_cond_full
 from .cond.ast import BoolNode, AtomKind
 from .parsing.invariant import ShAtom
@@ -15,8 +18,14 @@ def _normalize_ptr(name: str) -> str:
     return re.sub(r'\s*->\s*', '->', name)
 
 
+_SCALAR_OP_COQ = {
+    "<": "<", "<=": "<=", ">": ">", ">=": ">=", "==": "=", "!=": "<>",
+}
+
+
 def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
-                      aliases: dict[str, str] | None = None) -> str:
+                      aliases: dict[str, str] | None = None,
+                      scalar_bindings: dict[str, str] | None = None) -> str:
     """
     Translation with two important behaviors:
       1) Bare 'p' is parsed as 'p == null', and '! p' as 'p != null'.
@@ -57,10 +66,29 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
                 return _normalize_ptr(alias)
         return nptr
 
+    def _resolve_scalar(operand: str) -> str | None:
+        """Resolve a scalar-comparison operand to a Coq term, or None.
+
+        Numeric literals pass through; C lvalues are mapped to their abstract
+        scalar variable via *scalar_bindings*.  Returns None when the operand
+        is neither (so the caller can fall back to pointer handling)."""
+        op = operand.strip()
+        if re.fullmatch(r"-?\d+", op):
+            return op
+        nop = _normalize_ptr(op)
+        if scalar_bindings and nop in scalar_bindings:
+            return scalar_bindings[nop]
+        return None
+
     def _render_root_null(ptr: str, is_eq: bool) -> str:
         resolved = _resolve_ptr(ptr)
         root_atom = roots_by_ptr.get(resolved)
         if root_atom is None:
+            # Scalar fallback: ``i == 0`` / ``i != 0`` where ``i`` is a
+            # store-bound scalar, not a list pointer.
+            scalar = _resolve_scalar(ptr)
+            if scalar is not None:
+                return f"{scalar} = 0" if is_eq else f"{scalar} <> 0"
             # Try field-deref: ``<base>-><field>`` may not appear in any
             # spatial predicate directly, but its base might be a root.
             if "->" in resolved:
@@ -101,6 +129,11 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
             if nst == ny and ned == nx:
                 hit = seg; reversed_match = True; break
         if hit is None:
+            # Scalar fallback: ``i == j`` / ``i != j`` between store-bound
+            # scalars (or numeric literals), not a list segment.
+            sx, sy = _resolve_scalar(x), _resolve_scalar(y)
+            if sx is not None and sy is not None:
+                return f"{sx} = {sy}" if is_eq else f"{sx} <> {sy}"
             raise ValueError(f"No segment predicate for ({x},{y}) found in invariant")
         if hit.spec.to_coq_segment_eq is None:
             raise ValueError(f"Predicate '{hit.spec.name}' lacks segment-eq handler")
@@ -120,6 +153,25 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
             elif ac.kind in (AtomKind.PTR_EQ_PTR, AtomKind.PTR_NE_PTR):
                 is_eq = (ac.kind == AtomKind.PTR_EQ_PTR)
                 return _render_seg_eq(ac.ptr1, ac.ptr2, is_eq)
+
+            # scalar comparison (i < n, i <= n, i == 5, ...)
+            elif ac.kind == AtomKind.SCALAR_CMP:
+                lhs = _resolve_scalar(ac.ptr1)
+                rhs = _resolve_scalar(ac.ptr2)
+                if lhs is None:
+                    raise ValueError(
+                        f"Scalar comparison operand '{ac.ptr1}' is not a "
+                        f"store-bound scalar or numeric literal; no `store(&{ac.ptr1}, ...)` "
+                        f"binding found in the invariant."
+                    )
+                if rhs is None:
+                    raise ValueError(
+                        f"Scalar comparison operand '{ac.ptr2}' is not a "
+                        f"store-bound scalar or numeric literal; no `store(&{ac.ptr2}, ...)` "
+                        f"binding found in the invariant."
+                    )
+                coq_op = _SCALAR_OP_COQ[ac.op]
+                return f"{lhs} {coq_op} {rhs}"
 
             else:
                 raise ValueError("Unknown atom kind in boolean AST")
@@ -151,6 +203,7 @@ def gen_coq_guard(inv: str, cond: str, extra_vars: list[str] | None = None) -> s
     inv_norm = normalize_inv(inv)
     atoms = parse_invariant(inv_norm)
     pure_aliases = extract_pure_aliases(inv)
+    scalar_bindings = extract_store_bindings(inv_norm)
 
     # Normalize (void *)0 to 0 before parsing
     # This handles C null pointer literal: (void *)0 == null
@@ -158,7 +211,8 @@ def gen_coq_guard(inv: str, cond: str, extra_vars: list[str] | None = None) -> s
     cond_normalized = re.sub(r'\(\s*void\s*\*\s*\)\s*0', '0', cond)
 
     ast = parse_cond_full(cond_normalized)
-    body = gen_coq_from_bool(ast, atoms, aliases=pure_aliases)
+    body = gen_coq_from_bool(ast, atoms, aliases=pure_aliases,
+                             scalar_bindings=scalar_bindings)
 
     # Bind abstract names in INV order, plus any extra vars (data witnesses)
     abs_names: list[str] = []

@@ -484,6 +484,58 @@ struct list * myfunc(struct list * x) {
         assert 'Require safeExec(ATrue, bind(sll_merge_M(l1, l2), cont), X)' in result
         assert 'Ensure exists l3, safeExec(ATrue, bind(return(l3), cont), X)' in result
 
+    def test_helper_aux_spec_precedes_primary_and_uses_witness_in_cont_type(self):
+        """For a scalar-return function with body, the aux declaration must
+        come FIRST (with ``;``) and the primary definition SECOND.  The
+        aux's cont type must include the synthetic ``r`` witness type, and
+        the Ensure's ``return(...)`` form must be the real one (with
+        ``maketuple``), wrapped in ``bind(..., cont)``.  Regression for
+        ``glibc_slist_iter_back`` where order was reversed, cont was
+        ``(list Z)`` instead of ``(list Z * Z)``, and the bind wrap was
+        missing.
+        """
+        content = (
+            "long demo(struct list *x)\n"
+            "/*@ Require listrep(x)\n"
+            "    Ensure listrep(x@pre)\n"
+            " */\n"
+            "{\n"
+            "    if (x == 0) { return 0; }\n"
+            "    return demo(x->next) + x->data;\n"
+            "}\n"
+        )
+        funcspec = {
+            "require": {
+                "translated": "sll(x, ?l1)",
+                "variables": ["?l1"],
+                "variable_types": ["list Z"],
+            },
+            "ensure": {
+                "translated": "sll(x@pre, ?l2)",
+                "variables": ["?l2"],
+                "variable_types": ["list Z"],
+            },
+        }
+        result = replace_funcspec(
+            content,
+            "demo",
+            funcspec,
+            "demo_M",
+            is_callee_funcspec=True,
+            return_type="long",
+        )
+
+        # Order: aux declaration first (terminated with ';'), primary on body.
+        aux_pos = result.index("low_level_spec_aux <= low_level_spec")
+        primary_pos = result.index("low_level_spec\n")
+        assert aux_pos < primary_pos, "aux spec must precede primary spec"
+
+        # Cont arg type includes the synthetic witness ``r : Z``.
+        assert "(cont: (list Z * Z) -> program unit B)" in result
+        # Ensure wraps the real return form (with maketuple) in bind(...).
+        assert "bind(return(maketuple(l2, r)), cont)" in result
+
+
     def test_replace_inner_assertions_for_func(self):
         """Only the target function's Inv should be replaced."""
         content = """void func_a(int x) {

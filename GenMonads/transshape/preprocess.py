@@ -17,8 +17,12 @@ class AnnotationExtractor:
     def __init__(self):
         self.results = {}
 
-    def extract_comment_block(self, text: str, start_pos: int) -> Optional[Tuple[str, int]]:
-        """Extract a comment block starting with /*@ and ending with */.
+    def extract_comment_block(self, text: str, start_pos: int) -> Optional[Tuple[str, int, int]]:
+        """Extract a ``/*@ ... */`` annotation block at or after *start_pos*.
+
+        Returns ``(content, end_pos, comment_start)`` where *comment_start* is
+        the offset of the opening ``/*@`` and *end_pos* is just past the
+        closing ``*/``.  Returns ``None`` when no block is found.
         """
         comment_start = text.find('/*@', start_pos)
         if comment_start == -1:
@@ -29,7 +33,7 @@ class AnnotationExtractor:
             return None
 
         content = text[comment_start + 3:comment_end].strip()
-        return content, comment_end + 2
+        return content, comment_end + 2, comment_start
 
     def process_funcspec(self, text: str, func_name: str) -> Optional[Dict[str, str]]:
         """Original extraction logic for funcspec."""
@@ -39,7 +43,7 @@ class AnnotationExtractor:
         func_end = match.end()
         result = self.extract_comment_block(text, func_end)
         if not result: return None
-        comment_content, _ = result
+        comment_content, _, _ = result
         return self.parse_spec_content(comment_content)
 
     def parse_spec_content(self, comment_content: str) -> Dict[str, str]:
@@ -111,7 +115,7 @@ class AnnotationExtractor:
             if not result:
                 break
 
-            content, end_pos = result
+            content, end_pos, comment_start = result
             assertion_type = 'unknown'
             assertion_content = content
             command_guard = None
@@ -119,13 +123,21 @@ class AnnotationExtractor:
             inv_match = re.match(r'Inv\s+(.*)', content, re.DOTALL | re.IGNORECASE)
             if inv_match:
                 assertion_type = 'Inv'
-                assertion_content = inv_match.group(1).strip()
+                body = inv_match.group(1).strip()
+                # `/*@ Inv Assert ... */` is a documented variant; strip the
+                # leading Assert keyword so the body parses as a normal Inv.
+                assert_strip = re.match(r'Assert\s+(.*)', body, re.DOTALL)
+                if assert_strip:
+                    body = assert_strip.group(1).strip()
+                assertion_content = body
                 command_guard = self.extract_while_condition(func_body, end_pos)
 
             assertion_dict = {
                 'type': assertion_type,
                 'content': assertion_content,
-                'position': body_start_pos + pos
+                # Source offset of the opening ``/*@`` for this annotation,
+                # measured in the file that *body_start_pos* was relative to.
+                'position': body_start_pos + comment_start
             }
 
             if assertion_type == 'Inv' and command_guard:
@@ -165,6 +177,14 @@ class AnnotationExtractor:
             if f_name in ['while', 'if', 'for', 'switch', 'return']: continue
 
             return_type = (header_match.group(1) or "").strip()
+            # Reject call-site captures: e.g. `return list_append_raw(x, y);`
+            # matches with return_type ending in `return`/`if`/etc.  Real
+            # function headers don't start with a control-flow keyword.
+            prefix_tokens = re.findall(r'\b\w+\b', return_type)
+            if prefix_tokens and prefix_tokens[-1] in (
+                'return', 'if', 'else', 'while', 'for', 'switch', 'do', 'case', 'goto'
+            ):
+                continue
             inline_spec = header_match.group(4)
             terminator = header_match.group(5)
             header_start, header_end = header_match.start(), header_match.end()

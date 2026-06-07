@@ -96,6 +96,141 @@ class TestPreprocessor:
         result = self.extractor.process_file(file_path)
         assert len(result['inner_assertions']) > 0
 
+    def test_inner_assertion_position_is_actual_comment_offset(self, tmp_path):
+        """The ``position`` field on each extracted inner assertion must be
+        the actual file offset of the opening ``/*@``, not the position the
+        scanner happened to start its search from.
+
+        Regression: an earlier version recorded ``body_start_pos + search_pos``
+        where ``search_pos`` was the cursor after the *previous* match — so
+        the first assertion always reported ``body_start`` and subsequent
+        positions drifted with each iteration.
+        """
+        src = (
+            'void two_loops(struct list *x)\n'
+            '/*@ Require listrep(x)\n'
+            '    Ensure  listrep(x) */\n'
+            '{\n'
+            '    /*@ Inv first_inv\n'
+            '            listrep(x) */\n'
+            '    while (x) {\n'
+            '        /*@ Inv second_inv\n'
+            '                listrep(x) */\n'
+            '        while (x->next) { x = x->next; }\n'
+            '    }\n'
+            '}\n'
+        )
+        path = tmp_path / "two_loops.c"
+        path.write_text(src, encoding="utf-8")
+        result = self.extractor.process_file(str(path))
+        invs = [a for a in result['inner_assertions'] if a['type'] == 'Inv']
+        assert len(invs) == 2
+        for inv, marker in zip(invs, ('first_inv', 'second_inv')):
+            pos = inv['position']
+            # The reported offset must point at ``/*@``.
+            assert src.startswith('/*@', pos), \
+                f"position {pos} does not point to '/*@' (got: {src[pos:pos+8]!r})"
+            # And the annotation at that offset must be the one we expect.
+            assert marker in src[pos:pos + 80], \
+                f"position {pos} associated with the wrong annotation"
+
+    def test_undef_data_at_spliced_between_bool_and_shape_conjuncts(self):
+        """When the original assertion has the shape ``<bool> && undef * <shape>``,
+        translation must preserve the same boundary: ``undef`` goes between
+        the ``&&``-joined booleans and the ``*``-joined shape predicates,
+        not blindly at the front."""
+        translator = ShapeTranslator()
+        translated, _ = translator.translate_assertion_with_exists(
+            "src == src@pre && undef_data_at(&copy, struct list*) * "
+            "lseg(src@pre, node) * listrep(node) * listrep(dst)"
+        )
+        # Expected layout: bool conjuncts first, then undef, then shape.
+        bool_pos = translated.index("src == src@pre")
+        undef_pos = translated.index("undef_data_at(&copy, struct list*)")
+        shape_pos = translated.index("sllseg(src@pre, node")
+        assert bool_pos < undef_pos < shape_pos, (
+            f"bad order: bool={bool_pos}, undef={undef_pos}, shape={shape_pos}\n"
+            f"got: {translated!r}"
+        )
+
+    def test_undef_data_at_is_preserved_verbatim(self):
+        """`undef_data_at(&var, T)` uses syntax (``&var``, ``struct T*``) the
+        shape parser can't tokenize.  The translator must extract it, parse
+        the rest, and splice the predicate back into the translated output
+        unchanged so it survives into the ``_rel.c`` invariant."""
+        translator = ShapeTranslator()
+        translated, _ = translator.translate_assertion(
+            "undef_data_at(&copy, struct list*) * listrep(x)"
+        )
+        assert "undef_data_at(&copy, struct list*)" in translated
+        assert "sll(x" in translated
+
+    def test_store_is_preserved_verbatim(self):
+        """`store(&var, T, value)` uses raw C address/type syntax, so it is
+        preserved verbatim like other memory-state predicates."""
+        translator = ShapeTranslator()
+        translated, _ = translator.translate_assertion(
+            "exists p, store(&copy, struct list*, p) * listrep(x)"
+        )
+        assert "store(&copy, struct list*, p)" in translated
+        assert "sll(x" in translated
+
+    def test_exists_accepts_space_separated_variables(self):
+        """Coq-style `exists x y z, body` must parse the same as comma form."""
+        from GenMonads.transshape.parser import parse_assertion, Exists
+        ast = parse_assertion("exists st s, listrep(x)")
+        assert isinstance(ast, Exists)
+        assert ast.vars == ["st", "s"]
+        ast = parse_assertion("exists p st s, listrep(x)")
+        assert ast.vars == ["p", "st", "s"]
+
+    def test_return_call_site_is_not_treated_as_function_definition(self, tmp_path):
+        """A call site like `return foo(x, y);` inside a function body must
+        NOT be picked up by the preprocessor as a second function in the
+        file.  Otherwise the synthesis context builder treats the callee as
+        a local function and skips the sibling-import resolution."""
+        src = (
+            '#include "sll_shape_def.h"\n'
+            '\n'
+            'struct list *caller(struct list *x, struct list *y)\n'
+            '/*@ Require listrep(x) * listrep(y)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    return helper_callee(x, y);\n'
+            '}\n'
+        )
+        c_file = tmp_path / "demo.c"
+        c_file.write_text(src, encoding="utf-8")
+        result = self.extractor.process_file(str(c_file))
+        names = [f["function"] for f in result.get("functions", [])]
+        assert names == ["caller"], \
+            f"phantom call site picked up as function: {names}"
+
+    def test_inv_assert_keyword_is_stripped(self, tmp_path):
+        """`/*@ Inv Assert <body> */` is a documented variant; the leading
+        `Assert` must be stripped so the body parses as a normal Inv."""
+        src = (
+            '#include "sll_shape_def.h"\n'
+            'struct list *demo(struct list *x)\n'
+            '/*@ Require listrep(x)\n'
+            '    Ensure  listrep(__return)\n'
+            ' */\n'
+            '{\n'
+            '    /*@ Inv Assert listrep(x) */\n'
+            '    while (x) { x = x->next; }\n'
+            '    return x;\n'
+            '}\n'
+        )
+        c_file = tmp_path / "demo.c"
+        c_file.write_text(src, encoding="utf-8")
+        result = self.extractor.process_file(str(c_file))
+        inv_assertions = [a for a in result['inner_assertions'] if a['type'] == 'Inv']
+        assert len(inv_assertions) == 1
+        # Body must not start with "Assert"; it should be the predicate.
+        assert inv_assertions[0]['content'].startswith('listrep(x)'), \
+            f"Inv body still has Assert prefix: {inv_assertions[0]['content']!r}"
+
     def test_command_guard_extraction(self, tmp_path):
         file_path = _write_reverse(tmp_path)
         result = self.extractor.process_file(file_path)
