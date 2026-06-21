@@ -724,6 +724,7 @@ def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
             return_type,
             has_early_return=effective_early_return,
         )
+
     control_flow["has_top_level_loop"] = early_return_shape["has_top_level_loop"]
     control_flow["has_top_level_loop"] = early_return_shape["has_top_level_loop"]
 
@@ -750,6 +751,92 @@ def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
     control_flow["has_sequential_loops"] = (
         sum(1 for t in loop_templates if t["parent"] is None) > 1
     )
+
+    # Block-tree-derived C ↔ scaffold-hole binding for the prompt.
+    # Stored under ``prompt_context["scaffold_segments"]`` so the lib
+    # ``.v`` stays a clean Coq template; the binding is synthesis-time
+    # guidance only.  Each scaffold shape gets its own hole-name set:
+    #
+    #   * no-loop-early-return  → {"M_before", "M_normal"}
+    #   * single-loop scaffold  → {"M_loop_before", "M_loop_M2",
+    #                              "M_loop_end"}  (M_loop_M1 is
+    #                              mechanical; no C segment)
+    #
+    # Multi-loop ``loop_forest`` libs aren't covered yet — they need a
+    # per-loop binding that respects nesting.
+    scaffold_segments: Dict[str, str] = {}
+    if c_source:
+        from GenMonads.absprog.partition import (
+            partition_function_body,
+            render_blocks_as_c_snippet,
+            split_for_interleaved_early_return,
+            split_for_loop_forest,
+            split_for_loop_scaffold,
+            split_for_no_loop_early_return,
+        )
+        try:
+            blocks = partition_function_body(c_source)
+        except Exception:
+            blocks = None
+
+        if blocks is not None:
+            # Phase 3C — interleaved early-returns take precedence over
+            # the single-decision no-loop-early-return scaffold when 2+
+            # top-level decisions exist.
+            interleaved = split_for_interleaved_early_return(blocks)
+            if interleaved is not None and not has_loop_program and not is_recursive:
+                # Insert in execution-narrative order: decision_1 → phase_1
+                # → decision_2 → phase_2 → … → decision_N → M_final.
+                # The prompt renderer preserves insertion order for
+                # non-static keys, so this becomes the displayed order.
+                decisions = interleaved["decisions"]
+                phases = interleaved["phases"]
+                for k, dec in enumerate(decisions, start=1):
+                    scaffold_segments[f"M_decision_{k}"] = dec.raw_c_text
+                    phase_blocks = phases[k - 1]   # work after decision k's Continue
+                    snippet = render_blocks_as_c_snippet(phase_blocks)
+                    if k < len(decisions):
+                        scaffold_segments[f"M_phase_{k}"] = snippet
+                    else:
+                        # Terminal phase after the last decision.
+                        scaffold_segments["M_final"] = snippet
+            elif not has_loop_program and has_no_loop_early_return and not is_recursive:
+                split = split_for_no_loop_early_return(blocks)
+                if split is not None:
+                    scaffold_segments = {
+                        "M_before": render_blocks_as_c_snippet(split["m_before"]),
+                        "M_normal": render_blocks_as_c_snippet(split["m_normal"]),
+                    }
+            elif has_loop_program and len(loop_templates) == 1:
+                split = split_for_loop_scaffold(blocks)
+                if split is not None:
+                    scaffold_segments = {
+                        "M_loop_before": render_blocks_as_c_snippet(split["M_loop_before"]),
+                        "M_loop_M2": render_blocks_as_c_snippet(split["M_loop_M2"]),
+                        "M_loop_end": render_blocks_as_c_snippet(split["M_loop_end"]),
+                    }
+                    # Phase 3B — when the loop body has an internal
+                    # early-return, surface the sub-structure so the
+                    # agent encodes ``early_result`` wrapping in M_loop_M2.
+                    if "M_loop_M2_split" in split:
+                        m2 = split["M_loop_M2_split"]
+                        scaffold_segments["_M_loop_M2_pre_decision"] = (
+                            render_blocks_as_c_snippet(m2["pre_decision"])
+                        )
+                        scaffold_segments["_M_loop_M2_decision"] = m2["decision"].raw_c_text
+                        scaffold_segments["_M_loop_M2_decision_cond"] = m2["decision"].cond
+                        scaffold_segments["_M_loop_M2_post_decision"] = (
+                            render_blocks_as_c_snippet(m2["post_decision"])
+                        )
+            elif has_loop_program and len(loop_templates) > 1:
+                # Multi-loop (forest) functions: per-loop segments keyed
+                # by the existing forest scaffold's hole names
+                # (M_loop{k}_before, M_loop{k}_M2 for leaves,
+                # M_loop{k}_to_inner_{j}/_after_inner_{j} for parents,
+                # M_loop{k}_end for top-level).
+                forest_segs = split_for_loop_forest(blocks)
+                if forest_segs is not None:
+                    scaffold_segments = dict(forest_segs)
 
     # When the function has >1 loops the forest scaffold takes over: override
     # the LLM's required_components and prompt_signatures with per-loop holes.
@@ -809,6 +896,7 @@ def _build_target_details(c_file: str, result: Dict, func_data: Dict) -> Dict:
             "loop_condition": first_inv.get("command_guard", ""),
             "guard_coq": first_inv.get("coq_guard", ""),
             "control_flow": control_flow,
+            "scaffold_segments": scaffold_segments,
         },
         "signatures": {
             "M_loop_before": f"{_curried_type(require_types)}MONAD {_type_arg(state_type)}",

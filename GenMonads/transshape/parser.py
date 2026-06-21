@@ -136,6 +136,31 @@ class AssertionParser:
             return ident
         return None
 
+    def parse_qualified_identifier(self) -> Optional[str]:
+        """Parse a qualified identifier, e.g., ``IntArray::full_shape``.
+
+        Accepts plain identifiers too (``listrep``) — when no ``::``
+        follows the first segment, returns just that segment.  This is
+        used for predicate names so the same parser handles both
+        namespaced (``IntArray::full``) and bare (``listrep``) shape
+        predicates uniformly.
+
+        C variable names can't contain ``::``, so this is NOT a drop-in
+        replacement for :meth:`parse_identifier` everywhere; use it only
+        where qualified names are syntactically valid (predicate names
+        and the peek in :meth:`parse_atomic`).
+        """
+        self.skip_whitespace()
+        match = re.match(
+            r'[a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*',
+            self.text[self.pos:],
+        )
+        if match:
+            ident = match.group(0)
+            self.pos += len(ident)
+            return ident
+        return None
+
     def parse_number(self) -> Optional[int]:
         """Parse a number."""
         self.skip_whitespace()
@@ -154,6 +179,26 @@ class AssertionParser:
         if self.consume('*'):
             return Deref(self.parse_expr())
 
+        # Unary minus.  Distinguish two cases:
+        #   ``-1``        → produce the negative integer literal.
+        #   ``-expr``     → produce ``0 - expr`` (a BinOp at the
+        #                    expression level), so e.g. ``-v_i <= n``
+        #                    still parses without us needing a dedicated
+        #                    Neg AST node.
+        # Only consume the ``-`` when it can't be the start of an arrow
+        # (``->``).  Field access only follows another expression — the
+        # arrow case is handled inside the post-identifier loop below.
+        if self.current_char() == '-' and self.peek_char() != '>':
+            saved = self.pos
+            self.pos += 1
+            self.skip_whitespace()
+            num = self.parse_number()
+            if num is not None:
+                return -num
+            # Fallback: ``-expr`` → ``0 - expr``.
+            inner = self.parse_expr()
+            return BinOp('-', 0, inner)
+
         # Try to parse number
         num = self.parse_number()
         if num is not None:
@@ -168,6 +213,29 @@ class AssertionParser:
         if self.consume('@pre'):
             ident = f"{ident}@pre"
 
+        # Function-call expression: ``app(out, cons(0, nil))``.  Used in
+        # the data arguments of qualified array predicates (e.g.
+        # ``CharArray::full(p, n, app(out, cons(0, nil)))``).  We reuse
+        # the ``Predicate`` AST node — the translator treats Predicates
+        # in expression position via ``translate_expr`` which already
+        # deep-copies them.
+        if self.consume('('):
+            args: List[Expr] = []
+            while True:
+                self.skip_whitespace()
+                if self.consume(')'):
+                    break
+                args.append(self.parse_arith_expr())
+                self.skip_whitespace()
+                if self.consume(','):
+                    continue
+                if self.consume(')'):
+                    break
+                raise ValueError(
+                    f"Expected ',' or ')' in argument list at position {self.pos}"
+                )
+            return Predicate(ident, args)
+
         expr = Var(ident)
 
         # Check for field access chain (->)
@@ -180,25 +248,54 @@ class AssertionParser:
         return expr
 
     def parse_comparison(self) -> BinOp:
-        """Parse a comparison (e.g., t != 0, t->next == 0)."""
-        left = self.parse_expr()
+        """Parse a comparison (e.g., ``t != 0``, ``t->next == 0``,
+        ``0 <= n``, ``v_left <= v_right + 1``).
+
+        Operators: ``==``, ``!=``, ``<=``, ``>=``, ``<``, ``>``.  Two-char
+        operators are checked before their single-char prefixes so e.g.
+        ``<=`` doesn't get split into ``<`` and ``=``.
+        """
+        left = self.parse_arith_expr()
 
         self.skip_whitespace()
-        # Parse operator
-        if self.consume('=='):
-            op = '=='
-        elif self.consume('!='):
-            op = '!='
-        else:
-            raise ValueError(f"Expected comparison operator at position {self.pos}")
+        # Order matters: two-char operators MUST be checked first.
+        for op in ('==', '!=', '<=', '>=', '<', '>'):
+            if self.consume(op):
+                right = self.parse_arith_expr()
+                return BinOp(op, left, right)
+        raise ValueError(f"Expected comparison operator at position {self.pos}")
 
-        right = self.parse_expr()
+    def parse_arith_expr(self) -> 'Expr':
+        """Parse a left-associative arithmetic chain of ``+``/``-`` terms.
 
-        return BinOp(op, left, right)
+        Each term is an :meth:`parse_expr` result.  This is the layer
+        between :meth:`parse_comparison` (which wants whole arithmetic
+        operands) and :meth:`parse_expr` (which handles a single term).
+        Multiplication/division aren't supported because ``*`` is also
+        the separating-conjunction operator at the formula level — and
+        no shape predicate's argument list has needed it yet.
+        """
+        left = self.parse_expr()
+        self.skip_whitespace()
+        while True:
+            if self.consume('+'):
+                right = self.parse_expr()
+                left = BinOp('+', left, right)
+            elif self.consume('-'):
+                # ``-`` is also the leading char of ``->`` field access;
+                # field access is handled inside parse_expr, so by the
+                # time we reach here a bare ``-`` is arithmetic.
+                right = self.parse_expr()
+                left = BinOp('-', left, right)
+            else:
+                break
+            self.skip_whitespace()
+        return left
 
     def parse_predicate(self) -> Predicate:
-        """Parse a shape predicate (e.g., listrep(x), lseg(x,y))."""
-        name = self.parse_identifier()
+        """Parse a shape predicate (e.g., ``listrep(x)``, ``lseg(x,y)``,
+        or namespaced ``IntArray::full_shape(p, n)``)."""
+        name = self.parse_qualified_identifier()
         if name is None:
             raise ValueError(f"Expected predicate name at position {self.pos}")
 
@@ -211,7 +308,12 @@ class AssertionParser:
             if self.consume(')'):
                 break
 
-            args.append(self.parse_expr())
+            # Predicate arguments may contain arithmetic — e.g.
+            # ``IntArray::seg(p, 0, v_i + 1, l)`` or
+            # ``CharArray::full(output, __return + 1, …)``.  Use
+            # :meth:`parse_arith_expr` so ``+``/``-`` chains compose into
+            # a single argument.
+            args.append(self.parse_arith_expr())
 
             self.skip_whitespace()
             if not self.consume(','):
@@ -245,8 +347,14 @@ class AssertionParser:
             while temp_pos < len(self.text) and self.text[temp_pos].isspace():
                 temp_pos += 1
 
-            # Read identifier
-            match = re.match(r'[a-zA-Z_][a-zA-Z0-9_]*', self.text[temp_pos:])
+            # Read identifier (possibly namespace-qualified for shape
+            # predicates like ``IntArray::full_shape``).  Must match
+            # :meth:`parse_qualified_identifier`'s regex so the peek and
+            # the actual parse agree on what's an identifier.
+            match = re.match(
+                r'[a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*',
+                self.text[temp_pos:],
+            )
             if match:
                 temp_pos += len(match.group(0))
                 # Skip whitespace after identifier
@@ -311,6 +419,59 @@ class AssertionParser:
             self.skip_whitespace()
             saved_pos = self.pos
 
+            # Typed binder ``(name : Type)`` — Coq-style explicit type
+            # annotation, used in QCP demos for non-default-typed
+            # existentials (e.g. ``(s2_full : list Z)``).  We discard
+            # the type (downstream infers types separately) and record
+            # only the name.
+            if self.consume('('):
+                self.skip_whitespace()
+                name = self.parse_identifier()
+                if name is None:
+                    raise ValueError(
+                        f"Expected variable name in typed exists binder "
+                        f"at position {self.pos}"
+                    )
+                self.skip_whitespace()
+                if not self.consume(':'):
+                    raise ValueError(
+                        f"Expected ':' after typed exists binder name "
+                        f"at position {self.pos}"
+                    )
+                # Skip the type expression up to the matching ``)``.
+                depth = 1
+                while self.pos < len(self.text) and depth > 0:
+                    ch = self.text[self.pos]
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth == 0:
+                            self.pos += 1
+                            break
+                    self.pos += 1
+                else:
+                    raise ValueError(
+                        f"Unterminated typed exists binder starting at {saved_pos}"
+                    )
+                vars.append(name)
+                self.skip_whitespace()
+                if self.consume(','):
+                    # Comma after a typed binder almost always marks the
+                    # end of the binder list.  We only continue when the
+                    # next non-whitespace character is another ``(`` —
+                    # another typed binder.  Bare identifiers after the
+                    # comma are body content (e.g. ``exists (x : T), x
+                    # == y``), not more binders.
+                    peek_pos = self.pos
+                    self.skip_whitespace()
+                    if self.current_char() == '(':
+                        continue
+                    self.pos = peek_pos
+                    break
+                else:
+                    continue
+
             var = self.parse_identifier()
             if var is None:
                 raise ValueError(f"Expected variable after 'exists' at position {self.pos}")
@@ -360,6 +521,12 @@ class AssertionParser:
                 # (treat the next identifier as another variable if it isn't
                 # followed by an operator), or this is the final variable.
                 peek_pos = self.pos
+                # Typed-binder continuation: ``exists x (y : T), body`` —
+                # next non-whitespace char is ``(``, which signals another
+                # binder, not a parenthesized formula at this position.
+                if self.current_char() == '(':
+                    vars.append(var)
+                    continue
                 next_ident = self.parse_identifier()
                 if next_ident is not None:
                     self.skip_whitespace()
@@ -369,10 +536,17 @@ class AssertionParser:
                         vars.append(var)
                         self.pos = peek_pos
                         continue
+                    # ``next_char == '('`` means a typed binder
+                    # ``(name : Type)`` follows; that's still a binder,
+                    # not the body.  Without the explicit check the
+                    # parser would treat the bare ``next_ident`` as a
+                    # predicate name applied to the parenthesised list.
                     is_more_vars = (
                         next_char is not None
-                        and next_char not in '=!-(*&|<>'
-                        and (next_char.isalpha() or next_char == '_')
+                        and (
+                            (next_char.isalpha() or next_char == '_')
+                            or next_char == '('
+                        )
                     )
                     self.pos = peek_pos
                     if is_more_vars:
@@ -435,6 +609,12 @@ def recover_expr(expr: Expr) -> str:
         left_str = recover_expr(expr.left)
         right_str = recover_expr(expr.right)
         return f"{left_str} {expr.op} {right_str}"
+    elif isinstance(expr, Predicate):
+        # Function-call expression used as a predicate argument, e.g.
+        # ``CharArray::full(p, n, app(out, cons(0, nil)))`` — the parser
+        # stores nested calls as ``Predicate`` nodes.
+        args_str = ", ".join(recover_expr(arg) for arg in expr.args)
+        return f"{expr.name}({args_str})"
     else:
         raise ValueError(f"Unknown expression type: {type(expr)}")
 

@@ -624,8 +624,13 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
                     if t.get('parent') is not None:
                         continue
                     k = t['loop_index'] + 1
+                    # Expose ``_tail`` (the full residual from this loop
+                    # to function return) — the Inv binding uses this.
+                    # ``_end`` is still a Parameter in the lib (the LLM
+                    # fills it) but is internal to the lib's M
+                    # composition; the rel.c never references it.
                     decl_lines.append(
-                        f'({fn}_M_loop{k}_end: {mretty} -> program unit {ret_type})'
+                        f'({fn}_M_loop{k}_tail: {mretty} -> program unit {ret_type})'
                     )
             else:
                 # {func}_M_loop: t1 -> ... -> program unit {mretty}
@@ -962,9 +967,17 @@ def _build_per_inv_programs(
             break
         k = t['loop_index'] + 1
         root_k = _root(t['loop_index']) + 1
+        # Bind the loop's continuation with ``_M_loop{root_k}_tail`` —
+        # the residual program from this loop's exit through to the
+        # function's return.  For non-terminal top-level loops, the
+        # bare ``_end`` Parameter is only the BRIDGE to the next loop;
+        # using it would silently under-quantify the residual.  The
+        # forest scaffold emits a ``Definition M_loop{k}_tail`` for
+        # every top-level loop (the last one is just an alias of
+        # ``_end``, so semantics are preserved everywhere).
         pairs.append((
             f"{func_name}_M_loop{k}",
-            f"{func_name}_M_loop{root_k}_end",
+            f"{func_name}_M_loop{root_k}_tail",
         ))
     return pairs
 
@@ -997,13 +1010,21 @@ def replace_inner_assertions_original(
     """Original implementation of replace_inner_assertions."""
     if not inner_assertions:
         return content
-    inv_pattern = r'/\*@\s*Inv\s+(.*?)\s*\*/'
-    matches = list(re.finditer(inv_pattern, content, flags=re.DOTALL))
+    # Match both ``/*@ Inv ... */`` and bare ``/*@ Assert ... */``
+    # proof-checkpoint annotations.  ``Inv`` is tried first in the
+    # alternation so ``/*@ Inv Assert ... */`` matches as ``Inv`` (the
+    # nested ``Assert`` keyword is stripped by the preprocessor and
+    # tracked via ``assertion['inv_assert']``).
+    annot_pattern = r'/\*@\s*(Inv|Assert)\s+(.*?)\s*\*/'
+    matches = list(re.finditer(annot_pattern, content, flags=re.DOTALL))
     for i, match in enumerate(reversed(matches)):
         assertion_index = len(matches) - 1 - i
         if assertion_index < len(inner_assertions):
             assertion = inner_assertions[assertion_index]
-            if assertion['type'] == 'Inv' and 'translated' in assertion:
+            keyword = match.group(1)
+            if (keyword == 'Inv'
+                    and assertion['type'] == 'Inv'
+                    and 'translated' in assertion):
                 pl, ple = _loop_program_names(
                     assertion_index, program_loop, program_loop_end, per_inv_programs,
                 )
@@ -1013,7 +1034,17 @@ def replace_inner_assertions_original(
                     pl,
                     ple,
                 )
-                new_comment = f"/*@ Inv {with_safeexec} */"
+                kw = "Inv Assert" if assertion.get('inv_assert') else "Inv"
+                new_comment = f"/*@ {kw} {with_safeexec} */"
+                content = content[:match.start()] + new_comment + content[match.end():]
+            elif (keyword == 'Assert'
+                    and assertion['type'] == 'Assert'
+                    and 'translated' in assertion):
+                # Bare Assert blocks are intermediate proof checkpoints
+                # — no safeExec wrapping (they don't bind a loop's
+                # abstract state); just emit the shape→data rewritten
+                # body.
+                new_comment = f"/*@ Assert {assertion['translated']} */"
                 content = content[:match.start()] + new_comment + content[match.end():]
     return content
 
@@ -1045,14 +1076,18 @@ def replace_inner_assertions_for_func(
 
     body = content[start:pos-1]
 
-    inv_pattern = r'/\*@\s*Inv\s+(.*?)\s*\*/'
-    matches = list(re.finditer(inv_pattern, body, flags=re.DOTALL))
+    # Same alternation as the file-wide variant — see comment above.
+    annot_pattern = r'/\*@\s*(Inv|Assert)\s+(.*?)\s*\*/'
+    matches = list(re.finditer(annot_pattern, body, flags=re.DOTALL))
 
     for i, match in enumerate(reversed(matches)):
         assertion_index = len(matches) - 1 - i
         if assertion_index < len(inner_assertions):
             assertion = inner_assertions[assertion_index]
-            if assertion['type'] == 'Inv' and 'translated' in assertion:
+            keyword = match.group(1)
+            if (keyword == 'Inv'
+                    and assertion['type'] == 'Inv'
+                    and 'translated' in assertion):
                 pl, ple = _loop_program_names(
                     assertion_index, program_loop, program_loop_end, per_inv_programs,
                 )
@@ -1062,7 +1097,13 @@ def replace_inner_assertions_for_func(
                     pl,
                     ple,
                 )
-                new_text = f"/*@ Inv {with_safeexec} */"
+                kw = "Inv Assert" if assertion.get('inv_assert') else "Inv"
+                new_text = f"/*@ {kw} {with_safeexec} */"
+                body = body[:match.start()] + new_text + body[match.end():]
+            elif (keyword == 'Assert'
+                    and assertion['type'] == 'Assert'
+                    and 'translated' in assertion):
+                new_text = f"/*@ Assert {assertion['translated']} */"
                 body = body[:match.start()] + new_text + body[match.end():]
 
     return content[:start] + body + content[pos-1:]
@@ -1158,6 +1199,17 @@ def _build_main_parser():
             "default) or 'staterr' (error-aware MonadErr)."
         ),
     )
+    parser.add_argument(
+        '--use-block-renderer', action='store_true', default=False,
+        help=(
+            "Phase 2 feature flag.  When set, callee-only straight-line "
+            "(Shape 1) functions emit a fully concrete `Definition fn_M := …` "
+            "instead of `Parameter fn_M`, eliminating the LLM hole for those "
+            "functions.  Falls back to `Parameter` automatically for any "
+            "function the renderer can't translate mechanically.  Default "
+            "off: legacy behavior is preserved."
+        ),
+    )
     return parser
 
 
@@ -1236,12 +1288,13 @@ def _topo_sort_c_files(c_files):
 
 def _run_stage2(
     input_c: str, lib_dir: str, sibling_dirs: Optional[List[str]] = None,
-    monad: str = "staterel",
+    monad: str = "staterel", use_block_renderer: bool = False,
 ) -> Optional[str]:
     """Generate the _rel_lib.v template. Returns the lib path or None on failure."""
     from GenMonads.absprog.gen_rel_lib import generate_rel_lib_for_file
     return generate_rel_lib_for_file(
-        input_c, lib_dir, sibling_dirs=sibling_dirs, monad=monad
+        input_c, lib_dir, sibling_dirs=sibling_dirs, monad=monad,
+        use_block_renderer=use_block_renderer,
     )
 
 
@@ -1263,6 +1316,8 @@ def _run_stage3(input_c: str, rel_c_path: str, args) -> int:
     # rel_lib time but ignored at synth time → callee-libs-missing errors.
     if args.coq_lib_dir:
         synth_argv += [f'--coq-lib-dir={args.coq_lib_dir}']
+    if getattr(args, 'use_block_renderer', False):
+        synth_argv += ['--use-block-renderer']
     if args.backend == 'command' and args.command:
         synth_argv += ['--command', args.command]
     if args.replay_from:
@@ -1381,7 +1436,9 @@ def main():
         lib_failures = []
         for src, _ in synthesizable:
             lib_path = _run_stage2(
-                src, lib_dir, sibling_dirs=(args.sibling_dir or None), monad=args.monad
+                src, lib_dir, sibling_dirs=(args.sibling_dir or None),
+                monad=args.monad,
+                use_block_renderer=args.use_block_renderer,
             )
             if not lib_path:
                 print(f"rel_lib generation failed: {src}", file=sys.stderr)

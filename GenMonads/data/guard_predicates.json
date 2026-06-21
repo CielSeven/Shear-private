@@ -44,5 +44,38 @@
       "eq": "{abs} = empty",
       "ne": "{abs} <> empty"
     }
+  },
+  "IntArray::full": {
+    "kind": "root",
+    "arity": 3,
+    "payload": {
+      "ptr": 0,
+      "n": 1,
+      "abs": 2
+    },
+    "abs_names": ["abs"]
+  },
+  "IntArray::seg": {
+    "kind": "root",
+    "arity": 4,
+    "payload": {
+      "ptr": 0,
+      "lo": 1,
+      "hi": 2,
+      "abs": 3
+    },
+    "abs_names": ["abs"]
+  },
+  "IntArray::missing_i": {
+    "kind": "root",
+    "arity": 5,
+    "payload": {
+      "ptr": 0,
+      "n": 1,
+      "i": 2,
+      "v": 3,
+      "abs": 4
+    },
+    "abs_names": ["abs"]
   }
 }

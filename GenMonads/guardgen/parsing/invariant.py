@@ -15,7 +15,9 @@ def normalize_inv(inv: str) -> str:
     s = re.sub(r"\s*,\s*", ",", s)
     return s
 
-_PRED_CALL_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)\((.*)\)$')
+_PRED_CALL_RE = re.compile(
+    r'^([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\((.*)\)$'
+)
 
 # Memory-state predicates describe raw allocator state (e.g. ``store(&v, T, x)``,
 # ``undef_data_at(&v, T)``), not list/tree shape.  They never root at the loop

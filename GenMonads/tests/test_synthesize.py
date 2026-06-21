@@ -1633,3 +1633,123 @@ def test_synth_cli_multi_function_merge_uses_explicit_coq_lib_dir(monkeypatch, t
         "synth_cli multi-function merge no longer honors --coq-lib-dir; "
         "Bug 2 has regressed."
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.0 — must_define filtering for mechanized Definitions
+
+
+def test_filter_must_define_noop_when_use_block_renderer_false(tmp_path):
+    """When the flag is off, the filter does nothing.  Preserves the
+    legacy must_define list."""
+    from GenMonads.absprog.synthesize import _filter_must_define_against_emitted_lib
+
+    context = {
+        "id": "demo",
+        "source": {"c_file": "doesnt_matter.c"},
+        "generation_policy": {"must_define": ["demo_M", "other"]},
+    }
+    _filter_must_define_against_emitted_lib(
+        context, use_block_renderer=False, sibling_dirs=None,
+    )
+    assert context["generation_policy"]["must_define"] == ["demo_M", "other"]
+
+
+def test_filter_must_define_strips_mechanized_definition(tmp_path):
+    """When use_block_renderer=True AND the regenerated skeleton has a
+    Definition for fn_M (Shape 1 mechanization), fn_M is removed from
+    must_define so the prompt doesn't list a name the agent shouldn't
+    touch."""
+    from GenMonads.absprog.synthesize import _filter_must_define_against_emitted_lib
+
+    src = (
+        '#include "header.h"\n'
+        'struct list *helper(struct list *x);\n'
+        '\n'
+        'struct list *demo(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(__return) */\n'
+        '{ return helper(x); }\n'
+    )
+    src_path = tmp_path / "demo.c"
+    src_path.write_text(src)
+    # Sibling helper.c so the renderer recognises the call.
+    (tmp_path / "helper.c").write_text(
+        '#include "header.h"\n'
+        'struct list *helper(struct list *x)\n'
+        '/*@ Require listrep(x) Ensure listrep(__return) */\n'
+        '{ return x; }\n'
+    )
+    context = {
+        "id": "demo",
+        "source": {"c_file": str(src_path)},
+        "generation_policy": {"must_define": ["demo_M"]},
+    }
+    _filter_must_define_against_emitted_lib(
+        context, use_block_renderer=True,
+        sibling_dirs=[str(tmp_path)], monad="staterel",
+    )
+    # demo_M was mechanized → stripped from must_define.
+    assert context["generation_policy"]["must_define"] == []
+
+
+def test_filter_must_define_preserves_non_mechanized_holes(tmp_path):
+    """Functions whose lib body still emits Parameter (Shape 2 / 3) keep
+    their must_define entries."""
+    from GenMonads.absprog.synthesize import _filter_must_define_against_emitted_lib
+
+    # Shape 2 — has an early return, doesn't mechanize.
+    src = (
+        '#include "header.h"\n'
+        'struct list *helper(struct list *x);\n'
+        '\n'
+        'struct list *demo(struct list *x, struct list *y)\n'
+        '/*@ Require listrep(x) * listrep(y)\n'
+        '    Ensure  listrep(__return) */\n'
+        '{\n'
+        '    struct list *tail;\n'
+        '    if (x == 0) { return y; }\n'
+        '    tail = helper(x);\n'
+        '    tail->next = y;\n'
+        '    return x;\n'
+        '}\n'
+    )
+    src_path = tmp_path / "demo.c"
+    src_path.write_text(src)
+    (tmp_path / "helper.c").write_text(
+        '#include "header.h"\n'
+        'struct list *helper(struct list *x)\n'
+        '/*@ Require listrep(x) Ensure listrep(__return) */\n'
+        '{ return x; }\n'
+    )
+    context = {
+        "id": "demo",
+        "source": {"c_file": str(src_path)},
+        "generation_policy": {
+            "must_define": ["MretTy", "demo_M_before", "demo_M_normal"],
+        },
+    }
+    _filter_must_define_against_emitted_lib(
+        context, use_block_renderer=True,
+        sibling_dirs=[str(tmp_path)], monad="staterel",
+    )
+    # All three holes remain — Shape 2 doesn't mechanize.
+    assert context["generation_policy"]["must_define"] == [
+        "MretTy", "demo_M_before", "demo_M_normal",
+    ]
+
+
+def test_filter_must_define_handles_missing_c_file(tmp_path):
+    """A context whose ``source.c_file`` doesn't exist is a no-op
+    (defensive — don't crash the synthesis pipeline)."""
+    from GenMonads.absprog.synthesize import _filter_must_define_against_emitted_lib
+
+    context = {
+        "id": "demo",
+        "source": {"c_file": str(tmp_path / "nonexistent.c")},
+        "generation_policy": {"must_define": ["demo_M"]},
+    }
+    _filter_must_define_against_emitted_lib(
+        context, use_block_renderer=True, sibling_dirs=None,
+    )
+    assert context["generation_policy"]["must_define"] == ["demo_M"]

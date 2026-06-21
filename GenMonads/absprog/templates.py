@@ -1,4 +1,5 @@
-from typing import Dict, Iterable, List, Optional
+import re
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 # Workdir-mode synthesis (since the codex-workdir backend landed in
@@ -45,6 +46,265 @@ def _render_guard_section(context: Dict) -> List[str]:
         "its negation drives the break branch.  Destructure the state tuple with "
         "`fun a => let '(...) := a in ...` exactly as the other components do.",
     ]
+
+
+# Hole-name → (role-description, follow-up-instruction) lookup for the
+# binding section.  Keep narrow: only LLM-synthesized holes that have a
+# direct C-source counterpart deserve an entry.  ``M_loop_M1`` is the
+# loop's break-branch hole and has no C-source counterpart (it's a
+# mechanical "extract MretTy from the loop state at exit"), so we don't
+# list it here.
+_SEGMENT_ROLES = {
+    "M_before": (
+        "the early-return decision",
+        "When the condition holds, return `(ReturnNow <abstract-value>)`. "
+        "Otherwise return `(Continue <state>)` carrying the values "
+        "`{fn}_M_normal` needs to finish the function.",
+    ),
+    "M_normal": (
+        "the post-decision body (everything after the early-return)",
+        "Receives the state from `M_before`'s `Continue` and produces "
+        "the function's final return value via the monadic computation.",
+    ),
+    "M_loop_before": (
+        "the pre-loop preparation (including any guard that exits before "
+        "the loop runs)",
+        "Initialize the abstract loop state from the function arguments.  "
+        "If the C source has a pre-loop early-return guard, decide between "
+        "`(ReturnNow <return-value>)` and `(Continue <initial-state>)`.",
+    ),
+    "M_loop_M2": (
+        "one iteration of the loop body",
+        "Take the current loop state, perform the iteration's work, and "
+        "produce the next state.  Cross-file callee calls inside the loop "
+        "body belong here, NOT in `M_loop_before` or `M_loop_end`.",
+    ),
+    "M_loop_end": (
+        "the post-loop transformation (typically the function's final return)",
+        "Receives the loop's break value (`MretTy`) and produces the "
+        "function's return value.",
+    ),
+}
+
+
+_FOREST_BEFORE_RE = re.compile(r"^M_loop(\d+)_before$")
+_FOREST_END_RE = re.compile(r"^M_loop(\d+)_end$")
+_FOREST_M2_RE = re.compile(r"^M_loop(\d+)_M2$")
+_FOREST_TO_INNER_RE = re.compile(r"^M_loop(\d+)_to_inner_(\d+)$")
+_FOREST_AFTER_INNER_RE = re.compile(r"^M_loop(\d+)_after_inner_(\d+)$")
+
+_INTERLEAVED_DECISION_RE = re.compile(r"^M_decision_(\d+)$")
+_INTERLEAVED_PHASE_RE = re.compile(r"^M_phase_(\d+)$")
+
+
+def _forest_role_for(key: str) -> Optional[Tuple[str, str]]:
+    """Return ``(role, instruction)`` for a multi-loop forest hole name.
+
+    Returns ``None`` when *key* isn't a forest hole.  Static (single-loop
+    and no-loop) keys go through ``_SEGMENT_ROLES``; forest keys arrive
+    with embedded loop indices and need dynamic role text.
+    """
+    if (m := _FOREST_BEFORE_RE.match(key)) is not None:
+        k = m.group(1)
+        return (
+            f"pre-loop preparation for loop {k} at the function level",
+            "Initialize the abstract loop state from the function "
+            "arguments.  If a pre-loop early-return guard exists, "
+            f"decide between `(ReturnNow …)` and `(Continue …)` for loop {k}.",
+        )
+    if (m := _FOREST_END_RE.match(key)) is not None:
+        k = m.group(1)
+        return (
+            f"post-loop transformation for the top-level loop {k} "
+            "(typically the function's final return)",
+            f"Receives loop {k}'s break value and produces the "
+            "function's return value.",
+        )
+    if (m := _FOREST_M2_RE.match(key)) is not None:
+        k = m.group(1)
+        return (
+            f"one iteration of leaf loop {k}'s body",
+            f"Take loop {k}'s current state, perform the iteration's "
+            "work, and produce the next state.",
+        )
+    if (m := _FOREST_TO_INNER_RE.match(key)) is not None:
+        k, j = m.group(1), m.group(2)
+        return (
+            f"parent loop {k}'s body work BEFORE entering inner loop {j}",
+            f"From loop {k}'s state, prepare the inputs for loop {j}.  "
+            f"The composed loop {k} body invokes loop {j}'s `_aux` after this.",
+        )
+    if (m := _FOREST_AFTER_INNER_RE.match(key)) is not None:
+        k, j = m.group(1), m.group(2)
+        return (
+            f"parent loop {k}'s body work AFTER inner loop {j} returns",
+            f"Receive loop {j}'s output and prepare the next iteration "
+            f"of loop {k}.",
+        )
+    # Phase 3C — interleaved early-return scaffold.
+    if (m := _INTERLEAVED_DECISION_RE.match(key)) is not None:
+        k = m.group(1)
+        return (
+            f"early-return decision number {k}",
+            "When the condition holds, produce "
+            "`(ReturnNow <abstract-return-value>)`.  Otherwise produce "
+            f"`(Continue <state_{int(k) * 2 - 1}>)` carrying the values "
+            f"needed by the next phase.",
+        )
+    if (m := _INTERLEAVED_PHASE_RE.match(key)) is not None:
+        k = m.group(1)
+        return (
+            f"the work between decision {k} and decision {int(k) + 1} "
+            "(runs only on the Continue path)",
+            f"Receive `state_{int(k) * 2 - 1}` from decision {k}'s Continue "
+            f"and produce `state_{int(k) * 2}` as input to decision "
+            f"{int(k) + 1}.",
+        )
+    if key == "M_final":
+        return (
+            "the terminal phase: work after the last decision (produces "
+            "the function's return value)",
+            "Receive the last decision's Continue state and produce the "
+            "function's return value via the monadic computation.",
+        )
+    return None
+
+
+def _render_scaffold_segments_section(
+    prompt_context: Dict, context: Dict,
+) -> List[str]:
+    """Render the ``## Abstract-Program ↔ C Segment Binding`` section when
+    the function's scaffold has a non-empty C-segment binding.
+
+    Each scaffold shape contributes its own set of hole names:
+
+    * no-loop early-return → ``M_before`` / ``M_normal``
+    * single-loop          → ``M_loop_before`` / ``M_loop_M2`` / ``M_loop_end``
+
+    Each emitted entry tells the agent which exact C statements that
+    Parameter is supposed to model, plus a short instruction on how to
+    shape its output (when to use `ReturnNow` vs `Continue`, which side
+    a cross-file call belongs on, etc.).  This is synthesis-time prompt
+    material; the lib ``.v`` stays a clean Coq template.
+    """
+    segments = prompt_context.get("scaffold_segments") or {}
+    if not segments:
+        return []
+    summary = context.get("summary", context.get("target", {}).get("summary", {}))
+    fn = summary.get("func_name", "")
+
+    # Underscore-prefixed keys are structural metadata (Phase 3B
+    # sub-segments), not hole names.  Skip them in the main loop — they
+    # get rendered inline under their parent hole.
+    ordered_keys = _order_scaffold_segment_keys(
+        [k for k in segments.keys() if not k.startswith("_")]
+    )
+
+    lines: List[str] = ["## Abstract-Program ↔ C Segment Binding"]
+    lines.append(
+        "Each LLM hole below corresponds to a specific span of the C "
+        "source.  Translate only those C statements into the matching "
+        "`Definition`; do not mix work across hole boundaries.  In "
+        "particular, a cross-file callee call appearing in one segment "
+        "MUST NOT be placed in another."
+    )
+
+    for key in ordered_keys:
+        role_lookup = _SEGMENT_ROLES.get(key) or _forest_role_for(key)
+        if role_lookup is None:
+            # Unknown key — skip rather than crash (forward compat).
+            continue
+        role, instruction = role_lookup
+        snippet = segments.get(key, "").strip()
+        lines.append("")
+        if snippet:
+            lines.append(f"`{fn}_{key}` models {role}:")
+            lines.append("```c")
+            lines.append(snippet)
+            lines.append("```")
+        else:
+            # Empty segment = "nothing to do here" — say so explicitly so
+            # the agent doesn't search for missing C code.
+            lines.append(
+                f"`{fn}_{key}` models {role}.  The C source has no "
+                f"statements for this segment — emit a trivial `Definition` "
+                f"(typically `return s` or `fun s => return s`)."
+            )
+        if instruction:
+            lines.append(instruction.format(fn=fn))
+        # Phase 3B — when this is M_loop_M2 AND the loop body has an
+        # inner early-return, append the substructure so the agent knows
+        # how to encode ``early_result`` wrapping.
+        if key == "M_loop_M2" and "_M_loop_M2_decision" in segments:
+            lines.extend(_render_loop_body_early_return_substructure(fn, segments))
+    return lines
+
+
+def _render_loop_body_early_return_substructure(
+    fn: str, segments: Dict[str, str],
+) -> List[str]:
+    """Append the pre-decision / decision / post-decision split to the
+    M_loop_M2 entry when the loop body contains an early-return.
+
+    The agent reads this and knows the M_loop_M2 body must be wrapped
+    with ``early_result`` — when the condition holds, return
+    ``ReturnNow``; otherwise, the rest of the body becomes the
+    ``Continue`` path.
+    """
+    pre = (segments.get("_M_loop_M2_pre_decision") or "").strip()
+    decision = (segments.get("_M_loop_M2_decision") or "").strip()
+    decision_cond = (segments.get("_M_loop_M2_decision_cond") or "").strip()
+    post = (segments.get("_M_loop_M2_post_decision") or "").strip()
+
+    out: List[str] = ["", "**Loop body structure**: the body contains an "
+        "internal early-return.  Wrap `M_loop_M2`'s output with "
+        "`early_result`:"]
+    if pre:
+        out.append("")
+        out.append("Pre-decision work (runs every iteration before the decision):")
+        out.append("```c")
+        out.append(pre)
+        out.append("```")
+    out.append("")
+    out.append("Early-return decision:")
+    out.append("```c")
+    out.append(decision)
+    out.append("```")
+    if decision_cond:
+        out.append(
+            f"When the abstract counterpart of `{decision_cond}` holds, produce "
+            "`(ReturnNow <abstract-return-value>)`.  Otherwise proceed to the "
+            "post-decision work."
+        )
+    if post:
+        out.append("")
+        out.append("Post-decision work (runs only when the early-return doesn't fire):")
+        out.append("```c")
+        out.append(post)
+        out.append("```")
+        out.append(
+            "After the post-decision work, produce `(Continue <next-state>)` "
+            "so the loop continues."
+        )
+    return out
+
+
+# Static ordering for the single-loop / no-loop keys.  Forest keys keep
+# the order the partitioner inserted them in (execution narrative).
+_STATIC_ORDER = [
+    "M_before", "M_normal",
+    "M_loop_before", "M_loop_M2", "M_loop_end",
+]
+
+
+def _order_scaffold_segment_keys(keys: List[str]) -> List[str]:
+    """Stable order: static keys first (per ``_STATIC_ORDER``), then any
+    other keys in their original (partitioner-inserted) order.  For
+    forest functions the partitioner emits keys in execution-narrative
+    order — preserving that order makes the prompt read top-to-bottom."""
+    static_in = [k for k in _STATIC_ORDER if k in keys]
+    others = [k for k in keys if k not in _STATIC_ORDER]
+    return static_in + others
 
 
 def _render_forest_section(context: Dict) -> List[str]:
@@ -261,6 +521,8 @@ def render_prompt(context: Dict, few_shot_examples: Optional[Iterable[Dict]] = N
         "The concrete skeleton (with the Parameter lines you must fill) is "
         "at `skeleton/<basename>_rel_lib.v` inside the workdir — read it "
         "before editing.",
+        "",
+        *_render_scaffold_segments_section(prompt_context, context),
         "",
         *_render_forest_section(context),
         "## Required Signatures",

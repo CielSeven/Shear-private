@@ -454,20 +454,197 @@ def generate_simple_func_block(func_name: str,
                                require_var_count: int,
                                ensure_var_count: int = 1,
                                require_var_types: Optional[List[str]] = None,
-                               ensure_var_types: Optional[List[str]] = None) -> str:
-    """Generate a lightweight abstract-program declaration for callee-only functions."""
+                               ensure_var_types: Optional[List[str]] = None,
+                               c_source: Optional[str] = None,
+                               require_var_names: Optional[List[str]] = None,
+                               available_callees: Optional[Dict[str, str]] = None,
+                               use_block_renderer: bool = False) -> str:
+    """Generate the abstract-program declaration for a callee-only function.
+
+    Legacy behaviour: emit ``Parameter {fn}_M : ...`` and leave the
+    Definition to the synthesis agent.
+
+    With *use_block_renderer* enabled AND when the function's body is
+    mechanically translatable (see
+    :func:`block_renderer.try_render_concrete_definition`), emit a
+    concrete ``Definition {fn}_M := …`` instead.  The agent then has no
+    LLM hole to fill for this function — it's fully derived from the C
+    source and the available callees.
+
+    Falls back to the legacy Parameter when the renderer returns None
+    (anything more complex than a straight-line call chain, or any
+    callee outside *available_callees*).
+    """
     fn = func_name
     req_types = _normalize_var_types(require_var_types, require_var_count)
     ens_types = _normalize_var_types(ensure_var_types, ensure_var_count)
     ret = _return_type(ens_types)
     m_curried = _curried_args(req_types)
 
+    # Try the block-tree-driven concrete-Definition path when all
+    # prerequisites are present.  Failure modes are silent — we just
+    # fall back to the Parameter form.
+    concrete_body: Optional[str] = None
+    if use_block_renderer and c_source and require_var_names is not None:
+        from GenMonads.absprog.block_renderer import try_render_concrete_definition
+        from GenMonads.absprog.partition import partition_function_body
+        try:
+            blocks = partition_function_body(c_source)
+        except Exception:
+            blocks = None
+        if blocks is not None:
+            concrete_body = try_render_concrete_definition(
+                fn_name=fn,
+                blocks=blocks,
+                require_var_names=require_var_names,
+                available_callees=available_callees or {},
+            )
+
     lines = []
     lines.append(f"(* ---- Abstract program declaration for {fn} ---- *)")
     lines.append("")
-    lines.append(f"Parameter {fn}_M : {m_curried}MONAD ({ret}).")
+    if concrete_body is not None:
+        # Concrete Definition: no LLM hole.
+        lines.append(f"Definition {fn}_M : {m_curried}MONAD ({ret}) :=")
+        lines.append(concrete_body)
+        lines.append("")
+    else:
+        lines.append(f"Parameter {fn}_M : {m_curried}MONAD ({ret}).")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def generate_interleaved_early_return_block(
+    func_name: str,
+    decision_count: int,
+    require_var_count: int,
+    ensure_var_count: int = 1,
+    require_var_types: Optional[List[str]] = None,
+    ensure_var_types: Optional[List[str]] = None,
+) -> str:
+    """Generate the scaffold for an "interleaved early-return" function —
+    multiple decisions separated by work, no top-level loops.
+
+    For ``decision_count = N`` (>= 2), emits:
+
+    * ``Parameter {fn}_state_k : Type.`` for each intermediate state
+      ``k = 1 .. 2N-1`` (between every decision and its Continue path's
+      work segment).
+    * ``Parameter {fn}_M_decision_k`` for ``k = 1 .. N`` — each decision
+      consumes the prior state, produces ``early_result <next_state> <ret>``.
+    * ``Parameter {fn}_M_phase_k`` for ``k = 1 .. N-1`` — intermediate
+      work between decisions, consumes ``<state>``, produces ``<next state>``.
+    * ``Parameter {fn}_M_final`` — terminal phase, consumes the last
+      Continue state and produces the function's return value.
+    * ``Definition {fn}_M`` — mechanical composition via cascading
+      ``match e with | ReturnNow … | Continue … end`` wraps.
+
+    The agent fills the type Parameters (state shapes) and the per-step
+    Parameters (decisions + phases).  The composition is structural.
+    """
+    fn = func_name
+    n = decision_count
+    if n < 2:
+        raise ValueError(
+            "generate_interleaved_early_return_block requires decision_count >= 2"
+        )
+    req_types = _normalize_var_types(require_var_types, require_var_count)
+    ens_types = _normalize_var_types(ensure_var_types, ensure_var_count)
+    ret = _return_type(ens_types)
+    m_curried = _curried_args(req_types)
+    m_lam = _lambda_vars(require_var_count)
+
+    lines: List[str] = []
+    lines.append(f"(* ---- Abstract program segments for {fn} (interleaved early-returns: {n} decisions) ---- *)")
+    lines.append("")
+
+    # Intermediate state-type Parameters: one per Continue path.  The
+    # naming is ``{fn}_state_k`` for the state PRODUCED by decision k
+    # (the Continue payload), then ``{fn}_phase_k_state`` for the state
+    # produced by phase k.  We collapse to a flat numbering for
+    # readability: state_1 = after decision 1's Continue,
+    # state_2 = after phase 1, state_3 = after decision 2's Continue, …
+    for k in range(1, 2 * n):
+        lines.append(f"Parameter {fn}_state_{k} : Type.")
+    lines.append("")
+
+    # Per-decision and per-phase Parameters.
+    # state_{2k-1} = output of decision k's Continue payload.
+    # state_{2k}   = output of phase k.
+    # decision_1 takes the function's args.
+    # decision_k (k>=2) takes state_{2(k-1)} (the previous phase's output).
+    # phase_k    takes state_{2k-1} (= decision_k's Continue payload).
+    # final      takes state_{2n-1} (= decision_n's Continue payload).
+    for k in range(1, n + 1):
+        if k == 1:
+            input_type = m_curried   # the function's args
+        else:
+            input_type = f"{fn}_state_{2*(k-1)} -> "
+        output_state = f"{fn}_state_{2*k - 1}"
+        lines.append(
+            f"Parameter {fn}_M_decision_{k} : "
+            f"{input_type}MONAD (early_result ({output_state}) ({ret}))."
+        )
+        if k < n:
+            # Intermediate phase between decision_k and decision_{k+1}.
+            phase_in = f"{fn}_state_{2*k - 1}"
+            phase_out = f"{fn}_state_{2*k}"
+            lines.append(
+                f"Parameter {fn}_M_phase_{k} : {phase_in} -> MONAD ({phase_out})."
+            )
+    # Terminal phase: from the last decision's Continue payload to the return type.
+    lines.append(
+        f"Parameter {fn}_M_final : {fn}_state_{2*n - 1} -> MONAD ({ret})."
+    )
+    lines.append("")
+
+    # Mechanical composition: cascading match-e-with wraps.
+    lines.append(f"Definition {fn}_M : {m_curried}MONAD ({ret}) :=")
+    lines.append(f"  fun {m_lam} =>")
+    _emit_cascading_composition(fn, n, m_lam, lines, indent="    ")
     lines.append("")
     return "\n".join(lines)
+
+
+def _emit_cascading_composition(
+    fn: str, n: int, m_lam: str, lines: List[str], indent: str,
+) -> None:
+    """Emit the nested ``e_k <- decide ;; match e_k with | ReturnNow r =>
+    return r | Continue s_k => …`` cascade for N decisions, terminating
+    with ``fn_M_final s_{2n-1}``.  Only the outermost ``end`` carries the
+    Definition-terminating period.
+    """
+    lines.extend(_build_cascade_level(fn, n, m_lam, level=1, base_indent=indent))
+
+
+def _build_cascade_level(
+    fn: str, n: int, m_lam: str, level: int, base_indent: str,
+) -> List[str]:
+    """Recursively build the cascade for level *level* of N decisions.
+
+    ``base_indent`` is the indent string for level 1; deeper levels add
+    four spaces per step.  ``level == 1`` emits the Definition-closing
+    period on its ``end``; deeper levels emit a bare ``end``.
+    """
+    cur = base_indent + "    " * (level - 1)
+    nxt = cur + "    "
+    out: List[str] = []
+    input_args = m_lam if level == 1 else f"s_{2 * (level - 1)}"
+    out.append(f"{cur}e_{level} <- {fn}_M_decision_{level} {input_args};;")
+    out.append(f"{cur}match e_{level} with")
+    out.append(f"{cur}| ReturnNow r => return r")
+    out.append(f"{cur}| Continue s_{2 * level - 1} =>")
+    if level == n:
+        out.append(f"{nxt}{fn}_M_final s_{2 * level - 1}")
+    else:
+        out.append(
+            f"{nxt}s_{2 * level} <- {fn}_M_phase_{level} s_{2 * level - 1};;"
+        )
+        out.extend(
+            _build_cascade_level(fn, n, m_lam, level + 1, base_indent)
+        )
+    out.append(f"{cur}end{'.' if level == 1 else ''}")
+    return out
 
 
 def generate_no_loop_early_return_block(func_name: str,
@@ -483,6 +660,10 @@ def generate_no_loop_early_return_block(func_name: str,
     Splits the function into ``{fn}_M_before`` (initial dispatch returning
     ``early_result {mretty_name} {ret}``) and ``{fn}_M_normal``
     (the non-early-return continuation).  ``{fn}_M`` composes them.
+
+    The C-segment-to-hole binding that helps the synthesis agent decide
+    where to place each statement is **prompt context**, not lib content;
+    it's emitted by ``context.py`` / ``templates.py`` rather than here.
     """
     fn = func_name
     m = require_var_count
@@ -726,6 +907,58 @@ def generate_forest_func_block(
             )
     lines.append("")
 
+    # Tail Definitions — the "residual program from end-of-loop_k all
+    # the way to function return".  Loop invariants must bind the loop's
+    # continuation with this, not with the bare ``_end`` Parameter
+    # (which for non-terminal top-level loops is only the BRIDGE to the
+    # next loop, not the full tail).
+    #
+    # Single-loop functions don't need this — there ``M_loop_end`` IS
+    # the tail by definition, and the single-loop scaffold keeps using
+    # ``_end`` directly.  We emit ``_tail`` Definitions only here in
+    # the forest path, where ``_end`` and ``_tail`` are different
+    # objects for every loop except the last.
+    for i, t in enumerate(top_levels):
+        k = t["loop_index"] + 1
+        tail_name = f"{fn}_M_loop{k}_tail"
+        end_name = f"{fn}_M_loop{k}_end"
+        if i == len(top_levels) - 1:
+            # Terminal loop: the tail and the end coincide.  Emit a
+            # definitional alias so the rel.c can refer to ``_tail``
+            # uniformly across all top-level loops.
+            lines.append(
+                f"Definition {tail_name} : {mretty_name} -> MONAD ({return_type}) :="
+            )
+            lines.append(f"  {end_name}.")
+        else:
+            # Non-terminal loop: tail bridges through end_k, then
+            # threads all subsequent loops' (before; aux; end) in order,
+            # ending at the very last loop's end.
+            lines.append(
+                f"Definition {tail_name} : {mretty_name} -> MONAD ({return_type}) :="
+            )
+            lines.append("  fun r =>")
+            lines.append(f"    t{k} <- {end_name} r;;")
+            prev_k = k
+            for j in range(i + 1, len(top_levels)):
+                kj = top_levels[j]["loop_index"] + 1
+                lines.append(
+                    f"    s{kj} <- {fn}_M_loop{kj}_before t{prev_k};;"
+                )
+                lines.append(
+                    f"    r{kj} <- {fn}_M_loop{kj}_aux s{kj};;"
+                )
+                if j == len(top_levels) - 1:
+                    # Terminal step: final ``_end`` produces the
+                    # function's return value.
+                    lines.append(f"    {fn}_M_loop{kj}_end r{kj}.")
+                else:
+                    lines.append(
+                        f"    t{kj} <- {fn}_M_loop{kj}_end r{kj};;"
+                    )
+                prev_k = kj
+    lines.append("")
+
     # Definition {fn}_M = sequential composition.
     m = len(require_var_types)
     lines.append(f"Definition {fn}_M : {req_curried}MONAD ({return_type}) :=")
@@ -779,6 +1012,29 @@ def _collect_func_info_with_guard(func_data: Dict, include_helpers: bool = False
 
     info['coq_guard'] = coq_guard
     info['loop_templates'] = _build_func_loop_templates(c_source, inv_assertions) if c_source else []
+    # Stash the C source on info so the scaffold renderers can derive
+    # block-tree-based annotations (Phase 2a: M_before / M_normal segment
+    # comments tied to the actual C statements each Parameter models).
+    info['c_source'] = c_source
+
+    # Phase 3C — detect the interleaved early-return shape so the
+    # dispatcher can route to ``generate_interleaved_early_return_block``.
+    # We compute this here (rather than in the dispatcher) because it
+    # needs the C source and runs cleanly inside the existing info-build
+    # path.
+    if c_source:
+        from GenMonads.absprog.partition import (
+            partition_function_body,
+            split_for_interleaved_early_return,
+        )
+        try:
+            blocks = partition_function_body(c_source)
+        except Exception:
+            blocks = None
+        if blocks is not None:
+            split = split_for_interleaved_early_return(blocks)
+            if split is not None:
+                info['interleaved_decision_count'] = len(split["decisions"])
     return info
 
 
@@ -870,6 +1126,7 @@ def generate_rel_lib(
     call_graph: Optional[Dict[str, set]] = None,
     monad: str = "staterel",
     coq_lib_dir: Optional[str] = None,
+    use_block_renderer: bool = False,
 ) -> str:
     """Generate a complete _rel_lib.v skeleton file.
 
@@ -883,6 +1140,13 @@ def generate_rel_lib(
             canonical qualified logical name computed from the project's
             ``-Q`` / ``-R`` mappings.  When None, bare names are used —
             the historical behaviour for callers without a project.
+        use_block_renderer: Phase-2 feature flag.  When True, callee-only
+            straight-line functions (Shape 1) emit a fully concrete
+            ``Definition {fn}_M := …`` instead of the legacy opaque
+            ``Parameter`` — eliminating the LLM hole for those functions.
+            Falls back to ``Parameter`` automatically when the body is
+            not (yet) mechanically translatable.  Default ``False`` so
+            the legacy behaviour is preserved.
     """
     # Late import — keeps callers that don't need project resolution
     # from pulling in check_rocq.
@@ -917,6 +1181,7 @@ def generate_rel_lib(
         or info.get("has_pre_loop_early_return")
         or info.get("has_loop_body_early_return")
         or info.get("has_no_loop_early_return")
+        or info.get("interleaved_decision_count", 0) >= 2
         for info in func_infos
     ):
         parts.append(
@@ -976,6 +1241,19 @@ def generate_rel_lib(
                     mretty_name=mretty_name,
                     declare_mretty=scope_mretty_per_function,
                 ))
+        elif info.get('interleaved_decision_count', 0) >= 2:
+            # Phase 3C — multiple early-return decisions interleaved
+            # with work, no top-level loop.  Emit a per-decision +
+            # per-phase scaffold (M_decision_1, M_phase_1, …, M_final)
+            # with mechanical cascading-match composition.
+            parts.append(generate_interleaved_early_return_block(
+                fn,
+                decision_count=info['interleaved_decision_count'],
+                require_var_count=info['require_var_count'],
+                ensure_var_count=info.get('ensure_var_count', 1),
+                require_var_types=info.get('require_var_types'),
+                ensure_var_types=info.get('ensure_var_types'),
+            ))
         elif has_no_loop_early_return:
             parts.append(generate_no_loop_early_return_block(
                 fn,
@@ -987,15 +1265,90 @@ def generate_rel_lib(
                 declare_mretty=scope_mretty_per_function,
             ))
         else:
+            require_var_names = _extract_param_names_from_c(
+                info.get('c_source'), fn,
+            )
+            available_callees = _available_callees_for(info, imported_rel_libs)
             parts.append(generate_simple_func_block(
                 fn,
                 info['require_var_count'],
                 info.get('ensure_var_count', 1),
                 info.get('require_var_types'),
                 info.get('ensure_var_types'),
+                c_source=info.get('c_source'),
+                require_var_names=require_var_names,
+                available_callees=available_callees,
+                use_block_renderer=use_block_renderer,
             ))
 
     return "\n".join(parts)
+
+
+_PARAM_LIST_RE = re.compile(r"\(([^()]*)\)")
+
+
+def _extract_param_names_from_c(c_source: Optional[str], fn: str) -> Optional[List[str]]:
+    """Best-effort extraction of *fn*'s C-parameter names in order.
+
+    Used by the block-tree renderer to bind ``fun arg1 arg2 => …`` with
+    the correct names.  Returns ``None`` when we can't be confident — the
+    caller falls back to the legacy ``Parameter`` form, so being
+    conservative is fine.
+    """
+    if not c_source:
+        return None
+    # Match ``<ret-type> {fn}(params) {`` allowing any qualifiers /
+    # pointers on the return type.
+    m = re.search(rf"\b{re.escape(fn)}\s*\(([^)]*)\)", c_source)
+    if not m:
+        return None
+    params = m.group(1).strip()
+    if not params or params == "void":
+        return []
+    names: List[str] = []
+    for raw in params.split(","):
+        raw = raw.strip().rstrip(";")
+        if not raw:
+            continue
+        # Drop leading qualifiers (``const``, ``volatile``, …) and the
+        # type tokens; the last identifier-shaped token is the param name.
+        last_ident = None
+        for tok in re.findall(r"[A-Za-z_]\w*", raw):
+            last_ident = tok
+        if last_ident is None or last_ident in _C_TYPE_KEYWORDS:
+            return None
+        names.append(last_ident)
+    return names
+
+
+_C_TYPE_KEYWORDS = frozenset({
+    "void", "char", "short", "int", "long", "float", "double",
+    "signed", "unsigned", "_Bool", "size_t", "ssize_t",
+    "struct", "union", "enum", "const", "volatile", "static",
+    "extern", "register", "auto", "inline", "restrict",
+})
+
+
+def _available_callees_for(
+    info: Dict, imported_rel_libs: Optional[List[str]],
+) -> Dict[str, str]:
+    """Return ``{callee_name: signature}`` covering both cross-file libs
+    imported by name and same-file callees recorded in ``info['externals']``.
+
+    The signature value is informational (callers don't currently consume
+    it); presence in the dict is what gates the renderer's willingness to
+    call into a name.
+    """
+    out: Dict[str, str] = {}
+    for name in (imported_rel_libs or []):
+        out[name] = "<imported>"
+    for callee, sig in (info.get("externals", {}) or {}).items():
+        # ``externals`` is keyed by the same-file callee's bare name plus
+        # the entry-point ``M`` of helpers; only the bare callees are
+        # valid call targets here.
+        if callee not in ("M",):
+            out[callee] = sig
+    return out
 
 
 def generate_rel_lib_for_file(
@@ -1004,6 +1357,7 @@ def generate_rel_lib_for_file(
     sibling_dirs: Optional[List[str]] = None,
     monad: str = "staterel",
     coq_lib_dir: Optional[str] = None,
+    use_block_renderer: bool = False,
 ) -> Optional[str]:
     """Run the pipeline on a C file and generate the _rel_lib.v skeleton.
 
@@ -1083,6 +1437,7 @@ def generate_rel_lib_for_file(
     content = generate_rel_lib(
         src_basename, func_infos, imported_rel_libs, call_graph, monad=monad,
         coq_lib_dir=effective_lib_dir,
+        use_block_renderer=use_block_renderer,
     )
 
     os.makedirs(output_dir, exist_ok=True)

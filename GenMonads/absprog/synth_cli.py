@@ -79,6 +79,7 @@ def _run_batch_for_file(c_file: str, output_dir: str, args):
                 sibling_dirs=(args.sibling_dir or None),
                 monad=args.monad,
                 coq_lib_dir=args.coq_lib_dir,
+                use_block_renderer=args.use_block_renderer,
             )
         except Exception as exc:
             stderr_lines.append(f"Failed: {context['id']} ({exc})")
@@ -212,6 +213,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--use-block-renderer", action="store_true", default=False,
+        help=(
+            "Phase 2 feature flag.  Must match the value used at lib "
+            "generation time; otherwise the must_define list and the "
+            "skeleton's Parameter/Definition shape will disagree."
+        ),
+    )
+    parser.add_argument(
         "--monad",
         choices=["staterel", "staterr"],
         default="staterel",
@@ -304,6 +313,7 @@ def main() -> None:
                         promote_rel_lib=False,
                         monad=args.monad,
                         coq_lib_dir=args.coq_lib_dir,
+                        use_block_renderer=args.use_block_renderer,
                     )
                 except Exception as exc:
                     print(f"Failed: {context['id']} ({exc})", file=sys.stderr)
@@ -382,6 +392,7 @@ def main() -> None:
             rel_c_path=args.rel_c_path if args.patch_rel_c else None,
             monad=args.monad,
             coq_lib_dir=args.coq_lib_dir,
+            use_block_renderer=args.use_block_renderer,
         )
     except Exception as exc:
         print(str(exc), file=sys.stderr)

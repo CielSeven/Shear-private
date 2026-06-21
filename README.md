@@ -240,7 +240,7 @@ For generating Rocq verification conditions with the external `symexec` tool:
 scripts/symexec.sh                              # use defaults from CONFIGURE
 scripts/symexec.sh --FULL_AUTO=true             # add --full-auto when invoking symexec
 scripts/symexec.sh --C_DIR=./output/gen/rel/sll --OUTPUT_PATH=./output/gen/vcs/ --LOGDIR=./output/gen/logs/
-scripts/clean_symexec.sh --C_DIR=./shape_invdataset/sll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
+scripts/symexec.sh --clean --C_DIR=./shape_invdataset/sll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
 ```
 
 For cleaning generated `_rel.c` translation output files:

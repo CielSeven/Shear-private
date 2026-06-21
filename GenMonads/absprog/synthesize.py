@@ -89,6 +89,7 @@ def _run_command_backend(
     monad: str = "staterel",
     timeout: Optional[int] = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     coq_lib_dir: Optional[str] = None,
+    use_block_renderer: bool = False,
 ) -> str:
     """Workdir-mode synthesis backend.
 
@@ -137,6 +138,7 @@ def _run_command_backend(
     skeleton_text = generate_rel_lib_skeleton_for_file(
         c_file, sibling_dirs=sibling_dirs, monad=monad,
         coq_lib_dir=effective_coq_lib_dir,
+        use_block_renderer=use_block_renderer,
     )
     try:
         workdir_mod.check_prerequisites(skeleton_text, effective_coq_lib_dir)
@@ -209,6 +211,66 @@ def _basename_from_c_file(c_file: str) -> str:
     return name
 
 
+_TOP_LEVEL_DEFINITION_RE = re.compile(
+    r"^Definition\s+(\w+)\s*[:=]", re.MULTILINE,
+)
+
+
+def _filter_must_define_against_emitted_lib(
+    context: Dict,
+    use_block_renderer: bool,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+) -> None:
+    """Phase 2.0 reconciliation between ``must_define`` and the lib.
+
+    The ``must_define`` list in ``generation_policy`` is computed by
+    ``context.py`` from the function's scaffold-required components (one
+    entry per LLM hole the agent must replace).  When
+    ``use_block_renderer=True`` is in effect, the rel_lib stage emitted
+    a concrete ``Definition <name> := …`` for the mechanizable Shape 1
+    functions.  Those names must be removed from ``must_define`` so:
+
+    1. The synthesis prompt's "Definitions to Provide" list doesn't
+       confusingly include names the agent shouldn't touch.
+    2. The workdir strict-diff validator's must_set matches what the
+       skeleton actually offers as Parameters (not what it might offer
+       under different flag settings).
+
+    We regenerate the skeleton from the C source using the same flag the
+    rel_lib stage used.  Inspecting an arbitrary lib file on disk would
+    be unsafe — it might be a stale filled lib from a prior synthesis
+    that has Definitions for everything.
+
+    No-op when ``use_block_renderer`` is ``False`` (legacy Parameter
+    emission already keeps must_define consistent).
+    """
+    if not use_block_renderer:
+        return
+    c_file = context.get("source", {}).get("c_file")
+    if not c_file or not os.path.isfile(c_file):
+        return
+    from GenMonads.absprog.assemble import generate_rel_lib_skeleton_for_file
+    try:
+        skeleton_text = generate_rel_lib_skeleton_for_file(
+            c_file, sibling_dirs=sibling_dirs, monad=monad,
+            use_block_renderer=use_block_renderer,
+        )
+    except Exception:
+        return
+    definition_names = {
+        m.group(1) for m in _TOP_LEVEL_DEFINITION_RE.finditer(skeleton_text)
+    }
+    if not definition_names:
+        return
+    gp = context.get("generation_policy") or {}
+    must_define = gp.get("must_define") or []
+    filtered = [n for n in must_define if n not in definition_names]
+    if filtered != must_define:
+        gp["must_define"] = filtered
+        context["generation_policy"] = gp
+
+
 def _coq_lib_dir_or_none() -> Optional[str]:
     """Resolve COQ_LIB_DIR via env or CONFIGURE; ``None`` if unset."""
     try:
@@ -239,6 +301,7 @@ def generate_candidate_response(
     sibling_dirs: Optional[List[str]] = None,
     monad: str = "staterel",
     coq_lib_dir: Optional[str] = None,
+    use_block_renderer: bool = False,
 ) -> str:
     if backend == "gold-example":
         if replay_from:
@@ -264,6 +327,7 @@ def generate_candidate_response(
             monad=monad,
             timeout=command_timeout,
             coq_lib_dir=coq_lib_dir,
+            use_block_renderer=use_block_renderer,
         )
 
     raise ValueError(f"Unsupported backend: {backend}")
@@ -821,6 +885,7 @@ def run_synthesis_pipeline(
     sibling_dirs: Optional[List[str]] = None,
     monad: str = "staterel",
     coq_lib_dir: Optional[str] = None,
+    use_block_renderer: bool = False,
 ) -> Dict:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -835,6 +900,16 @@ def run_synthesis_pipeline(
         write_synthesis_context(
             input_path, context_file, func_name=func_name, sibling_dirs=sibling_dirs
         )
+
+    # Phase 2.0 — when the lib emits a concrete ``Definition fn_M`` for
+    # a function (mechanized via use_block_renderer), the agent must NOT
+    # be asked to fill it (it's already complete).  Filter must_define
+    # against the freshly-regenerated skeleton so the prompt + workdir
+    # validator agree.  No-op when use_block_renderer is False.
+    _filter_must_define_against_emitted_lib(
+        context, use_block_renderer=use_block_renderer,
+        sibling_dirs=sibling_dirs, monad=monad,
+    )
 
     examples = [_load_json(path) for path in (few_shot_paths or [])]
     base_prompt = render_prompt(context, examples)
@@ -903,6 +978,7 @@ def run_synthesis_pipeline(
                 sibling_dirs=sibling_dirs,
                 monad=monad,
                 coq_lib_dir=coq_lib_dir,
+                use_block_renderer=use_block_renderer,
             )
         except PrerequisiteError as exc:
             # Pre-spawn environment failure — codex missing, _CoqProject

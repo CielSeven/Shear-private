@@ -97,7 +97,7 @@ def test_translate_cli_runs_all_three_stages_with_default_synth_command(monkeypa
     monkeypatch.setattr(translate_cli, "translate_c_file", lambda *_args, **_kw: True)
     lib_calls = []
 
-    def fake_gen_lib(c_file, lib_dir, sibling_dirs=None, monad="staterel"):
+    def fake_gen_lib(c_file, lib_dir, sibling_dirs=None, monad="staterel", **kw):
         lib_calls.append((c_file, lib_dir))
         return str(tmp_path / "lib" / "demo_rel_lib.v")
 
@@ -344,7 +344,7 @@ def test_translate_cli_directory_mode_processes_callees_first(monkeypatch, tmp_p
     monkeypatch.setattr(
         translate_cli,
         "_run_stage2",
-        lambda src, _dir, sibling_dirs=None, monad="staterel": (lib_order.append(src.rsplit("/", 1)[-1]), "x.v")[1],
+        lambda src, _dir, sibling_dirs=None, monad="staterel", **kw: (lib_order.append(src.rsplit("/", 1)[-1]), "x.v")[1],
     )
     monkeypatch.setattr(
         "GenMonads.absprog.context.collect_all_synthesis_contexts",
@@ -409,7 +409,7 @@ def test_resolve_cli_value_returns_normalized_path():
 def test_rellib_cli_accepts_file_and_output_aliases(monkeypatch, tmp_path, capsys):
     calls = {}
 
-    def fake_generate(input_path, output_dir, sibling_dirs=None, monad="staterel"):
+    def fake_generate(input_path, output_dir, sibling_dirs=None, monad="staterel", **kw):
         calls["args"] = (input_path, output_dir)
         return str(tmp_path / "demo_rel_lib.v")
 
@@ -435,7 +435,7 @@ def test_rellib_cli_normalizes_default_output_dir(monkeypatch, tmp_path, capsys)
     calls = {}
     default_dir = tmp_path / "out" / ".." / "libs"
 
-    def fake_generate(input_path, output_dir, sibling_dirs=None, monad="staterel"):
+    def fake_generate(input_path, output_dir, sibling_dirs=None, monad="staterel", **kw):
         calls["args"] = (input_path, output_dir)
         return str(tmp_path / "demo_rel_lib.v")
 
@@ -469,7 +469,7 @@ def test_rellib_cli_normalizes_default_output_dir(monkeypatch, tmp_path, capsys)
 def test_rellib_cli_accepts_all_output_forms(monkeypatch, tmp_path, capsys, argv_tail, expected_output):
     calls = {}
 
-    def fake_generate(input_path, output_dir, sibling_dirs=None, monad="staterel"):
+    def fake_generate(input_path, output_dir, sibling_dirs=None, monad="staterel", **kw):
         calls["args"] = (input_path, output_dir)
         return str(tmp_path / "demo_rel_lib.v")
 

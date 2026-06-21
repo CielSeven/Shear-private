@@ -488,15 +488,48 @@ Parameter demo_M_loop_M1 : list Z -> MONAD MretTy.
 
 
 class TestPromptAllocation:
+    # Synthetic two-loop fixture analogous to ``glibc_slist_iter_back_2``.
+    # The outer/inner ``while`` pair exercises the forest scaffold, which
+    # is where per-function MretTy scoping and per-loop ``M_loop{k}``
+    # holes appear.  Self-contained — no dataset dependency.
+    _MULTI_LOOP_C = (
+        'long glibc_slist_clean_iter_back_2(struct list *x)\n'
+        '/*@ Require listrep(x)\n'
+        '    Ensure  listrep(x@pre)\n'
+        ' */\n'
+        '{\n'
+        '    struct list *stop;\n'
+        '    long sum;\n'
+        '    stop = 0;\n'
+        '    sum = 0;\n'
+        '    /*@ Inv exists st s,\n'
+        '            store(&stop, struct list*, st) *\n'
+        '            store(&sum, long, s) *\n'
+        '            listrep(x)\n'
+        '     */\n'
+        '    while (x != stop) {\n'
+        '        /*@ Inv exists st s,\n'
+        '                store(&stop, struct list*, st) *\n'
+        '                store(&sum, long, s) *\n'
+        '                listrep(x)\n'
+        '         */\n'
+        '        while (x->next != stop) {\n'
+        '            x = x->next;\n'
+        '        }\n'
+        '        sum += x->data;\n'
+        '        stop = x;\n'
+        '    }\n'
+        '    return sum;\n'
+        '}\n'
+    )
+
     @pytest.fixture
     def stdin_prompt(self, tmp_path):
         from GenMonads.absprog.context import collect_synthesis_context
         from GenMonads.absprog.templates import render_prompt
-        c_file = "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c"
-        ctx = collect_synthesis_context(
-            c_file,
-            sibling_dirs=["shape_invdataset/Glibc_slist_clean_iter"],
-        )
+        c_path = tmp_path / "glibc_slist_iter_back_2.c"
+        c_path.write_text(self._MULTI_LOOP_C, encoding="utf-8")
+        ctx = collect_synthesis_context(str(c_path), sibling_dirs=[str(tmp_path)])
         return render_prompt(ctx)
 
     @pytest.fixture

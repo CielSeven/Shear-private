@@ -8,6 +8,12 @@
 #   scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c
 #     Run symexec for one C file.
 #
+#   scripts/symexec.sh --clean
+#     Remove generated symexec outputs and logs for configured C_DIR.
+#
+#   scripts/symexec.sh --clean --FILE=./shape_invdataset/sll/sll_copy.c
+#     Remove generated symexec outputs and logs for one C file.
+#
 #   scripts/symexec.sh --FULL_AUTO=true
 #     Append --full-auto when invoking symexec.
 #
@@ -47,6 +53,7 @@ parse_bool() {
 
 # --- Parse CLI overrides: support both - and -- prefix
 FILE_ARG=""
+CLEAN_FLAG=0
 for arg in "$@"; do
   case $arg in
     -C_DIR=*|--C_DIR=*)         C_DIR="${arg#*=}";;
@@ -57,6 +64,7 @@ for arg in "$@"; do
     -SYMEXEC_STRATEGY_PATHS=*|--SYMEXEC_STRATEGY_PATHS=*) SYMEXEC_STRATEGY_PATHS="${arg#*=}";;
     -OUTPUT_PATH=*|--OUTPUT_PATH=*) OUTPUT_PATH="${arg#*=}";;
     -FILE=*|--FILE=*)           FILE_ARG="${arg#*=}";;
+    -CLEAN|--CLEAN|-clean|--clean|clean) CLEAN_FLAG=1;;
     -FULL_AUTO|--FULL_AUTO|-full-auto|--full-auto|full-auto|-SYMEXEC_FULL_AUTO|--SYMEXEC_FULL_AUTO) SYMEXEC_FULL_AUTO=1;;
     -NO_FULL_AUTO|--NO_FULL_AUTO|-NO_SYMEXEC_FULL_AUTO|--NO_SYMEXEC_FULL_AUTO) SYMEXEC_FULL_AUTO=0;;
     -FULL_AUTO=*|--FULL_AUTO=*|-SYMEXEC_FULL_AUTO=*|--SYMEXEC_FULL_AUTO=*)
@@ -70,9 +78,11 @@ done
 # --- Sanity check
 [ -n "${C_DIR:-}" ]       || { echo "❌ C_DIR not set"; exit 1; }
 [ -n "${LOGDIR:-}" ]      || { echo "❌ LOGDIR not set"; exit 1; }
-[ -n "${SYMEXEC:-}" ]     || { echo "❌ SYMEXEC not set"; exit 1; }
-[ -n "${SYMEXEC_INCLUDE_DIRS:-}" ] || { echo "❌ SYMEXEC_INCLUDE_DIRS not set"; exit 1; }
 [ -n "${OUTPUT_PATH:-}" ] || { echo "❌ OUTPUT_PATH not set"; exit 1; }
+if [ "$CLEAN_FLAG" != "1" ]; then
+  [ -n "${SYMEXEC:-}" ]     || { echo "❌ SYMEXEC not set"; exit 1; }
+  [ -n "${SYMEXEC_INCLUDE_DIRS:-}" ] || { echo "❌ SYMEXEC_INCLUDE_DIRS not set"; exit 1; }
+fi
 
 # --- Resolve relative paths against repo root
 START_DIR="$REPO_ROOT"
@@ -92,8 +102,46 @@ abspath() {
 
 C_DIR_ABS="$(abspath "$C_DIR")"
 LOGDIR_ABS="$(abspath "$LOGDIR")"
-SYMEXEC_ABS="$(abspath "$SYMEXEC")"
 OUTPUT_ABS="$(abspath "$OUTPUT_PATH")"
+
+shopt -s nullglob
+
+if [ "$CLEAN_FLAG" = "1" ]; then
+  if [ -n "$FILE_ARG" ]; then
+    file_abs="$(abspath "$FILE_ARG")"
+    [ -f "$file_abs" ] || { echo "❌ FILE not found: $file_abs"; exit 1; }
+    FILES=("$file_abs")
+  else
+    [ -d "$C_DIR_ABS" ] || { echo "❌ C_DIR not a directory: $C_DIR_ABS"; exit 1; }
+    FILES=("$C_DIR_ABS"/*.c)
+  fi
+
+  count=0
+  for f in "${FILES[@]}"; do
+    [ -f "$f" ] || continue
+    base="$(basename "${f%.c}")"
+    for target in \
+      "$LOGDIR_ABS/${base}_log.txt" \
+      "$OUTPUT_ABS/${base}_goal.v" \
+      "$OUTPUT_ABS/${base}_proof_auto.v" \
+      "$OUTPUT_ABS/${base}_proof_manual.v" \
+      "$OUTPUT_ABS/${base}_goal_check.v"; do
+      if [ -f "$target" ]; then
+        rm -f "$target"
+        count=$((count + 1))
+      fi
+    done
+  done
+
+  if [ -n "$FILE_ARG" ]; then
+    echo "Removed $count files for FILE=$FILE_ARG"
+  else
+    echo "Removed $count files for C_DIR=$C_DIR_ABS"
+  fi
+  exit 0
+fi
+
+SYMEXEC_ABS="$(abspath "$SYMEXEC")"
 
 IFS=':' read -r -a SYMEXEC_INCLUDE_DIR_LIST <<< "$SYMEXEC_INCLUDE_DIRS"
 INCLUDE_FLAGS=()
@@ -150,8 +198,6 @@ fi
 mkdir -p "$LOGDIR_ABS" "$OUTPUT_ABS"
 [ -x "$SYMEXEC_ABS" ] || { echo "❌ symexec executable not found: $SYMEXEC_ABS"; exit 1; }
 
-shopt -s nullglob
-
 # --- Determine file list: single file or all *.c
 if [ -n "$FILE_ARG" ]; then
   file_abs="$(abspath "$FILE_ARG")"
@@ -177,8 +223,8 @@ for f in "${FILES[@]}"; do
   base="$(basename "${f%.c}")"
   log="$LOGDIR_ABS/${base}_log.txt"
   goal_out="$OUTPUT_ABS/${base}_goal.v"
-  auto_out="$OUTPUT_ABS/${base}_auto.v"
-  manual_out="$OUTPUT_ABS/${base}_manual.v"
+  auto_out="$OUTPUT_ABS/${base}_proof_auto.v"
+  manual_out="$OUTPUT_ABS/${base}_proof_manual.v"
   symexec_cmd=("$SYMEXEC_ABS" "${INCLUDE_FLAGS[@]}")
 
   if [ "${#SLP_FLAGS[@]}" -gt 0 ]; then
@@ -195,7 +241,7 @@ for f in "${FILES[@]}"; do
     --proof-auto-file="$auto_out"
     --proof-manual-file="$manual_out"
     --basic-assertion
-    --user-info=2
+    # --user-info=2
   )
 
   [ -z "$FILE_ARG" ] && echo ">>> Processing $f"

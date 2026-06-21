@@ -120,7 +120,12 @@ class AssertionProcessor:
             self.translator.reset_var_counter(prefix=prefix)
 
             try:
-                if assertion['type'] == 'Inv':
+                # ``Inv`` and bare ``Assert`` proof-checkpoints both
+                # wrap their bodies in ``exists`` and use the same
+                # shape→data rewriter; the difference is downstream
+                # (data-witness propagation into the abstract loop
+                # state, only meaningful for ``Inv``).
+                if assertion['type'] in ('Inv', 'Assert'):
                     translated, vars = self.translator.translate_assertion_with_exists(
                         assertion['content'], prefix=prefix,
                         type_env=self._type_env, struct_decls=self._struct_decls,
@@ -134,7 +139,9 @@ class AssertionProcessor:
                 var_types = self.translator.last_generated_var_types[:]
 
                 # For Inv assertions, detect data witness variables from
-                # pre-existing existentials (e.g. 'w' in 't -> data == w')
+                # pre-existing existentials (e.g. 'w' in 't -> data == w').
+                # Assert blocks have no loop state to lift witnesses
+                # into, so we skip the extraction for them.
                 data_witnesses = []
                 if assertion['type'] == 'Inv':
                     pre_existing = extract_pre_existing_vars(assertion['content'])
@@ -152,6 +159,10 @@ class AssertionProcessor:
                     'data_witnesses': data_witnesses,
                     'position': assertion.get('position')
                 }
+                # Preserve the ``Inv Assert`` qualifier when the source
+                # had it so the substitution layer can emit it back.
+                if assertion.get('inv_assert'):
+                    result_dict['inv_assert'] = True
 
                 if assertion['type'] == 'Inv' and 'command_guard' in assertion:
                     result_dict['command_guard'] = assertion['command_guard']
@@ -164,6 +175,8 @@ class AssertionProcessor:
                     'error': str(e),
                     'position': assertion.get('position')
                 }
+                if assertion.get('inv_assert'):
+                    result_dict['inv_assert'] = True
                 if assertion['type'] == 'Inv' and 'command_guard' in assertion:
                     result_dict['command_guard'] = assertion['command_guard']
                 results.append(result_dict)

@@ -18,6 +18,7 @@ def generate_rel_lib_skeleton_for_file(
     sibling_dirs: Optional[List[str]] = None,
     monad: str = "staterel",
     coq_lib_dir: Optional[str] = None,
+    use_block_renderer: bool = False,
 ) -> str:
     result = process_and_translate_file(input_path, generate_guards=True)
     if "error" in result:
@@ -72,6 +73,7 @@ def generate_rel_lib_skeleton_for_file(
     return generate_rel_lib(
         basename, func_infos, imported_rel_libs, call_graph,
         monad=monad, coq_lib_dir=coq_lib_dir,
+        use_block_renderer=use_block_renderer,
     )
 
 

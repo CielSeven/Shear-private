@@ -121,16 +121,38 @@ class AnnotationExtractor:
             command_guard = None
 
             inv_match = re.match(r'Inv\s+(.*)', content, re.DOTALL | re.IGNORECASE)
+            inv_has_assert_qualifier = False
             if inv_match:
                 assertion_type = 'Inv'
                 body = inv_match.group(1).strip()
-                # `/*@ Inv Assert ... */` is a documented variant; strip the
-                # leading Assert keyword so the body parses as a normal Inv.
+                # `/*@ Inv Assert ... */` is a documented variant; strip
+                # the leading Assert keyword so the body parses as a
+                # normal Inv.  Record that the source had ``Assert`` so
+                # the substitution layer can emit it back — QCP treats
+                # ``Inv Assert`` and bare ``Inv`` as different
+                # annotations (the former is a strict assertion at the
+                # loop head, the latter a regular invariant), so the
+                # qualifier must round-trip.
                 assert_strip = re.match(r'Assert\s+(.*)', body, re.DOTALL)
                 if assert_strip:
                     body = assert_strip.group(1).strip()
+                    inv_has_assert_qualifier = True
                 assertion_content = body
                 command_guard = self.extract_while_condition(func_body, end_pos)
+            else:
+                # Bare ``/*@ Assert ... */`` proof-checkpoint annotations
+                # (no loop attached).  The QCP datasets sprinkle these
+                # between statements to give the verifier intermediate
+                # facts.  We classify them as ``'Assert'`` so the
+                # translator can rewrite the shape predicates inside,
+                # but skip ``command_guard`` lookup — there's no
+                # associated while-loop.
+                assert_match = re.match(
+                    r'Assert\s+(.*)', content, re.DOTALL,
+                )
+                if assert_match:
+                    assertion_type = 'Assert'
+                    assertion_content = assert_match.group(1).strip()
 
             assertion_dict = {
                 'type': assertion_type,
@@ -139,6 +161,8 @@ class AnnotationExtractor:
                 # measured in the file that *body_start_pos* was relative to.
                 'position': body_start_pos + comment_start
             }
+            if inv_has_assert_qualifier:
+                assertion_dict['inv_assert'] = True
 
             if assertion_type == 'Inv' and command_guard:
                 assertion_dict['command_guard'] = command_guard

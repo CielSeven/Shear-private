@@ -38,5 +38,29 @@
     "data_var_types": [
       "list Z"
     ]
+  },
+  "IntArray::full_shape": {
+    "data_name": "IntArray::full",
+    "shape_arity": 2,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  },
+  "IntArray::seg_shape": {
+    "data_name": "IntArray::seg",
+    "shape_arity": 3,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  },
+  "IntArray::missing_i_shape": {
+    "data_name": "IntArray::missing_i",
+    "shape_arity": 4,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
   }
 }

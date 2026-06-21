@@ -1117,6 +1117,70 @@ from GenMonads.absprog.gen_rel_lib import (
 )
 
 
+# Synthetic two-loop fixture used by every Forest* test.  Mirrors the
+# original ``glibc_slist_iter_back_2.c`` structurally (one outer + one
+# inner ``while``, both ``Inv`` annotations using ``store``/``listrep``)
+# so the forest scaffold runs end-to-end without any dataset dependency.
+_FOREST_NESTED_C = (
+    # An ``#include`` line is required: ``insert_blocks_after_includes``
+    # in ``translate_c_file`` only emits the ``Extern Coq`` block when it
+    # can find a last-include anchor.  The header itself doesn't need to
+    # exist on disk — only the syntactic ``#include`` line is consulted.
+    '#include "glibc_slist_clean.h"\n'
+    '\n'
+    'long glibc_slist_clean_iter_back_2(struct list *x)\n'
+    '/*@ Require listrep(x)\n'
+    '    Ensure  listrep(x@pre)\n'
+    ' */\n'
+    '{\n'
+    '    struct list *stop;\n'
+    '    struct list *prev;\n'
+    '    struct list *node;\n'
+    '    long sum;\n'
+    '\n'
+    '    stop = 0;\n'
+    '    sum = 0;\n'
+    '    /*@ Inv exists st s,\n'
+    '            store(&stop, struct list*, st) *\n'
+    '            store(&sum, long, s) *\n'
+    '            undef_data_at(&prev, struct list*) *\n'
+    '            undef_data_at(&node, struct list*) *\n'
+    '            listrep(x)\n'
+    '     */\n'
+    '    while (x != stop) {\n'
+    '        prev = 0;\n'
+    '        node = x;\n'
+    '        /*@ Inv exists p st s,\n'
+    '                node != 0 &&\n'
+    '                store(&prev, struct list*, p) *\n'
+    '                store(&stop, struct list*, st) *\n'
+    '                store(&sum, long, s) *\n'
+    '                listrep(node)\n'
+    '         */\n'
+    '        while (node->next != stop) {\n'
+    '            prev = node;\n'
+    '            node = node->next;\n'
+    '        }\n'
+    '        sum += node->data;\n'
+    '        stop = node;\n'
+    '        if (prev == 0) {\n'
+    '            break;\n'
+    '        }\n'
+    '    }\n'
+    '    return sum;\n'
+    '}\n'
+)
+
+
+def _forest_fixture_path(tmp_path) -> str:
+    """Write the shared synthetic forest fixture under *tmp_path* and
+    return its path.  Used by every Forest* test that expects a real C
+    file on disk."""
+    p = tmp_path / "glibc_slist_iter_back_2.c"
+    p.write_text(_FOREST_NESTED_C, encoding="utf-8")
+    return str(p)
+
+
 def _leaf(idx, parent=None, state="(list Z * Z)", guard=None):
     return {
         "loop_index": idx,
@@ -1263,13 +1327,12 @@ class TestForestFuncBlock:
 
 class TestForestEndToEnd:
     def test_generate_rel_lib_for_nested_real_file(self, tmp_path):
-        """End-to-end: the real nested file produces a forest scaffold with
-        the expected structural markers (per-loop scaffolds + mechanical M2)."""
+        """End-to-end: a synthetic nested-loop file produces a forest
+        scaffold with the expected structural markers (per-loop scaffolds
+        + mechanical M2)."""
         out_dir = tmp_path / "lib"
-        out_path = generate_rel_lib_for_file(
-            "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c",
-            str(out_dir),
-        )
+        c_file = _forest_fixture_path(tmp_path)
+        out_path = generate_rel_lib_for_file(c_file, str(out_dir))
         assert out_path is not None
         content = (out_dir / "glibc_slist_iter_back_2_rel_lib.v").read_text()
         # Forest banner is emitted.
@@ -1375,11 +1438,15 @@ class TestForestAssembler:
         blocks = parse_synthesized_components(response, fn, required=required)
         assert sorted(blocks.keys()) == sorted(required)
 
-        content = assemble_rel_lib_from_blocks(
-            "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c",
-            fn, blocks,
-            sibling_dirs=["shape_invdataset/Glibc_slist_clean_iter"],
-        )
+        # Use a tmp-path fixture so the test has no dataset dependency.
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as td:
+            c_file = os.path.join(td, "glibc_slist_iter_back_2.c")
+            with open(c_file, "w", encoding="utf-8") as f:
+                f.write(_FOREST_NESTED_C)
+            content = assemble_rel_lib_from_blocks(
+                c_file, fn, blocks, sibling_dirs=[td],
+            )
         # Every targeted Parameter line is gone.
         for name in [
             f"{fn}_M_loop1_M1", f"{fn}_M_loop2_M1", f"{fn}_M_loop2_M2",
@@ -1404,7 +1471,7 @@ class TestForestRelCAndLibAgree:
         from GenMonads.translate_c_file import translate_c_file
         from GenMonads.absprog.gen_rel_lib import generate_rel_lib_for_file
 
-        c_file = "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c"
+        c_file = _forest_fixture_path(tmp_path)
         rel_c_path = tmp_path / "rel.c"
         lib_dir = tmp_path / "lib"
         assert translate_c_file(c_file, str(rel_c_path))
@@ -1433,12 +1500,19 @@ class TestForestRelCAndLibAgree:
 
     def test_nested_file_extern_coq_block_lists_per_loop_programs(self, tmp_path):
         """The Extern Coq block in the ``_rel.c`` must mention per-loop
-        ``_M_loop{k}`` declarations (one per loop) and an ``_M_loop{k}_end``
-        for the root loop — not the single-loop ``_M_loop`` / ``_M_loop_end``
-        which don't exist in the forest lib."""
+        ``_M_loop{k}`` declarations (one per loop) and an
+        ``_M_loop{k}_tail`` for the root loop — not the single-loop
+        ``_M_loop`` / ``_M_loop_end`` which don't exist in the forest
+        lib.
+
+        ``_tail`` (not ``_end``) is what the Inv binds with: it's the
+        residual program from this loop's exit through to the
+        function's return.  See ``_loop_tail_pairs`` + the forest
+        scaffold's ``_tail`` Definitions for the semantics.
+        """
         from GenMonads.translate_c_file import translate_c_file
 
-        c_file = "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c"
+        c_file = _forest_fixture_path(tmp_path)
         out = tmp_path / "rel.c"
         assert translate_c_file(c_file, str(out))
         text = out.read_text()
@@ -1448,17 +1522,21 @@ class TestForestRelCAndLibAgree:
         # Per-loop declarations are present.
         assert f"{fn}_M_loop1:" in extern
         assert f"{fn}_M_loop2:" in extern
-        assert f"{fn}_M_loop1_end:" in extern
+        # Tail (the residual program after loop1) is what the Inv binds
+        # with — ``_end`` is internal to the lib and not exposed.
+        assert f"{fn}_M_loop1_tail:" in extern
+        assert f"{fn}_M_loop1_end:" not in extern
         # The single-loop names that used to appear unconditionally are gone.
         assert f"{fn}_M_loop:" not in extern
         assert f"{fn}_M_loop_end:" not in extern
 
     def test_per_inv_programs_thread_loop_indices_into_invariants(self, tmp_path):
         """Each ``Inv`` in the ``_rel.c`` must reference its own loop's
-        ``_M_loop{k}`` (not all the same name)."""
+        ``_M_loop{k}`` (not all the same name) and bind the
+        continuation with the root loop's ``_M_loop{root_k}_tail``."""
         from GenMonads.translate_c_file import translate_c_file
 
-        c_file = "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c"
+        c_file = _forest_fixture_path(tmp_path)
         out = tmp_path / "rel.c"
         assert translate_c_file(c_file, str(out))
         text = out.read_text()
@@ -1467,8 +1545,11 @@ class TestForestRelCAndLibAgree:
         # Outer Inv references loop1; inner references loop2.
         assert "_M_loop1(" in invs[0] and "_M_loop2(" not in invs[0]
         assert "_M_loop2(" in invs[1] and "_M_loop1(" not in invs[1]
-        # Both reference the root loop's _M_loop1_end.
-        assert all("_M_loop1_end" in iv for iv in invs)
+        # Both bind with the root loop's tail (the full residual from
+        # the outer loop's exit to function return).
+        assert all("_M_loop1_tail" in iv for iv in invs)
+        # And NOT with ``_end`` — that name is internal-lib-only.
+        assert not any("_M_loop1_end" in iv for iv in invs)
 
 
 class TestForestNoArgsEdge:
@@ -1487,19 +1568,28 @@ class TestForestNoArgsEdge:
 
 
 class TestForestScaffoldSketch:
-    def test_selected_scaffold_points_at_skeleton_file_in_forest_mode(self):
+    def test_selected_scaffold_points_at_skeleton_file_in_forest_mode(self, tmp_path):
         """In workdir-mode the Selected Scaffold section no longer embeds
         per-loop sketches (the agent reads the actual ``skeleton/X.v``
-        instead).  Stale single-loop names must not leak into the section."""
+        instead).  Stale single-loop names must not leak into the section.
+
+        Note: forest per-loop names (e.g. ``M_loop1_to_inner_2``) DO
+        legitimately appear in the prompt now — Phase 3A's
+        ``Abstract-Program ↔ C Segment Binding`` section renders them.
+        We scope this test to just the ``Selected Scaffold`` subsection
+        so the binding section's intended forest references don't
+        false-positive."""
         from GenMonads.absprog.context import collect_synthesis_context
         from GenMonads.absprog.templates import render_prompt
 
-        ctx = collect_synthesis_context(
-            "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c",
-            sibling_dirs=["shape_invdataset/Glibc_slist_clean_iter"],
-        )
+        c_file = _forest_fixture_path(tmp_path)
+        ctx = collect_synthesis_context(c_file, sibling_dirs=[str(tmp_path)])
         prompt = render_prompt(ctx)
-        scaffold = prompt.split("## Selected Scaffold", 1)[1].split("## Loop Forest", 1)[0]
+        # Narrow scope: just the ``Selected Scaffold`` section's body
+        # (up to the next ``## `` heading, which is now the binding
+        # section).
+        sel = prompt.split("## Selected Scaffold", 1)[1]
+        scaffold = sel.split("\n## ", 1)[0]
         # The skeleton-pointer line is present.
         assert "skeleton/<basename>_rel_lib.v" in scaffold
         # No stale single-loop names embedded in the prompt.
@@ -1518,16 +1608,14 @@ class TestForestScaffoldSketch:
 
 
 class TestForestPerLoopSafeexec:
-    def test_loop_forest_section_shows_each_loops_safeexec_invariant(self):
+    def test_loop_forest_section_shows_each_loops_safeexec_invariant(self, tmp_path):
         """Each loop in the Loop Forest section carries its own safeExec
         invariant referencing its own ``_M_loop{k}`` and the root's ``_end``."""
         from GenMonads.absprog.context import collect_synthesis_context
         from GenMonads.absprog.templates import render_prompt
 
-        ctx = collect_synthesis_context(
-            "shape_invdataset/Glibc_slist_clean_iter/glibc_slist_iter_back_2.c",
-            sibling_dirs=["shape_invdataset/Glibc_slist_clean_iter"],
-        )
+        c_file = _forest_fixture_path(tmp_path)
+        ctx = collect_synthesis_context(c_file, sibling_dirs=[str(tmp_path)])
         prompt = render_prompt(ctx)
         forest = prompt.split("## Loop Forest", 1)[1].split("## Required Holes", 1)[0]
         fn = "glibc_slist_clean_iter_back_2"
@@ -1774,3 +1862,134 @@ class TestQualifiedRequireImport:
         # _CoqProject from this test runner's parent dirs that doesn't
         # cover lib_dir — the fallback still resolves to bare.
         assert "Require Import list_tail_rel_lib." in content
+
+
+class TestSequentialLoopTailVsEnd:
+    """Pin the fix for the multi-loop residual bug: for top-level
+    sibling (sequential) loops, the Inv binding must use ``_tail`` (full
+    residual to function return), not ``_end`` (the bridge to the next
+    loop)."""
+
+    def _write_three_seq_loops(self, tmp_path):
+        """Synthetic Shape-3-sequential analogue of ``lc31_next_permutation``:
+        three top-level loops, no nesting."""
+        src = (
+            '#include "h.h"\n'
+            '\n'
+            'long demo(struct list *x)\n'
+            '/*@ Require listrep(x)\n'
+            '    Ensure  emp\n'
+            ' */\n'
+            '{\n'
+            '    long a;\n'
+            '    long b;\n'
+            '    long c;\n'
+            '    a = 0;\n'
+            '    b = 0;\n'
+            '    c = 0;\n'
+            '    /*@ Inv exists s, store(&a, long, s) * listrep(x) */\n'
+            '    while (a < 10) { a = a + 1; }\n'
+            '    /*@ Inv exists s, store(&b, long, s) * listrep(x) */\n'
+            '    while (b < 10) { b = b + 1; }\n'
+            '    /*@ Inv exists s, store(&c, long, s) * listrep(x) */\n'
+            '    while (c < 10) { c = c + 1; }\n'
+            '    return a + b + c;\n'
+            '}\n'
+        )
+        path = tmp_path / "demo.c"
+        path.write_text(src)
+        return str(path)
+
+    def test_forest_lib_emits_per_loop_tail_definition(self, tmp_path):
+        """Each top-level loop gets a ``Definition M_loop{k}_tail`` —
+        non-terminal loops chain through subsequent loops; the terminal
+        loop's tail is a definitional alias of its ``_end``."""
+        from GenMonads.translate_c_file import translate_c_file
+        from GenMonads.absprog.gen_rel_lib import generate_rel_lib_for_file
+
+        c_file = self._write_three_seq_loops(tmp_path)
+        rel_c = tmp_path / "demo_rel.c"
+        assert translate_c_file(c_file, str(rel_c))
+        lib_path = generate_rel_lib_for_file(
+            c_file, str(tmp_path / "lib"), monad="staterel",
+        )
+        lib_text = open(lib_path).read()
+
+        # Non-terminal tails chain through subsequent (before; aux; end).
+        assert "Definition demo_M_loop1_tail" in lib_text
+        assert "Definition demo_M_loop2_tail" in lib_text
+        assert "Definition demo_M_loop3_tail" in lib_text
+        # Loop1's tail must mention loop2 and loop3 — proves it carries the
+        # FULL residual, not just the bridge to loop2.
+        tail1_block = lib_text.split("Definition demo_M_loop1_tail", 1)[1]
+        tail1_body = tail1_block.split("Definition demo_M_loop2_tail", 1)[0]
+        assert "demo_M_loop1_end" in tail1_body
+        assert "demo_M_loop2_before" in tail1_body
+        assert "demo_M_loop2_aux" in tail1_body
+        assert "demo_M_loop2_end" in tail1_body
+        assert "demo_M_loop3_before" in tail1_body
+        assert "demo_M_loop3_aux" in tail1_body
+        assert "demo_M_loop3_end" in tail1_body
+        # Loop3's tail (terminal) is the definitional alias.
+        tail3_block = lib_text.split("Definition demo_M_loop3_tail", 1)[1]
+        # Just an alias — should have just the _end name and no fun r/binds.
+        assert "demo_M_loop3_end" in tail3_block.split("\n", 3)[1]
+
+    def test_invariants_bind_with_tail_not_end(self, tmp_path):
+        """In the regenerated rel.c, every multi-loop Inv binds the loop
+        with ``_M_loop{k}_tail`` (its full residual), not ``_end`` (the
+        bridge that only carries to the next loop's setup)."""
+        from GenMonads.translate_c_file import translate_c_file
+
+        c_file = self._write_three_seq_loops(tmp_path)
+        rel_c = tmp_path / "demo_rel.c"
+        assert translate_c_file(c_file, str(rel_c))
+        text = rel_c.read_text()
+        invs = [m.group(0) for m in re.finditer(r"/\*@\s*Inv .*?\*/", text, re.DOTALL)]
+        assert len(invs) == 3
+        # Each Inv binds with its OWN loop's tail (sequential siblings —
+        # each is its own root).
+        assert "demo_M_loop1_tail" in invs[0]
+        assert "demo_M_loop2_tail" in invs[1]
+        assert "demo_M_loop3_tail" in invs[2]
+        # No Inv binds with the bridge ``_end`` directly.
+        for iv in invs:
+            assert "_loop1_end" not in iv
+            assert "_loop2_end" not in iv
+            assert "_loop3_end" not in iv
+
+    def test_single_loop_unchanged_still_binds_with_end(self, tmp_path):
+        """Single-loop functions are NOT affected: ``_end`` IS the tail
+        there, and the scaffold keeps using ``_end`` directly without
+        introducing a ``_tail`` indirection."""
+        from GenMonads.translate_c_file import translate_c_file
+        from GenMonads.absprog.gen_rel_lib import generate_rel_lib_for_file
+
+        src = (
+            '#include "h.h"\n'
+            '\n'
+            'long demo(struct list *x)\n'
+            '/*@ Require listrep(x) Ensure emp */\n'
+            '{\n'
+            '    long s;\n'
+            '    s = 0;\n'
+            '    /*@ Inv exists v, store(&s, long, v) * listrep(x) */\n'
+            '    while (s < 10) { s = s + 1; }\n'
+            '    return s;\n'
+            '}\n'
+        )
+        c_file = tmp_path / "demo.c"
+        c_file.write_text(src)
+        rel_c = tmp_path / "demo_rel.c"
+        assert translate_c_file(str(c_file), str(rel_c))
+        text = rel_c.read_text()
+        # Single-loop Inv binds with bare ``_M_loop_end`` (its tail by
+        # definition).
+        assert "demo_M_loop_end" in text
+        # No ``_tail`` indirection introduced for single-loop scaffolds.
+        assert "demo_M_loop_tail" not in text
+        # Generated lib also has no ``_tail`` Definitions.
+        lib_text = open(
+            generate_rel_lib_for_file(str(c_file), str(tmp_path / "lib"))
+        ).read()
+        assert "Definition demo_M_loop_tail" not in lib_text
