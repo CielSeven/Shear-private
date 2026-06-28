@@ -1,0 +1,34 @@
+{
+  "_comment": "Signatures for the first-order logical operators that appear in autovc proof blocks. 'type_arg' means the operator's first textual argument is the element type T (e.g. cons(Z, h, t)). Each operand 'role' fixes its type: 'elem'/'scalar' -> T, 'list' -> list T. 'parse' is how the operator is written in proof blocks ('call' = head(args), 'infix' = a SYM b); 'render' is its Coq surface syntax; 'result' is the kind of value it yields ('list' vs 'scalar'), used to tell a list carrier component from a scalar data witness.",
+  "operators": {
+    "nil": {
+      "type_arg": true,
+      "args": [],
+      "result": "list",
+      "parse": {"kind": "call"},
+      "render": {"kind": "nullary", "symbol": "nil"}
+    },
+    "cons": {
+      "type_arg": true,
+      "args": ["elem", "list"],
+      "result": "list",
+      "parse": {"kind": "call"},
+      "render": {"kind": "infix", "symbol": "::"}
+    },
+    "app": {
+      "type_arg": true,
+      "args": ["list", "list"],
+      "result": "list",
+      "parse": {"kind": "call"},
+      "render": {"kind": "infix", "symbol": "++"}
+    },
+    "add": {
+      "type_arg": false,
+      "elem_type": "Z",
+      "args": ["scalar", "scalar"],
+      "result": "scalar",
+      "parse": {"kind": "infix", "symbol": "+"},
+      "render": {"kind": "infix", "symbol": "+"}
+    }
+  }
+}
