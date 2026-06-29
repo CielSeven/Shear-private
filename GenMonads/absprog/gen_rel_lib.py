@@ -920,7 +920,7 @@ def generate_forest_func_block(
                 )
                 lines.append(
                     f"Parameter {fn}_M_loop{k}_after_inner_{ck} : "
-                    f"{Sk} -> {child_mretty} -> MONAD {Sk_arg}."
+                    f"{child_mretty} -> MONAD {Sk_arg}."
                 )
             lines.append(
                 f"Definition {fn}_M_loop{k}_M2 : {Sk} -> MONAD {_m2_ret(t)} :="
@@ -937,7 +937,7 @@ def generate_forest_func_block(
                     # so the parent's loop body sees the early return.
                     lines.append("    match r with")
                     lines.append(
-                        f"    | Continue r' => a' <- {fn}_M_loop{k}_after_inner_{ck} a r';; return (Continue a')"
+                        f"    | Continue r' => a' <- {fn}_M_loop{k}_after_inner_{ck} r';; return (Continue a')"
                     )
                     lines.append("    | ReturnNow r' => return (ReturnNow r')")
                     lines.append("    end.")
@@ -948,12 +948,12 @@ def generate_forest_func_block(
                     # ``tainted=True``), wrap the answer in Continue.
                     if tainted:
                         lines.append(
-                            f"    a' <- {fn}_M_loop{k}_after_inner_{ck} a r;;"
+                            f"    a' <- {fn}_M_loop{k}_after_inner_{ck} r;;"
                         )
                         lines.append("    return (Continue a').")
                     else:
                         lines.append(
-                            f"    {fn}_M_loop{k}_after_inner_{ck} a r."
+                            f"    {fn}_M_loop{k}_after_inner_{ck} r."
                         )
             else:
                 # Multi-child mechanical M2 — propagate ``ReturnNow``
@@ -977,12 +977,12 @@ def generate_forest_func_block(
                         lines.append("    | ReturnNow r' => return (ReturnNow r')")
                         if i == len(children) - 1:
                             lines.append(
-                                f"    | Continue r' => a' <- {fn}_M_loop{k}_after_inner_{ck} {acc} r';; return (Continue a')"
+                                f"    | Continue r' => a' <- {fn}_M_loop{k}_after_inner_{ck} r';; return (Continue a')"
                             )
                         else:
                             next_acc = f"a{i+1}"
                             lines.append(
-                                f"    | Continue r' => {next_acc} <- {fn}_M_loop{k}_after_inner_{ck} {acc} r';; "
+                                f"    | Continue r' => {next_acc} <- {fn}_M_loop{k}_after_inner_{ck} r';; "
                             )
                             acc = next_acc
                         lines.append("    end;;")
@@ -990,17 +990,17 @@ def generate_forest_func_block(
                         if i == len(children) - 1:
                             if tainted:
                                 lines.append(
-                                    f"    a' <- {fn}_M_loop{k}_after_inner_{ck} {acc} {r_var};; return (Continue a')."
+                                    f"    a' <- {fn}_M_loop{k}_after_inner_{ck} {r_var};; return (Continue a')."
                                 )
                             else:
                                 lines.append(
-                                    f"    {fn}_M_loop{k}_after_inner_{ck} {acc} {r_var}."
+                                    f"    {fn}_M_loop{k}_after_inner_{ck} {r_var}."
                                 )
                         else:
                             next_acc = f"a{i+1}"
                             lines.append(
                                 f"    {next_acc} <- "
-                                f"{fn}_M_loop{k}_after_inner_{ck} {acc} {r_var};;"
+                                f"{fn}_M_loop{k}_after_inner_{ck} {r_var};;"
                             )
                             acc = next_acc
 
@@ -1195,24 +1195,17 @@ def generate_forest_func_block(
     lines.append("")
 
     # Nested-loop ``_tail`` Definitions.  Each non-top-level loop k
-    # gets its own tail keyed off its OWN MretTy plus the parent's
-    # state at inner-entry as an extra argument (so the residual
-    # ``after_inner_k ;; parent_aux ;; parent_tail`` chain is
-    # well-typed):
+    # gets its own tail keyed off its OWN MretTy alone — every tail
+    # has shape ``MretTy -> MONAD ret``, independent of nesting depth.
+    # The design commitment is that ``M_loop_k_MretTy`` carries enough
+    # information for the parent to resume; ``after_inner_k`` rebuilds
+    # the parent's state from the inner break payload alone:
     #
-    #   Definition M_loop_k_tail : M_loop_k_MretTy -> S_p -> MONAD ret :=
-    #     fun r_k a_p =>
-    #       a_p' <- M_loop_p_after_inner_k a_p r_k ;;
+    #   Definition M_loop_k_tail : M_loop_k_MretTy -> MONAD ret :=
+    #     fun r_k =>
+    #       a_p' <- M_loop_p_after_inner_k r_k ;;
     #       r_p  <- M_loop_p_aux a_p' ;;
     #       M_loop_p_tail r_p.
-    #
-    # MVP supports 1-level nesting cleanly (parent is a top-level
-    # loop).  For deeper nesting the parent's tail itself takes a
-    # grandparent state, so we'd have to thread that here too — for
-    # now emit the chain unchanged and rely on the parent's tail
-    # signature; if depth >= 2 the code below currently doesn't
-    # supply the grandparent argument and will emit a malformed
-    # call.  Flag as TODO when we cross that case.
     for t in loop_templates:
         if t["parent"] is None:
             continue  # top-level — already handled above
@@ -1221,11 +1214,8 @@ def generate_forest_func_block(
         p_idx = t["parent"]
         p_node = by_idx[p_idx]
         p_k = p_idx + 1
-        Sp = p_node["state_type"]
-        Sp_arg = _type_arg(Sp)
         k_mretty = _mretty_for(k_idx)
         k_tainted = bool(t.get("has_early_return_in_subtree"))
-        p_tainted = bool(p_node.get("has_early_return_in_subtree"))
         p_direct = bool(p_node.get("has_early_return"))
         # When the parent's own body has a direct early return, its
         # M2 is an LLM Parameter and ``after_inner_k`` is NOT emitted
@@ -1237,7 +1227,7 @@ def generate_forest_func_block(
                 if k_tainted else k_mretty
             )
             lines.append(
-                f"Parameter {fn}_M_loop{k}_tail : {tail_in} -> {Sp} -> MONAD ({return_type})."
+                f"Parameter {fn}_M_loop{k}_tail : {tail_in} -> MONAD ({return_type})."
             )
             continue
         tail_in = (
@@ -1245,9 +1235,9 @@ def generate_forest_func_block(
             if k_tainted else k_mretty
         )
         lines.append(
-            f"Definition {fn}_M_loop{k}_tail : {tail_in} -> {Sp} -> MONAD ({return_type}) :="
+            f"Definition {fn}_M_loop{k}_tail : {tail_in} -> MONAD ({return_type}) :="
         )
-        lines.append("  fun r_k a_p =>")
+        lines.append("  fun r_k =>")
         if k_tainted:
             lines.append("    match r_k with")
             lines.append("    | ReturnNow rt => return rt")
@@ -1258,23 +1248,10 @@ def generate_forest_func_block(
             ind = "    "
             r_var = "r_k"
         lines.append(
-            f"{ind}a_p' <- {fn}_M_loop{p_k}_after_inner_{k} a_p {r_var};;"
+            f"{ind}a_p' <- {fn}_M_loop{p_k}_after_inner_{k} {r_var};;"
         )
         lines.append(f"{ind}r_p <- {fn}_M_loop{p_k}_aux a_p';;")
-        # Parent's tail.  For 1-level nesting the parent IS top-level
-        # so its tail takes only ``r_p`` (or its early_result form,
-        # which the parent_tail already handles internally).
-        if p_node["parent"] is None:
-            lines.append(f"{ind}{fn}_M_loop{p_k}_tail r_p.")
-        else:
-            # Parent itself is nested — its tail wants a grandparent
-            # state argument we don't currently thread.  Leave a
-            # syntactically valid TODO marker; this case isn't yet
-            # exercised by the test corpus.
-            lines.append(
-                f"{ind}(* TODO: deeper nesting — parent tail wants grandparent state *)"
-            )
-            lines.append(f"{ind}{fn}_M_loop{p_k}_tail r_p.")
+        lines.append(f"{ind}{fn}_M_loop{p_k}_tail r_p.")
         if k_tainted:
             lines.append("    end.")
     if any(t["parent"] is not None for t in loop_templates):

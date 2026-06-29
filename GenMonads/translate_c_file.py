@@ -954,12 +954,13 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
                     decl_lines.append(
                         f'({fn}_M_loop{k}: {loop_inv_args}program unit {loop_payload})'
                     )
-                # Per-loop ``_M_loop{k}_tail`` declarations.  Top-level
-                # tails take only the loop's own MretTy; nested tails
-                # additionally take the parent's state at inner-entry
-                # so the residual ``after_inner_k ;; parent_aux ;;
-                # parent_tail`` chain in the rel_lib type-checks.
-                by_idx = {tt['loop_index']: tt for tt in loop_templates}
+                # Per-loop ``_M_loop{k}_tail`` declarations.  Every tail
+                # — top-level or nested — has the uniform shape
+                # ``MretTy -> program unit ret``.  Nested tails no longer
+                # take a parent-state argument: the inner break payload
+                # alone carries everything the parent needs to resume
+                # (matching the rel_lib's ``after_inner_k : MretTy ->
+                # MONAD Sp`` signature).
                 for t in loop_templates:
                     k = t['loop_index'] + 1
                     k_mretty = _per_loop_mretty(info, t['loop_index'])
@@ -968,16 +969,9 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
                         f"({_early_result_type(k_mretty, ret_type)})"
                         if tainted else k_mretty
                     )
-                    p_idx = t.get('parent')
-                    if p_idx is None:
-                        decl_lines.append(
-                            f'({fn}_M_loop{k}_tail: {tail_in} -> program unit {ret_type})'
-                        )
-                    else:
-                        parent_state = by_idx[p_idx].get('state_type') or 'unit'
-                        decl_lines.append(
-                            f'({fn}_M_loop{k}_tail: {tail_in} -> {parent_state} -> program unit {ret_type})'
-                        )
+                    decl_lines.append(
+                        f'({fn}_M_loop{k}_tail: {tail_in} -> program unit {ret_type})'
+                    )
             else:
                 # {func}_M_loop: t1 -> ... -> program unit {mretty}
                 inv_args = _curried_type(inv_types)
@@ -1327,9 +1321,6 @@ def _loop_template_summary(
     return build_loop_templates("", func_source, inner_assertions)
 
 
-_OUTER_STATE_VAR = "outer_state"
-
-
 def _build_per_inv_programs(
     func_name: str, inner_assertions: list, func_source: Optional[str],
 ) -> List[tuple]:
@@ -1338,17 +1329,11 @@ def _build_per_inv_programs(
     multiple loops.  Returns ``[]`` for single-loop / no-loop functions
     (callers fall back to the function-wide single-loop name).
 
-    For each Inv:
-
-    * **Top-level loop k**: continuation is ``M_loop{k}_tail``, no extra
-      existentials.  The tail signature is ``MretTy_k -> MONAD ret``.
-    * **Nested loop k (parent p)**: each loop now has its own MretTy,
-      so the binding must use the loop's OWN tail — and the nested tail
-      signature is ``MretTy_k -> S_p -> MONAD ret`` (it takes the
-      parent's state at inner-entry as an extra argument).  Continuation
-      becomes the lambda ``fun r => M_loop{k}_tail r outer_state``;
-      ``extra_exists = ["outer_state"]`` so the Inv-rewriter can add
-      the variable to the existential list.
+    Every tail — top-level or nested — has the uniform signature
+    ``MretTy_k -> MONAD ret``: the inner break payload carries
+    everything the parent needs to resume, so no parent-state
+    threading is required.  The continuation is simply
+    ``M_loop{k}_tail`` and ``extra_exists`` is empty.
     """
     summary = _loop_template_summary(inner_assertions, func_source)
     if len(summary) <= 1:
@@ -1360,18 +1345,11 @@ def _build_per_inv_programs(
         if i >= len(invs):
             break
         k = t['loop_index'] + 1
-        if t['parent'] is None:
-            triples.append((
-                f"{func_name}_M_loop{k}",
-                f"{func_name}_M_loop{k}_tail",
-                [],
-            ))
-        else:
-            triples.append((
-                f"{func_name}_M_loop{k}",
-                f"(fun r => {func_name}_M_loop{k}_tail r {_OUTER_STATE_VAR})",
-                [_OUTER_STATE_VAR],
-            ))
+        triples.append((
+            f"{func_name}_M_loop{k}",
+            f"{func_name}_M_loop{k}_tail",
+            [],
+        ))
     return triples
 
 

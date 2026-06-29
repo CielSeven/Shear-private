@@ -143,6 +143,24 @@ incomplete inner VCs (degenerate invariants, ungenerated guards), this yields a
 **well-typed** scaffold — not a refinement-faithful body; completing it needs the
 upstream VCs.
 
+*Design choice — the inner-loop continuation drops the parent carrier.* The
+nested-loop "tail" glue (`_M_loop{k}_tail`, the continuation handed to inner loop
+`k`) is typed `_M_loop{k}_MretTy -> MONAD <result>` — it takes **only** the inner
+loop's result, not the parent carrier. We assume the parent carrier has already
+been folded into the inner loop's carrier by `to_inner` *before* entering the
+inner loop, so the inner `MretTy` is self-sufficient and there is no outer state
+left to re-attach on resume. This is why `after_inner` collapses to the identity
+in the common case: when `to_inner` carries the whole parent state inward, the
+inner result already *is* the resumed outer carrier. Consequently `after_inner_{c}{k}`
+drops its parent-carrier argument too — it is retyped `_M_loop{c}_MretTy ->
+MONAD <outer-carrier>` (the identity becomes `fun r => return r`, not `fun a r =>
+return r`). The cost is that we forbid
+nestings where the inner loop deliberately ignores part of the parent state and
+needs it back verbatim afterwards (which would require threading a parent-carrier
+argument `a_p` through the tail); should such a case arise, the tail signature
+would have to widen back to `MretTy -> parent_carrier -> MONAD _`. For the
+current benchmark family the carry-everything-inward assumption holds.
+
 **Recursion** (`iter_back`: `sum = iter_back(x->next); …`). A whole-function `_M`
 hole whose VCs call the function itself becomes a `Fixpoint`. The arms already
 synthesize the right body — a base arm (`l1 = nil`) and a step arm that calls
