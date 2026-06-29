@@ -9,8 +9,28 @@ from GenMonads.absprog.loop_forest import (
     assign_invariants_in_source_order,
     assign_invariants_to_loops,
     build_loop_forest,
+    build_loop_templates,
     top_level_loops,
 )
+
+
+def _mk_invs(n: int):
+    """Build a list of minimal Inv-shaped assertion dicts (n entries) so
+    ``build_loop_templates`` can pair them with detected loops in source
+    order.  The placeholder body keeps each entry's ``variables`` /
+    ``variable_types`` empty — exact contents don't matter for tests that
+    care only about topology and early-return propagation flags.
+    """
+    return [
+        {
+            "type": "Inv",
+            "variables": [],
+            "variable_types": [],
+            "translated": "exists , True",
+            "command_guard": "True",
+        }
+        for _ in range(n)
+    ]
 
 
 def _src(code: str) -> str:
@@ -284,3 +304,109 @@ def test_assign_invariants_in_source_order_ignores_extra():
     loops = build_loop_forest(src)
     assign_invariants_in_source_order(loops, num_invariants=5)
     assert loops[0].inv_index == 0  # only the first invariant is consumed
+
+
+# ---------------------------------------------------------------------------
+# Per-loop early-return classification (direct + transitive)
+# ---------------------------------------------------------------------------
+
+
+def test_template_early_return_direct_on_single_top_level_loop():
+    src = _src("""
+        int f(int n) {
+            while (n > 0) {
+                if (n == 1) { return -1; }
+                n--;
+            }
+            return 0;
+        }
+    """)
+    templates = build_loop_templates("f", src, _mk_invs(1))
+    assert len(templates) == 1
+    t = templates[0]
+    assert t["has_early_return"] is True
+    assert t["has_early_return_in_subtree"] is True
+
+
+def test_template_no_early_return_when_loop_clean():
+    src = _src("""
+        int f(int n) {
+            while (n > 0) { n--; }
+            return 0;
+        }
+    """)
+    templates = build_loop_templates("f", src, _mk_invs(1))
+    assert templates[0]["has_early_return"] is False
+    assert templates[0]["has_early_return_in_subtree"] is False
+
+
+def test_template_inner_early_return_propagates_to_outer():
+    """If a nested loop has an early return, the enclosing loop is tainted
+    too — control physically passes through the outer to leave the
+    function.  Both must surface ``has_early_return_in_subtree=True`` even
+    though only the inner has ``has_early_return=True`` directly."""
+    src = _src("""
+        int f(int n, int m) {
+            while (n > 0) {
+                while (m > 0) {
+                    if (m == 7) { return -1; }
+                    m--;
+                }
+                n--;
+            }
+            return 0;
+        }
+    """)
+    templates = build_loop_templates("f", src, _mk_invs(2))
+    assert len(templates) == 2
+    outer = next(t for t in templates if t["parent"] is None)
+    inner = next(t for t in templates if t["parent"] is not None)
+    assert inner["has_early_return"] is True
+    assert outer["has_early_return"] is False  # outer's own body has no return
+    # …but propagation taints the outer's subtree:
+    assert inner["has_early_return_in_subtree"] is True
+    assert outer["has_early_return_in_subtree"] is True
+
+
+def test_template_sequential_top_level_loops_classified_independently():
+    """Sequential (non-nested) top-level loops don't share an enclosing
+    loop, so an early return in the first does NOT taint the second's
+    subtree.  Each top-level loop's flag stands alone."""
+    src = _src("""
+        int f(int n) {
+            while (n > 0) {
+                if (n == 1) { return -1; }
+                n--;
+            }
+            while (n < 100) { n++; }
+            return n;
+        }
+    """)
+    templates = build_loop_templates("f", src, _mk_invs(2))
+    assert len(templates) == 2
+    # Source order corresponds to template order.
+    first, second = templates
+    assert first["has_early_return_in_subtree"] is True
+    assert second["has_early_return_in_subtree"] is False
+
+
+def test_template_outer_only_early_return_no_inner():
+    """An early return in the outer loop's body — but outside the inner —
+    taints the outer but not the inner."""
+    src = _src("""
+        int f(int n, int m) {
+            while (n > 0) {
+                if (n == 3) { return -1; }
+                while (m > 0) { m--; }
+                n--;
+            }
+            return 0;
+        }
+    """)
+    templates = build_loop_templates("f", src, _mk_invs(2))
+    outer = next(t for t in templates if t["parent"] is None)
+    inner = next(t for t in templates if t["parent"] is not None)
+    assert outer["has_early_return"] is True
+    assert inner["has_early_return"] is False
+    assert outer["has_early_return_in_subtree"] is True
+    assert inner["has_early_return_in_subtree"] is False

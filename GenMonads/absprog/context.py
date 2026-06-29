@@ -934,33 +934,29 @@ def _collect_sibling_manifest_entries(
     candidate_names: set[str],
     sibling_dirs: Optional[List[str]] = None,
 ) -> List[Dict]:
-    """For each name in ``candidate_names``, if ``{name}.c`` exists as a
-    sibling in one of the search directories, parse it and return a manifest
-    entry tagged ``cross_file=True``.  Returns [] if no candidates resolve.
+    """For each name in ``candidate_names``, look up which sibling ``.c``
+    file *defines* that function (via
+    :func:`_build_sibling_function_table` — by-definition lookup, not by
+    file stem), parse that file, and return a manifest entry tagged
+    ``cross_file=True``.  Returns [] if no candidates resolve.
 
     Search directories default to ``[dirname(c_file)]``; when
     ``sibling_dirs`` is provided, those replace the default.
     """
     if not candidate_names:
         return []
-    if sibling_dirs:
-        search_dirs = [os.path.abspath(d) for d in sibling_dirs]
-    else:
-        search_dirs = [os.path.dirname(os.path.abspath(c_file))]
-    own_stem = os.path.splitext(os.path.basename(c_file))[0]
+    from GenMonads.absprog.gen_rel_lib import _build_sibling_function_table
+    function_table = _build_sibling_function_table(c_file, sibling_dirs=sibling_dirs)
     entries: List[Dict] = []
     seen: set[str] = set()
+    parsed_paths: set[str] = set()
     for name in sorted(candidate_names):
-        if name == own_stem or name in seen:
+        if name in seen:
             continue
-        sibling_path = None
-        for d in search_dirs:
-            candidate = os.path.join(d, f"{name}.c")
-            if os.path.isfile(candidate):
-                sibling_path = candidate
-                break
-        if sibling_path is None:
+        sibling_path = function_table.get(name)
+        if sibling_path is None or sibling_path in parsed_paths:
             continue
+        parsed_paths.add(sibling_path)
         try:
             sibling_result = process_and_translate_file(sibling_path, generate_guards=False)
         except Exception:

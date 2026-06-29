@@ -6,6 +6,22 @@ from .parsing.invariant import (
 from .cond.parser import parse_cond_full
 from .cond.ast import BoolNode, AtomKind
 from .parsing.invariant import ShAtom
+from .registry import COMPOSITION_RULES, _match_rule, render_composition_emit
+
+
+# Names of payload fields that hold a *spatial pointer* for each predicate
+# kind.  Single source of truth for "which payload values count as spatial
+# pointers" — used by the alias-chase classifier and the ``_render_*``
+# helpers downstream.  Adding a new predicate kind only requires extending
+# this mapping; no other code touches kind-specific knowledge.
+_KIND_POINTER_FIELDS: dict[str, tuple[str, ...]] = {
+    "root":    ("ptr",),
+    "segment": ("start", "end"),
+}
+
+
+def _pointer_payload_fields(kind: str) -> tuple[str, ...]:
+    return _KIND_POINTER_FIELDS.get(kind, ())
 
 def _normalize_ptr(name: str) -> str:
     """Normalize pointer names: strip spaces around '->' for consistent lookup.
@@ -36,22 +52,59 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
       2) Negations of atomic equalities are simplified by flipping handlers
          so '! p' renders as '<> []' instead of '~ ( = [] )'.
     """
-    # Index roots and segments; collect pointer sets for validation
+    # Index roots and segments; collect pointer sets for validation.
     roots_by_ptr: dict[str, ShAtom] = {}
     segs: list[ShAtom] = []
-    seg_ptrs: set[str] = set()
 
     for a in atoms:
         if a.spec.kind == "root":
-            ptr = a.payload.get("ptr")
+            fields = _pointer_payload_fields("root")
+            if not fields:
+                continue
+            ptr = a.payload.get(fields[0])
             if not isinstance(ptr, str):
-                raise ValueError(f"Root predicate '{a.spec.name}' must provide 'ptr' in payload")
+                raise ValueError(
+                    f"Root predicate '{a.spec.name}' must provide "
+                    f"'{fields[0]}' in payload"
+                )
             roots_by_ptr[_normalize_ptr(ptr)] = a
         elif a.spec.kind == "segment":
             segs.append(a)
-            st, ed = a.payload.get("start"), a.payload.get("end")
-            if isinstance(st, str): seg_ptrs.add(_normalize_ptr(st))
-            if isinstance(ed, str): seg_ptrs.add(_normalize_ptr(ed))
+
+    # Union of all *spatial* pointer values across every atom — used by the
+    # alias-chase below.  Kind→pointer-field mapping is centralized in
+    # ``_pointer_payload_fields`` so a new predicate kind only needs that one
+    # entry, no scattered hardcoding.
+    spatial_ptrs: set[str] = set()
+    for a in atoms:
+        for field in _pointer_payload_fields(a.spec.kind):
+            v = a.payload.get(field)
+            if isinstance(v, str):
+                spatial_ptrs.add(_normalize_ptr(v))
+
+    # ``seg_ptrs`` historically named just the segment endpoints — kept for
+    # the diagnostic in ``_render_root_null`` that says "appears only in
+    # segment predicates".
+    seg_ptrs: set[str] = set()
+    for s in segs:
+        for field in _pointer_payload_fields("segment"):
+            v = s.payload.get(field)
+            if isinstance(v, str):
+                seg_ptrs.add(_normalize_ptr(v))
+
+    # A field binding ``store(&($base->$field), $val)`` whose value ``$val``
+    # is itself a spatial pointer (start of a root, endpoint of a segment,
+    # ...) is a POINTER ALIAS, not a scalar.  Reclassify it so a field-deref
+    # guard like ``$base->$field != 0`` resolves to the aliased atom's
+    # abstract (``l <> []`` instead of an unbound name).  Data-only fields
+    # (e.g. ``x->data ↦ x_v`` where ``x_v`` is a ``Z``) stay scalar because
+    # ``x_v`` doesn't appear in any spatial predicate.
+    aliases = dict(aliases or {})
+    scalar_bindings = dict(scalar_bindings or {})
+    for k, v in list(scalar_bindings.items()):
+        if _normalize_ptr(v) in spatial_ptrs:
+            aliases.setdefault(_normalize_ptr(k), v)
+            del scalar_bindings[k]
 
     def _resolve_ptr(ptr: str) -> str:
         """Resolve a pointer name through aliases if not directly in roots/segs."""
@@ -101,6 +154,23 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
                     return base_atom.spec.to_coq_field_deref_null(
                         base_atom.payload, field, is_eq
                     )
+            # Cross-predicate composition rules (JSON-driven).  These
+            # combine two or more spatial predicates into a single guard
+            # expression — e.g. the "peeled tail" idiom
+            # ``lseg(p, q) * listrep(q)`` (segment-then-root concat),
+            # which is registered in ``data/guard_predicates.json``
+            # under ``_composition_rules.root_null``.  See
+            # :class:`CompositionRule` for the schema.
+            atoms_by_kind = {"segment": segs, "root": list(roots_by_ptr.values())}
+            for rule in COMPOSITION_RULES.get("root_null", []):
+                bindings = _match_rule(
+                    rule, atoms_by_kind,
+                    initial_bindings={"ptr": resolved},
+                    normalize_ptr=_normalize_ptr,
+                )
+                if bindings is not None:
+                    return render_composition_emit(rule, bindings, is_eq=is_eq)
+
             # Improve diagnostics depending on spatial occurrence
             if resolved in seg_ptrs:
                 raise ValueError(
@@ -121,7 +191,17 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
         reversed_match = False
         nx, ny = _resolve_ptr(x), _resolve_ptr(y)
         for seg in segs:
-            st, ed = seg.payload.get("start"), seg.payload.get("end")
+            # Pull the two endpoint payload-fields for this segment's
+            # kind from the central declaration — ``("start", "end")``
+            # for the built-in segment kind, but a future segment-like
+            # kind can name its endpoints anything as long as the entry
+            # in ``_KIND_POINTER_FIELDS`` lists them in
+            # *(first, second)* order.
+            fields = _pointer_payload_fields(seg.spec.kind)
+            if len(fields) < 2:
+                continue
+            st = seg.payload.get(fields[0])
+            ed = seg.payload.get(fields[1])
             nst = _normalize_ptr(st) if isinstance(st, str) else st
             ned = _normalize_ptr(ed) if isinstance(ed, str) else ed
             if nst == nx and ned == ny:
@@ -229,3 +309,45 @@ def gen_coq_guard(inv: str, cond: str, extra_vars: list[str] | None = None) -> s
         return f"fun {abs_names[0]} =>\n  " + body
     pat = ", ".join(abs_names)
     return "fun a =>\n  let '(" + pat + ") := a in\n  " + body
+
+
+def guard_structure(inv: str, cond: str, extra_vars: list[str] | None = None) -> dict:
+    """Expose the guard as STRUCTURE (so consumers don't re-parse the rendered
+    Coq).  Walks the same boolean AST and resolves each atom to its abstract
+    `(var, is_zero)`; returns a nested dict:
+        {op:'and'|'or', children:[…]} | {op:'not', child:…} |
+        {op:'atom', var, is_zero} | {op:'raw', text}
+    `is_zero` True ⟺ the atom is `var = []` (empty); False ⟺ `var <> []`."""
+    inv_norm = normalize_inv(inv)
+    atoms = parse_invariant(inv_norm)
+    aliases = extract_pure_aliases(inv)
+    scalars = extract_store_bindings(inv_norm)
+    ast = parse_cond_full(re.sub(r'\(\s*void\s*\*\s*\)\s*0', '0', cond))
+
+    def walk(node: BoolNode) -> dict:
+        if node.kind in ("and", "or"):
+            return {"op": node.kind, "children": [walk(node.left), walk(node.right)]}
+        if node.kind == "not":
+            sub = walk(node.child)
+            if sub.get("op") == "atom":               # ¬(var ~ []) -> flip
+                return {"op": "atom", "var": sub["var"], "is_zero": not sub["is_zero"]}
+            return {"op": "not", "child": sub}
+        s = gen_coq_from_bool(node, atoms, aliases=aliases, scalar_bindings=scalars).strip()
+        m = re.match(r"\(?\s*(\w+)\s*(<>|=)\s*\[\]\s*\)?$", s)
+        if m:
+            return {"op": "atom", "var": m.group(1), "is_zero": m.group(2) == "="}
+        return {"op": "raw", "text": s}
+
+    return walk(ast)
+
+
+def serialize_guard_structure(s: dict) -> str:
+    """Flat S-expression for the structured guard, e.g. `(or (atom l3 ne) (atom l4 ne))`."""
+    op = s["op"]
+    if op == "atom":
+        return f"(atom {s['var']} {'eq' if s['is_zero'] else 'ne'})"
+    if op in ("and", "or"):
+        return f"({op} {' '.join(serialize_guard_structure(c) for c in s['children'])})"
+    if op == "not":
+        return f"(not {serialize_guard_structure(s['child'])})"
+    return f"(raw {s.get('text', '')})"

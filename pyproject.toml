@@ -12,6 +12,7 @@ llm4pv-context = "GenMonads.absprog.context_cli:main"
 llm4pv-synth = "GenMonads.absprog.synth_cli:main"
 llm4pv-residual = "GenMonads.absprog.residual_cli:main"
 llm4pv-partition = "GenMonads.absprog.partition_cli:main"
+llm4pv-assertgen = "GenMonads.assertgen.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest"]

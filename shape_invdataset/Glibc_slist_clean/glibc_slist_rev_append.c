@@ -7,7 +7,7 @@ struct list *glibc_slist_clean_rev_append(struct list *x, struct list *y)
 {
     struct list *t;
 
-    /*@ Inv Assert undef_data_at(&t, struct list*) * listrep(x) * listrep(y)
+    /*@ Inv undef_data_at(&t, struct list*) * listrep(x) * listrep(y)
      */
     while (x != 0) {
         t = x->next;

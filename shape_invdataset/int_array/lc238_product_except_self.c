@@ -10,15 +10,17 @@ void array_product_except_self(int *a, int n, int *out)
     int prefix;
     int suffix;
     prefix = 1;
+    suffix = 0;
     i = 0;
-    /*@ Inv Assert
-        exists v_prefix v_suffix,
-        prefix == v_prefix && suffix == v_suffix &&
-        0 <= i && i <= n@pre &&
+    /*@ Inv
+        exists v_i v_prefix v_suffix,
+        0 <= v_i && v_i <= n@pre &&
         a == a@pre && out == out@pre && n == n@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
-        IntArray::seg_shape(out@pre, 0, i) *
-        IntArray::undef_seg(out@pre, i, n@pre) *
+        store(&i, int, v_i) * store(&prefix, int, v_prefix) *
+        store(&suffix, int, v_suffix) *
+        IntArray::seg_shape(out@pre, 0, v_i) *
+        IntArray::undef_seg(out@pre, v_i, n@pre) *
         IntArray::full_shape(a@pre, n@pre)
     */
     while (i < n) {
@@ -28,12 +30,13 @@ void array_product_except_self(int *a, int n, int *out)
     }
     suffix = 1;
     i = n - 1;
-    /*@ Inv Assert
-        exists v_prefix v_suffix,
-        prefix == v_prefix && suffix == v_suffix &&
-        -1 <= i && i < n@pre &&
+    /*@ Inv
+        exists v_i v_prefix v_suffix,
+        -1 <= v_i && v_i < n@pre &&
         a == a@pre && out == out@pre && n == n@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
+        store(&i, int, v_i) * store(&prefix, int, v_prefix) *
+        store(&suffix, int, v_suffix) *
         IntArray::full_shape(out@pre, n@pre) *
         IntArray::full_shape(a@pre, n@pre)
     */

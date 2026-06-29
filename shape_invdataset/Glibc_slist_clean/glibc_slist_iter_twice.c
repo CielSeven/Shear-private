@@ -2,13 +2,13 @@
 
 long glibc_slist_clean_iter_twice(struct list *x)
 /*@ Require listrep(x)
-    Ensure  listrep(x@pre)
+    Ensure  exists v, __return == v && listrep(x@pre)
  */
 {
     long sum;
 
     sum = 0;
-    /*@ Inv Assert exists s,
+    /*@ Inv exists s,
             store(&sum, long, s) *
             lseg(x@pre, x) *
             listrep(x)

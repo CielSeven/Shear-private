@@ -12,10 +12,12 @@ int array_remove_duplicates(int *a, int n)
     }
     write = 1;
     read = 1;
-    /*@ Inv Assert
-        1 <= write && write <= read && read <= n@pre &&
+    /*@ Inv
+        exists v_read v_write,
+        1 <= v_write && v_write <= v_read && v_read <= n@pre &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
+        store(&read, int, v_read) * store(&write, int, v_write) *
         IntArray::full_shape(a@pre, n@pre)
     */
     while (read < n) {

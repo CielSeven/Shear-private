@@ -43,25 +43,6 @@ def _write_json(path: str, content: Dict) -> str:
     return path
 
 
-def _replay_gold_response(example: Dict) -> str:
-    gold = example.get("gold")
-    if not gold:
-        raise ValueError("Replay backend requires an example JSON with a gold section")
-
-    components = gold.get("components", {})
-    lines = [
-        "```coq",
-        f"Definition MretTy : Type := {gold['MretTy']}.",
-        components["M_loop_before"],
-        components["M_1"],
-        components["M_2"],
-        components["M_loop_end"],
-        "```",
-        "",
-    ]
-    return "\n".join(lines)
-
-
 # Default ceiling for any single command-backend invocation (20 minutes).
 # Workdir-mode codex may iterate coqc multiple times; the legacy 10-min
 # ceiling was too tight for that flow.
@@ -79,6 +60,87 @@ class PrerequisiteError(Exception):
     loop — instead of burning every ``--max-retries`` slot on the same
     actionable error.
     """
+
+
+def _autovc_candidate_paths(
+    c_file: str, basename: str, autovc_dir: Optional[str] = None,
+) -> List[str]:
+    """Ordered list of paths to probe for the ``{base}_data_autovc.c`` file.
+
+    Symexec isn't integrated into the Python pipeline — the user runs
+    ``scripts/symexec.sh --AUTO_VC`` externally and points ``--autovc-dir``
+    at the resulting directory.  Falls back to the canonical bench-gen
+    layout (``<source_dir>/../datac/autovc/``) and the source dir itself
+    so unconfigured runs against bench-gen-shaped layouts still resolve.
+    """
+    candidates: List[str] = []
+    fname = f"{basename}_data_autovc.c"
+    if autovc_dir:
+        candidates.append(os.path.join(autovc_dir, fname))
+    src_dir = os.path.dirname(os.path.abspath(c_file))
+    parent = os.path.dirname(src_dir)
+    candidates.append(os.path.join(parent, "datac", "autovc", fname))
+    candidates.append(os.path.join(parent, "autovc", fname))
+    candidates.append(os.path.join(src_dir, fname))
+    return candidates
+
+
+def _resolve_autovc_path(
+    c_file: str, basename: str, autovc_dir: Optional[str] = None,
+) -> Optional[str]:
+    for cand in _autovc_candidate_paths(c_file, basename, autovc_dir):
+        if os.path.isfile(cand):
+            return os.path.abspath(cand)
+    return None
+
+
+def _run_segcodegen_backend(
+    context: Dict,
+    output_dir: str,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    coq_lib_dir: Optional[str] = None,
+    use_block_renderer: bool = False,
+    autovc_dir: Optional[str] = None,
+) -> str:
+    """Deterministic ``segcodegen`` synthesis backend.
+
+    Generates the rel_lib skeleton from the input C source, then fills
+    every Parameter hole via :func:`GenMonads.absprog.segcodegen.fill_template`
+    using the VC proof at ``{basename}_data_autovc.c``.  Returns the
+    filled lib text as the "response" so the rest of the pipeline can
+    parse/validate/check it identically to the codex path.
+    """
+    from GenMonads.absprog.assemble import generate_rel_lib_skeleton_for_file
+    from GenMonads.absprog.segcodegen import fill_template
+
+    c_file = context["source"]["c_file"]
+    basename = context["source"].get("file_id") or _basename_from_c_file(c_file)
+
+    effective_coq_lib_dir = coq_lib_dir or _coq_lib_dir_or_none()
+    skeleton_text = generate_rel_lib_skeleton_for_file(
+        c_file, sibling_dirs=sibling_dirs, monad=monad,
+        coq_lib_dir=effective_coq_lib_dir,
+        use_block_renderer=use_block_renderer,
+    )
+
+    autovc_path = _resolve_autovc_path(c_file, basename, autovc_dir)
+    if autovc_path is None:
+        probed = "\n  ".join(_autovc_candidate_paths(c_file, basename, autovc_dir))
+        raise PrerequisiteError(
+            "segcodegen backend requires a "
+            f"{basename}_data_autovc.c proof file.  Probed:\n  {probed}\n"
+            "Run ``scripts/symexec.sh --AUTO_VC`` against your data.c "
+            "directory and pass ``--autovc-dir`` at the resulting "
+            "autovc/ output."
+        )
+
+    try:
+        with open(autovc_path, "r", encoding="utf-8") as f:
+            autovc_text = f.read()
+        return fill_template(skeleton_text, autovc_text)
+    except Exception as exc:
+        raise ValueError(f"segcodegen.fill_template failed: {exc}") from exc
 
 
 def _run_command_backend(
@@ -294,7 +356,6 @@ def generate_candidate_response(
     context_file: str,
     output_dir: str,
     backend_response_file: str,
-    replay_from: Optional[str] = None,
     response_file: Optional[str] = None,
     command: Optional[str] = None,
     command_timeout: Optional[int] = DEFAULT_COMMAND_TIMEOUT_SECONDS,
@@ -302,19 +363,24 @@ def generate_candidate_response(
     monad: str = "staterel",
     coq_lib_dir: Optional[str] = None,
     use_block_renderer: bool = False,
+    autovc_dir: Optional[str] = None,
 ) -> str:
-    if backend == "gold-example":
-        if replay_from:
-            example = _load_json(replay_from)
-        else:
-            example = context
-        return _replay_gold_response(example)
-
     if backend == "response-file":
         if not response_file:
             raise ValueError("response-file backend requires --response-file")
         with open(response_file, "r", encoding="utf-8") as f:
             return f.read()
+
+    if backend == "segcodegen":
+        return _run_segcodegen_backend(
+            context=context,
+            output_dir=output_dir,
+            sibling_dirs=sibling_dirs,
+            monad=monad,
+            coq_lib_dir=coq_lib_dir,
+            use_block_renderer=use_block_renderer,
+            autovc_dir=autovc_dir,
+        )
 
     if backend == "command":
         # The ``command`` kwarg is retained for CLI backwards-compat but
@@ -868,12 +934,169 @@ def _build_final_summary(
     return summary
 
 
+def run_segcodegen_pipeline(
+    input_path: str,
+    coq_lib_dir: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    sibling_dirs: Optional[List[str]] = None,
+    monad: str = "staterel",
+    use_block_renderer: bool = False,
+    autovc_dir: Optional[str] = None,
+    func_name: Optional[str] = None,
+    run_check: bool = True,
+    rel_c_path: Optional[str] = None,
+    promote_rel_lib: bool = True,
+) -> Dict:
+    """Lean entry point for the deterministic segcodegen backend.
+
+    Skips the prompt / context / response artifact tree the LLM-style
+    backends rely on — segcodegen is a pure ``skeleton + autovc → filled
+    lib`` transform, so we just produce the lib and (optionally)
+    type-check it with Rocq.  No ``--synth-output-dir`` is required.
+
+    Writes the assembled lib to ``output_dir`` when supplied, then
+    promotes it to ``coq_lib_dir`` (the canonical location other libs
+    ``Require Import`` from).  When ``output_dir`` is omitted the lib is
+    written straight to ``coq_lib_dir``.
+
+    Returns a minimal summary dict: ``status`` / ``coq_lib_path`` /
+    ``check`` / ``failure_message`` so callers (and tests) can branch on
+    success without parsing a per-attempt tree.
+    """
+    from GenMonads.absprog.assemble import generate_rel_lib_skeleton_for_file
+    from GenMonads.absprog.context import collect_all_synthesis_contexts
+    from GenMonads.absprog.segcodegen import fill_template
+
+    if not os.path.isfile(input_path):
+        raise ValueError(f"input C file not found: {input_path}")
+
+    # Discover the function(s) in the file via the existing context
+    # collector — it picks the right func_name, finds the file_id, and
+    # respects multi-function .c layouts.  We don't keep the full
+    # context; only its ``id`` / ``c_file``.
+    contexts = collect_all_synthesis_contexts(input_path, sibling_dirs=sibling_dirs)
+    if func_name is not None:
+        contexts = [c for c in contexts if c.get("function") == func_name]
+    if not contexts:
+        return {
+            "status": "skipped",
+            "reason": "no synthesizable function",
+            "input_path": input_path,
+        }
+
+    effective_coq_lib_dir = coq_lib_dir or _coq_lib_dir_or_none()
+    write_dir = output_dir or effective_coq_lib_dir
+    if write_dir is None:
+        raise ValueError(
+            "run_segcodegen_pipeline needs either --coq-lib-dir or "
+            "output_dir to know where to write the filled lib."
+        )
+    os.makedirs(write_dir, exist_ok=True)
+
+    summaries: List[Dict] = []
+    for context in contexts:
+        c_file = context["source"]["c_file"]
+        basename = context["source"].get("file_id") or _basename_from_c_file(c_file)
+        context_id = context["id"]
+        summary: Dict = {
+            "context_id": context_id,
+            "input_path": c_file,
+            "backend": "segcodegen",
+            "status": "failed",
+        }
+
+        try:
+            skeleton_text = generate_rel_lib_skeleton_for_file(
+                c_file, sibling_dirs=sibling_dirs, monad=monad,
+                coq_lib_dir=effective_coq_lib_dir,
+                use_block_renderer=use_block_renderer,
+            )
+        except Exception as exc:
+            summary["failure_kind"] = "skeleton"
+            summary["failure_message"] = str(exc)
+            summaries.append(summary)
+            continue
+
+        autovc_path = _resolve_autovc_path(c_file, basename, autovc_dir)
+        if autovc_path is None:
+            probed = "\n  ".join(_autovc_candidate_paths(c_file, basename, autovc_dir))
+            summary["failure_kind"] = "prerequisite"
+            summary["failure_message"] = (
+                f"missing {basename}_data_autovc.c.  Probed:\n  {probed}"
+            )
+            summaries.append(summary)
+            continue
+
+        try:
+            with open(autovc_path, "r", encoding="utf-8") as f:
+                autovc_text = f.read()
+            filled_text = fill_template(skeleton_text, autovc_text)
+        except Exception as exc:
+            summary["failure_kind"] = "fill"
+            summary["failure_message"] = str(exc)
+            summaries.append(summary)
+            continue
+
+        # The rel_lib template is keyed off the C file's basename
+        # (stage 2 writes ``{basename}_rel_lib.v``), so the filled lib
+        # must overwrite that path — not ``{context_id}_rel_lib.v``,
+        # which is the function name and differs from the file stem
+        # when the function name includes an infix (e.g. file
+        # ``glibc_slist_multi_rev.c`` defines function
+        # ``glibc_slist_clean_multi_rev``).
+        lib_path = os.path.join(write_dir, f"{basename}_rel_lib.v")
+        with open(lib_path, "w", encoding="utf-8") as f:
+            f.write(filled_text)
+        summary["assembled_rel_lib"] = lib_path
+        summary["status"] = "assembled"
+
+        if run_check:
+            check_result = check_rocq_file(lib_path)
+            summary["check"] = check_result
+            if check_result.get("passed"):
+                summary["status"] = "passed"
+
+        if promote_rel_lib and summary["status"] in ("passed", "assembled"):
+            # Only promote when the lib was written elsewhere — otherwise
+            # we'd copy ``coq_lib_dir/foo.v`` over itself.  Promote
+            # under the file's basename (matches what stage 2 wrote)
+            # rather than the function name; see ``lib_path`` above.
+            if effective_coq_lib_dir and os.path.abspath(write_dir) != os.path.abspath(effective_coq_lib_dir):
+                promoted = _promote_rel_lib_if_accepted(
+                    lib_path, basename, summary["status"], coq_lib_dir=effective_coq_lib_dir,
+                )
+                if promoted:
+                    summary["coq_lib_path"] = promoted
+            else:
+                # Already at the canonical location.
+                summary["coq_lib_path"] = lib_path
+
+        # rel.c patching is best-effort and is exercised by the
+        # LLM-style pipeline; for segcodegen the lib promotion above
+        # already gives the rel.c what it needs (the lib symbols
+        # become available via ``Require Import``).  Skip the patch
+        # step entirely.
+
+        summaries.append(summary)
+
+    if len(summaries) == 1:
+        return summaries[0]
+    return {
+        "input_path": input_path,
+        "backend": "segcodegen",
+        "results": summaries,
+        "status": (
+            "passed" if all(s.get("status") == "passed" for s in summaries)
+            else ("assembled" if any(s.get("status") in ("passed", "assembled") for s in summaries) else "failed")
+        ),
+    }
+
+
 def run_synthesis_pipeline(
     input_path: str,
     output_dir: str,
     func_name: Optional[str] = None,
-    backend: str = "gold-example",
-    replay_from: Optional[str] = None,
+    backend: str = "segcodegen",
     response_file: Optional[str] = None,
     command: Optional[str] = None,
     few_shot_paths: Optional[List[str]] = None,
@@ -886,6 +1109,7 @@ def run_synthesis_pipeline(
     monad: str = "staterel",
     coq_lib_dir: Optional[str] = None,
     use_block_renderer: bool = False,
+    autovc_dir: Optional[str] = None,
 ) -> Dict:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -971,7 +1195,6 @@ def run_synthesis_pipeline(
                 # per-attempt one.
                 output_dir=output_dir,
                 backend_response_file=backend_response_file,
-                replay_from=replay_from,
                 response_file=response_file,
                 command=command,
                 command_timeout=command_timeout,
@@ -979,6 +1202,7 @@ def run_synthesis_pipeline(
                 monad=monad,
                 coq_lib_dir=coq_lib_dir,
                 use_block_renderer=use_block_renderer,
+                autovc_dir=autovc_dir,
             )
         except PrerequisiteError as exc:
             # Pre-spawn environment failure — codex missing, _CoqProject

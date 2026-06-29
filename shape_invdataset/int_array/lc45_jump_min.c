@@ -1,10 +1,9 @@
 #include "int_array_def.h"
 
 int array_jump_min_steps(int *a, int n)
-/*@ With l
-    Require 0 <= n && n < 1000000 && IntArray::full(a, n, l) &&
-            (forall (k: Z), (0 <= k && k < n) => 0 <= l[k] && l[k] <= n)
-    Ensure IntArray::full(a, n, l)
+/*@
+    Require 0 <= n && n < 1000000 && IntArray::full_shape(a, n)
+    Ensure IntArray::full_shape(a, n)
 */
 {
     int i;
@@ -18,17 +17,17 @@ int array_jump_min_steps(int *a, int n)
     current_end = 0;
     farthest = 0;
     i = 0;
-    /*@ Inv Assert
-        exists v_jumps v_current_end v_farthest,
-        jumps == v_jumps && current_end == v_current_end && farthest == v_farthest &&
-        0 <= i && i <= n@pre - 1 &&
+    /*@ Inv
+        exists v_i v_jumps v_current_end v_farthest,
+        0 <= v_i && v_i <= n@pre - 1 &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < 1000000 &&
         0 <= v_jumps && v_jumps <= n@pre &&
-        0 <= v_current_end && v_current_end <= 2 * n@pre &&
-        0 <= v_farthest && v_farthest <= 2 * n@pre &&
-        (forall (k: Z), (0 <= k && k < n@pre) => 0 <= l[k] && l[k] <= n@pre) &&
-        IntArray::full(a@pre, n@pre, l)
+        0 <= v_current_end && v_current_end <= n@pre + n@pre &&
+        0 <= v_farthest && v_farthest <= n@pre + n@pre &&
+        store(&i, int, v_i) * store(&jumps, int, v_jumps) *
+        store(&current_end, int, v_current_end) * store(&farthest, int, v_farthest) *
+        IntArray::full_shape(a@pre, n@pre)
     */
     while (i < n - 1) {
         if (i + a[i] > farthest) {

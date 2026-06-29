@@ -1,10 +1,9 @@
 #include "int_array_def.h"
 
 int array_max_subarray(int *a, int n)
-/*@ With l
-    Require 0 <= n && n < 1000 && IntArray::full(a, n, l) &&
-            (forall (k: Z), (0 <= k && k < n) => -1000 <= l[k] && l[k] <= 1000)
-    Ensure IntArray::full(a, n, l)
+/*@
+    Require 0 <= n && n < 1000 && IntArray::full_shape(a, n)
+    Ensure IntArray::full_shape(a, n)
 */
 {
     int i;
@@ -16,16 +15,16 @@ int array_max_subarray(int *a, int n)
     best = a[0];
     current = a[0];
     i = 1;
-    /*@ Inv Assert
-        exists v_best v_current,
-        best == v_best && current == v_current &&
-        1 <= i && i <= n@pre &&
+    /*@ Inv
+        exists v_i v_best v_current,
+        1 <= v_i && v_i <= n@pre &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < 1000 &&
-        -1000000 <= v_current && v_current <= 1000000 &&
-        -1000000 <= v_best && v_best <= 1000000 &&
-        (forall (k: Z), (0 <= k && k < n@pre) => -1000 <= l[k] && l[k] <= 1000) &&
-        IntArray::full(a@pre, n@pre, l)
+        0 - 1000000 <= v_current && v_current <= 1000000 &&
+        0 - 1000000 <= v_best && v_best <= 1000000 &&
+        store(&i, int, v_i) * store(&best, int, v_best) *
+        store(&current, int, v_current) *
+        IntArray::full_shape(a@pre, n@pre)
     */
     while (i < n) {
         if (current < 0) {

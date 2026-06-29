@@ -15,6 +15,14 @@
       "list Z"
     ]
   },
+  "listboxseg": {
+    "data_name": "sllbseg",
+    "shape_arity": 2,
+    "data_arity": 1,
+    "data_var_types": [
+      "list Z"
+    ]
+  },
   "dlistrep_shape": {
     "data_name": "dlistrep",
     "shape_arity": 2,

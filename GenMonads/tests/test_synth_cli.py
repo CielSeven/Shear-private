@@ -39,6 +39,10 @@ def test_synth_cli_accepts_alias_flags_for_single_input(monkeypatch, tmp_path, c
         f"--OUTPUT_PATH={output_dir}",
         "--max-retries=2",
         "--no-check",
+        # Force LLM-style pipeline; segcodegen (the default) routes
+        # through ``run_segcodegen_pipeline`` and bypasses the mocked
+        # ``run_synthesis_pipeline``.
+        "--backend=command",
     ])
 
     synth_cli.main()
@@ -72,6 +76,10 @@ def test_synth_cli_accepts_file_alias_for_single_input(monkeypatch, tmp_path, ca
         "llm4pv-synth",
         f"--FILE={c_file}",
         f"--OUTPUT_PATH={output_dir}",
+        # Force the LLM-style pipeline so the mocked
+        # ``run_synthesis_pipeline`` is exercised; default is now segcodegen,
+        # which routes through ``run_segcodegen_pipeline`` instead.
+        "--backend=command",
     ])
 
     synth_cli.main()
@@ -116,6 +124,7 @@ def test_synth_cli_directory_mode_uses_exclude_and_contexts(monkeypatch, tmp_pat
         f"--C_DIR={input_dir}",
         f"--OUTPUT_PATH={output_dir}",
         "--exclude=alpha.c",
+        "--backend=command",
     ])
 
     try:
@@ -178,6 +187,7 @@ def test_synth_cli_directory_mode_parallelizes_per_c_file(monkeypatch, tmp_path,
         f"--C_DIR={input_dir}",
         f"--OUTPUT_PATH={output_dir}",
         "--jobs=2",
+        "--backend=command",
     ])
 
     try:
@@ -208,6 +218,10 @@ def test_synth_cli_reports_precise_missing_output_error(monkeypatch, tmp_path, c
         [
             "llm4pv-synth",
             f"--FILE={c_file}",
+            # Force the LLM-style path — segcodegen (the default) doesn't
+            # require ``--OUTPUT_PATH`` because it writes straight into
+            # ``--coq-lib-dir``.
+            "--backend=command",
         ],
     )
 

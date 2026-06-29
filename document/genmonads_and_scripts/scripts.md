@@ -18,10 +18,9 @@ Several shell scripts share the same conventions:
 | `check_rocq.sh` | Bash | Check generated `_rel_lib.v` files with `coqc` | Loads `COQ_LIB_DIR` from `CONFIGURE`, finds the nearest `_CoqProject`, expands its flags, then compiles either one file or every `*_rel_lib.v` in the library directory |
 | `clean_rel.sh` | Bash | Remove generated translated C files | Loads defaults from `CONFIGURE`; supports configured source-directory cleanup, single-file cleanup via `FILE`, explicit source-directory cleanup via `C_DIR`, and full-tree cleanup via `ALL` |
 | `clean_rocq.sh` | Bash | Remove Rocq build artifacts | Deletes `.vo`, `.vok`, `.vos`, and `.glob` files from `COQ_LIB_DIR` |
-| `clean_symexec.sh` | Bash | Remove symbolic-execution outputs and logs | Deletes log and proof artifacts matching either a selected file or every `.c` file in `C_DIR` |
 | `extract_and_normalize_assertions.py` | Python | Extract and normalize assertion blocks from log files | Finds `"Assertion normal"` blocks after while-loop unrolling, normalizes generated variable names, strips log noise, and writes `.normalized.txt` outputs |
 | `loopinv_c.sh` | Bash | Batch-run a loop-invariant tool over C files | Calls the configured `LOOPINV` executable for each `.c` file and produces log, goal, auto-proof, and manual-proof files |
-| `symexec.sh` | Bash | Batch-run a symbolic executor over C files | Calls the configured `SYMEXEC` executable for one file or a whole directory and writes log and generated proof artifacts |
+| `symexec.sh` | Bash | Run or clean symbolic-execution artifacts | Calls the configured `SYMEXEC` executable for one file or a whole directory; `--clean` removes matching generated logs and proof artifacts |
 
 ## Suggested Usage Order
 
@@ -32,7 +31,7 @@ For the common translation and verification workflow, use the commands in this o
 3. translation via the Python package in `GenMonads/`
 4. `_rel_lib.v` generation via `GenMonads/absprog/cli.py`
 5. `check_rocq.sh`
-6. cleanup with `clean_rel.sh`, `clean_rocq.sh`, or `clean_symexec.sh` as needed
+6. cleanup with `clean_rel.sh`, `clean_rocq.sh`, or `symexec.sh --clean` as needed
 
 ## Workflow Details
 
@@ -52,7 +51,8 @@ Behavior:
 - `SYMEXEC_INCLUDE_DIRS` is a colon-separated list of include directories
 - `SYMEXEC_STRATEGY_PATHS` is a colon-separated list of `physical_path,rocq_logic_path` pairs
 - `FULL_AUTO` accepts common boolean values such as `true`, `false`, `1`, `0`, `yes`, and `no`
-- Produces `${base}_goal.v`, `${base}_auto.v`, `${base}_manual.v`, and matching logs
+- Produces `${base}_goal.v`, `${base}_proof_auto.v`, `${base}_proof_manual.v`, and matching logs
+- `--clean` removes `${base}_log.txt`, `${base}_goal.v`, `${base}_proof_auto.v`, `${base}_proof_manual.v`, and `${base}_goal_check.v`
 - Uses the same argument shape as `loopinv_c.sh`, which keeps the workflows parallel
 
 Example commands:
@@ -65,6 +65,8 @@ scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c --SYMEXEC_INCLUDE_DI
 scripts/symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c --SYMEXEC_STRATEGY_PATHS=/Users/cielseven/Projects/RHLProjects/EncRelTheory-Private/QCP/QCP_examples,SimpleC.EE
 scripts/symexec.sh --C_DIR=./output/gen/rel/sll --OUTPUT_PATH=./output/gen/vcs/ --LOGDIR=./output/gen/logs/
 scripts/symexec.sh --C_DIR=./shape_invdataset/dll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
+scripts/symexec.sh --clean
+scripts/symexec.sh --clean --FILE=./shape_invdataset/sll/sll_copy.c
 ```
 
 Useful when:
@@ -333,28 +335,3 @@ scripts/clean_rocq.sh --COQ_LIB_DIR=/path/to/lib
 
 Useful when:
 - Rocq outputs are stale and you want a clean recompilation
-
-### 6. `clean_symexec.sh`
-
-Primary role:
-- Delete symbolic-execution logs and generated proof files.
-
-Inputs:
-- `C_DIR`, `LOGDIR`, `OUTPUT_PATH`, and optional `FILE`
-
-Behavior:
-- Matches each source `.c` file by basename
-- Removes `${base}_log.txt`, `${base}_goal.v`, `${base}_auto.v`, `${base}_manual.v`, and `${base}_goal_check.v`
-- Can clean a single file’s artifacts or a whole directory’s artifacts
-
-Example commands:
-
-```bash
-scripts/clean_symexec.sh
-scripts/clean_symexec.sh --C_DIR=./shape_invdataset/sll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
-scripts/clean_symexec.sh --FILE=./shape_invdataset/sll/sll_copy.c
-scripts/clean_symexec.sh --C_DIR=./output/shape/rel/sll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
-```
-
-Useful when:
-- Re-running symbolic execution and wanting to avoid mixing old and new logs

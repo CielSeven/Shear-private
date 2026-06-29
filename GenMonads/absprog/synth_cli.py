@@ -69,7 +69,6 @@ def _run_batch_for_file(c_file: str, output_dir: str, args):
                 output_dir=target_dir,
                 func_name=func_name,
                 backend=args.backend,
-                replay_from=args.replay_from,
                 response_file=args.response_file,
                 command=args.command,
                 few_shot_paths=args.few_shot,
@@ -80,6 +79,7 @@ def _run_batch_for_file(c_file: str, output_dir: str, args):
                 monad=args.monad,
                 coq_lib_dir=args.coq_lib_dir,
                 use_block_renderer=args.use_block_renderer,
+                autovc_dir=args.autovc_dir,
             )
         except Exception as exc:
             stderr_lines.append(f"Failed: {context['id']} ({exc})")
@@ -148,13 +148,24 @@ def main() -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=["gold-example", "response-file", "command"],
-        default="gold-example",
-        help="Generation backend",
+        choices=["response-file", "command", "segcodegen"],
+        default="segcodegen",
+        help=(
+            "Generation backend.  Default ``segcodegen`` is the "
+            "deterministic VC-driven filler (no LLM needed); "
+            "``command`` invokes codex in workdir mode; "
+            "``response-file`` replays a pre-recorded LLM response."
+        ),
     )
     parser.add_argument(
-        "--replay-from",
-        help="Auto-example JSON to replay when using the gold-example backend",
+        "--autovc-dir",
+        default=None,
+        help=(
+            "Directory containing ``{base}_data_autovc.c`` proof files "
+            "(the output of ``scripts/symexec.sh --AUTO_VC``).  Required "
+            "by the segcodegen backend.  Falls back to the canonical "
+            "``<source>/../datac/autovc/`` layout used by bench-gen."
+        ),
     )
     parser.add_argument(
         "--response-file",
@@ -258,6 +269,57 @@ def main() -> None:
         help="Number of C-file workers to run in parallel in directory mode",
     )
     args = parser.parse_args()
+
+    # ------------------------------------------------------------------
+    # Fast path: segcodegen is a pure ``skeleton + autovc → filled lib``
+    # transform — no prompts, no contexts, no per-attempt tree.  We don't
+    # need ``--OUTPUT_PATH`` at all (the lib goes straight into
+    # ``--coq-lib-dir``).  Bypass ``_resolve_io`` and the LLM scaffolding.
+    # ------------------------------------------------------------------
+    if args.backend == "segcodegen":
+        from GenMonads.absprog.synthesize import run_segcodegen_pipeline
+        input_path = resolve_cli_value(
+            args, parser, "input", ("file_path", "c_dir"),
+            "Provide an input C file via positional input, --FILE, or --C_DIR.",
+            is_path=True,
+        )
+        rc = 0
+        c_files = (
+            [os.path.join(input_path, f) for f in sorted(os.listdir(input_path))
+             if f.endswith(".c")]
+            if os.path.isdir(input_path) else [input_path]
+        )
+        for c_file in c_files:
+            try:
+                summary = run_segcodegen_pipeline(
+                    input_path=c_file,
+                    coq_lib_dir=args.coq_lib_dir,
+                    output_dir=args.output_path or None,
+                    sibling_dirs=(args.sibling_dir or None),
+                    monad=args.monad,
+                    use_block_renderer=args.use_block_renderer,
+                    autovc_dir=args.autovc_dir,
+                    func_name=args.func_name,
+                    run_check=not args.no_check,
+                    rel_c_path=args.rel_c_path if args.patch_rel_c else None,
+                )
+            except Exception as exc:
+                print(f"segcodegen failed for {c_file}: {exc}", file=sys.stderr)
+                rc = 1
+                continue
+            results = summary.get("results", [summary])
+            for r in results:
+                status = r.get("status", "failed")
+                ctx_id = r.get("context_id", os.path.basename(c_file))
+                if status in ("passed", "assembled"):
+                    msg = r.get("coq_lib_path") or r.get("assembled_rel_lib") or ""
+                    print(f"{status}: {ctx_id} → {msg}")
+                else:
+                    fail = r.get("failure_message", "(no message)")
+                    print(f"FAILED: {ctx_id} — {fail}", file=sys.stderr)
+                    rc = 1
+        sys.exit(rc)
+
     input_path, output_dir = _resolve_io(args, parser)
 
     if args.patch_rel_c and not args.rel_c_path:
@@ -302,8 +364,7 @@ def main() -> None:
                         output_dir=target_dir,
                         func_name=func_name,
                         backend=args.backend,
-                        replay_from=args.replay_from,
-                        response_file=args.response_file,
+                                response_file=args.response_file,
                         command=args.command,
                         few_shot_paths=args.few_shot,
                         run_check=not args.no_check,
@@ -314,6 +375,7 @@ def main() -> None:
                         monad=args.monad,
                         coq_lib_dir=args.coq_lib_dir,
                         use_block_renderer=args.use_block_renderer,
+                        autovc_dir=args.autovc_dir,
                     )
                 except Exception as exc:
                     print(f"Failed: {context['id']} ({exc})", file=sys.stderr)
@@ -381,7 +443,6 @@ def main() -> None:
             output_dir=output_dir,
             func_name=args.func_name,
             backend=args.backend,
-            replay_from=args.replay_from,
             response_file=args.response_file,
             command=args.command,
             few_shot_paths=args.few_shot,
@@ -393,6 +454,7 @@ def main() -> None:
             monad=args.monad,
             coq_lib_dir=args.coq_lib_dir,
             use_block_renderer=args.use_block_renderer,
+            autovc_dir=args.autovc_dir,
         )
     except Exception as exc:
         print(str(exc), file=sys.stderr)

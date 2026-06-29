@@ -11,9 +11,6 @@ import pytest
 from GenMonads.addabstract import (
     add_safeexec_predicate,
     add_safeexec_to_assertion,
-    add_with_parameter,
-    add_safeexec_to_require,
-    add_safeexec_to_ensure,
     process_funcspec_with_safeexec,
 )
 from GenMonads.transshape.process_and_translate import process_and_translate_file
@@ -132,105 +129,6 @@ class TestLoopInvariantSafeExec:
 # ============================================================================
 
 class TestFuncSpecSafeExec:
-    def test_add_with_parameter_no_existing(self):
-        funcspec = {
-            'with': None,
-            'require': {'translated': 'sll(x, ?l1)', 'variables': ['?l1']},
-            'ensure': {'translated': 'sll(__return, ?l2) * sll(x, ?l3)', 'variables': ['?l2', '?l3']}
-        }
-        result = add_with_parameter(funcspec, "X")
-        assert result['with']['original'] is None
-        assert result['with']['translated'] == 'X'
-
-    def test_add_with_parameter_existing(self):
-        funcspec = {
-            'with': {'original': 'l', 'translated': 'l'},
-            'require': {'translated': 'sll(x, l)', 'variables': []},
-            'ensure': {'translated': 'sll(__return, ?l1) * sll(x, l)', 'variables': ['?l1']}
-        }
-        result = add_with_parameter(funcspec, "X")
-        assert result['with']['original'] == 'l'
-        assert result['with']['translated'] == 'l X'
-
-    def test_add_safeexec_to_require_basic(self):
-        result = add_safeexec_to_require("sll(x, ?l1)", ['?l1'], "sll_copy_M")
-        assert result == "exists l1, safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)"
-
-    def test_add_safeexec_to_require_multiple_vars(self):
-        result = add_safeexec_to_require("sll(x, ?l1) * sll(y, ?l2)", ['?l1', '?l2'], "sll_append_M")
-        assert "exists l1 l2, safeExec(ATrue, sll_append_M(l1, l2), X)" in result
-
-    def test_add_safeexec_to_ensure_basic(self):
-        result = add_safeexec_to_ensure("sll(__return, ?l2) * sll(x, ?l3)", ['?l2', '?l3'])
-        assert result == "exists l2 l3, safeExec(ATrue, return(maketuple(l2, l3)), X) && sll(__return, l2) * sll(x, l3)"
-
-    def test_add_safeexec_to_ensure_single_var(self):
-        result = add_safeexec_to_ensure("sll(__return, ?l1)", ['?l1'])
-        assert "exists l1, safeExec(ATrue, return(l1), X)" in result
-
-    def test_add_safeexec_to_ensure_no_vars_uses_return_tt(self):
-        # When there are no Ensure-only variables AND the return type is
-        # void (or implicitly unit), the abstract program return type is
-        # `unit`, so the call must be `return(tt)` (not bare `return`).
-        result = add_safeexec_to_ensure("emp", [], return_type="void")
-        assert result == "safeExec(ATrue, return(tt), X) && emp"
-
-    def test_add_safeexec_to_ensure_synthesizes_return_witness_for_non_void(self):
-        # Function has non-void return type but the original Ensure has no
-        # __return predicate.  We synthesize a witness `r` so the abstract
-        # program return value is observable.
-        result = add_safeexec_to_ensure(
-            "sll(x@pre, ?l2)", ['?l2'], return_type="long"
-        )
-        assert result == (
-            "exists l2 r, safeExec(ATrue, return(maketuple(l2, r)), X) "
-            "&& __return == r && sll(x@pre, l2)"
-        )
-
-    def test_add_safeexec_to_ensure_no_witness_when_return_already_used(self):
-        # Existing __return predicate ⇒ no synthetic witness needed.
-        result = add_safeexec_to_ensure(
-            "sll(__return, ?l2)", ['?l2'], return_type="struct list *"
-        )
-        assert result == (
-            "exists l2, safeExec(ATrue, return(l2), X) && sll(__return, l2)"
-        )
-
-    def test_add_safeexec_to_ensure_witness_with_no_other_vars(self):
-        # No predicate variables, non-void return type, no __return.
-        result = add_safeexec_to_ensure("emp", [], return_type="long")
-        assert result == (
-            "exists r, safeExec(ATrue, return(r), X) && __return == r && emp"
-        )
-
-    def test_add_safeexec_to_ensure_pointer_return_is_not_void(self):
-        # `void *` returns are not void — they still produce a value.
-        result = add_safeexec_to_ensure("emp", [], return_type="void *")
-        assert "return(r)" in result
-        assert "__return == r" in result
-
-    def test_add_safeexec_to_ensure_lifts_data_witness_from_ensure(self):
-        # The original Ensure has ``exists d, __return -> data == d``.  Since
-        # ``data`` is a configured data field and ``d`` is a pre-existing
-        # existential, ``d`` is a data witness: it must be lifted into the
-        # outer ``exists``, threaded into ``return(maketuple(...))``, and the
-        # inner ``exists d, ...`` stripped.
-        translated = (
-            "exists d, __return != 0 && __return -> next == 0 && "
-            "__return -> data == d && sllseg(x, __return, ?l2)"
-        )
-        result = add_safeexec_to_ensure(
-            translated,
-            ['?l2'],
-            return_type="struct list *",
-            data_witnesses=['d'],
-        )
-        assert result == (
-            "exists l2 d, safeExec(ATrue, return(maketuple(l2, d)), X) "
-            "&& __return != 0 && __return -> next == 0 && "
-            "__return -> data == d && sllseg(x, __return, l2)"
-        )
-
     def test_process_funcspec_complete(self):
         funcspec = {
             'with': None,

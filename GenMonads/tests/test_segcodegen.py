@@ -2,6 +2,8 @@
 
 import re
 
+import pytest
+
 from GenMonads.absprog.segcodegen import fill_template
 from GenMonads.absprog.segcodegen.terms import (
     Op, Var, collect_var_types, parse_term, render,
@@ -525,6 +527,7 @@ def test_chained_calls_first_result_not_leaked():
 
 # --- region classification & loop-exit selection (early-return prelude) ------
 from GenMonads.absprog.segcodegen import regions
+from GenMonads.absprog.segcodegen.vcparse import VCBlock
 
 EARLY_AUTOVC = '''
 struct list *f(struct list *x, struct list *y)
@@ -617,13 +620,28 @@ def test_region_classification():
 
 
 def test_parse_guard():
-    assert regions.parse_guard("(*@ guard-struct: (atom l3 ne) @*)") == ("l3", "ne")
+    # a guard is a disjunction of atoms (single atom -> singleton list)
+    assert regions.parse_guard("(*@ guard-struct: (atom l3 ne) @*)") == [("l3", "ne")]
+    assert regions.parse_guard(
+        "(*@ guard-struct: (or (atom l3 ne) (atom l4 ne)) @*)"
+    ) == [("l3", "ne"), ("l4", "ne")]
     assert regions.parse_guard("no guard here") is None
+
+
+def test_guard_is_false_disjunction():
+    # the disjunctive guard is false only when BOTH atoms are pinned empty
+    both = VCBlock(name="f_return_wit", kind="return",
+                   leftover_props=["l3_1 == nil(Z)", "l4_1 == nil(Z)"])
+    one = VCBlock(name="f_return_wit", kind="return",
+                  leftover_props=["l3_1 == nil(Z)"])
+    guard = [("l3", "ne"), ("l4", "ne")]
+    assert regions.guard_is_false(both, guard)
+    assert not regions.guard_is_false(one, guard)
 
 
 def test_select_end_return_picks_loop_exit():
     blocks = parse_blocks(EARLY_AUTOVC)
-    guard = ("l3", "ne")
+    guard = [("l3", "ne")]
     end = regions.select_end_return(blocks, guard)
     # the loop-exit return (guard false: l3 == nil), NOT the before-loop early
     # return (return_wit_3) nor the in-loop early return (return_wit_2)
@@ -901,3 +919,272 @@ def test_eliminate_local_witness_merged_and_classified_scalar():
     # and it now classifies as a witness (add -> scalar result)
     assert _witness.refine(["s", "l1", "l2"], [b], "(list Z * list Z * Z)") == \
         ["l1", "l2", "s"]
+
+
+# --- Z flag witness: scalar classification from an int store type -------------
+from GenMonads.absprog.segcodegen import synth as _synth
+from GenMonads.absprog.segcodegen.vcparse import scalar_witness_bases
+from GenMonads.absprog.segcodegen.template import parse_template, Hole
+
+
+def test_scalar_witness_bases_from_int_store():
+    text = ("store(&take_y, int, ty) * store(&sum, long, s) * "
+            "store(&stop, struct list*, st)")
+    # int/long stores carry scalars; a `struct list*` store carries a pointer
+    assert scalar_witness_bases(text) == {"ty", "s"}
+
+
+def test_refine_flag_witness_via_store_type_orders_last():
+    # `ty` is mapped only to a literal (no operator/type evidence), but it is a
+    # scalar by its int store -> it must land in the trailing Z slot
+    b = _mkblk("f_entail_wit_1", [("ty_4", "1"), ("l1_4", "nil(Z)")])
+    assert _witness.refine(["ty", "l1"], [b], "(list Z * Z)", {"ty"}) == ["l1", "ty"]
+
+
+# --- multi-result calls: destructure the callee's tuple result with a pattern -
+def test_multi_result_call_destructures_components():
+    fc = _VCBlock(name="f_funccall_wit_1", kind="funccall", call_target="g")
+    fc.post_exists = ["p_1", "e_2", "ptr_3"]          # list, elem, pointer
+    fc.with_instantiation = {"a_1": "l1_9"}
+    vc = _VCBlock(name="f_return_wit_1", kind="return")
+    vc.exist_mapping = [_Mapping("l2_1", "app(Z, p_1, cons(Z, e_2, nil(Z)))")]
+    _binder, binds, ret = _synth.synth_parts(vc, [fc], ["l1"], ["l2"])
+    joined = " ".join(binds + [ret])
+    assert joined.count("g_M") == 1                     # one call, not twice
+    # the tuple result is destructured with a pattern bind (no fst/snd)
+    assert "'(r, r0) <- g_M l1" in _norm(joined)
+    assert "fst" not in joined and "snd" not in joined
+    assert _norm(ret) == "return (r ++ (r0 :: nil))"
+
+
+# --- choice over >=3 arms must parenthesize the nested choice -----------------
+def test_choice_chain_parenthesizes_nested():
+    arms = [(["a;;"], "return x"), (["b;;"], "return y"), (["c;;"], "return z")]
+    text = "\n".join(_synth._choice_lines(arms, ""))
+    assert text.count("choice") == 2                    # two binary choices for 3 arms
+    assert text.count("(") == text.count(")")           # balanced (nested wrapped)
+
+
+# --- no-loop early-return shape: M_before / M_normal --------------------------
+NOLOOP_TEMPLATE = '''Parameter MretTy : Type.
+Parameter ap_M_before : list Z -> list Z -> MONAD (early_result MretTy (list Z)).
+Parameter ap_M_normal : MretTy -> MONAD (list Z).
+Definition ap_M : list Z -> list Z -> MONAD (list Z) := fun l1 l2 => return l1.
+'''
+
+NOLOOP_AUTOVC = '''
+struct list *ap(struct list *x, struct list *y)
+/*@
+    With l1 l2
+    Require sll(x, l1) * sll(y, l2)
+    Ensure exists l3, sll(__return, l3)
+ */
+{
+    if (x == 0) { return y;
+/* !!!
+VC: ap_return_wit_2
+Precondition existentials (in context for this VC):
+  l1_2_free
+  l2_1_free
+Separation-logic state (antecedent P):
+SEP[
+ sll(x_3_pre, l1_2_free);
+ sll(y_4_pre, l2_1_free) ]
+NestedSolver first solve exist_mapping:
+l3_5 -> l2_1_free
+Leftover left Props after solve:
+PROP[
+ l1_2_free == nil(Z);
+ x_3_pre == (Ez_val 0) ]
+!!! */
+    }
+    tail = lt(x);
+/* !!!
+VC: ap_funccall_wit_1   (call to lt)
+Callee With-variable instantiation:
+  a_9_free -> l1_2_free
+Postcondition existentials introduced:
+  p_10
+  e_11
+  rn_12
+  rv_13
+Residual side-condition (partial solve) exist_mapping:
+(empty)
+!!! */
+    return x;
+/* !!!
+VC: ap_return_wit_1
+Precondition existentials (in context for this VC):
+  e_11
+  p_10
+  l2_1_free
+Separation-logic state (antecedent P):
+SEP[
+ sllseg(x_3_pre, rv_13, p_10);
+ sll(y_4_pre, l2_1_free) ]
+NestedSolver first solve exist_mapping:
+l3_5 -> app(Z, p_10, cons(Z, e_11, l2_1_free))
+    [p_10: from call to lt]
+    [e_11: from call to lt]
+Leftover left Props after solve:
+PROP[
+ x_3_pre != (Ez_val 0) ]
+!!! */
+}
+'''
+
+
+def test_noloop_early_before_and_normal():
+    out = fill_template(NOLOOP_TEMPLATE, NOLOOP_AUTOVC)
+    n = _norm(out)
+    # MretTy is the With-var tuple
+    assert _norm("Definition MretTy : Type := (list Z * list Z).") in n
+    # M_before: Continue threads inputs (guarded l1 <> nil), ReturnNow l2 on l1 = nil
+    assert "Continue ((l1, l2))" in n
+    assert "ReturnNow (l2)" in n
+    assert "assume!! (l1 <> nil)" in n and "assume!! (l1 = nil)" in n
+    # M_normal: the call's tuple result is destructured and appended
+    assert "'(r, r0) <- lt_M l1" in n
+    assert "return (r ++ (r0 :: l2))" in n
+
+
+# --- loop forest: role recognition + identity glue ----------------------------
+FOREST_TEMPLATE = '''Parameter MretTy : Type.
+Parameter g_M_loop2_M1 : (list Z * Z) -> MONAD MretTy.
+Parameter g_M_loop2_M2 : (list Z * Z) -> MONAD (list Z * Z).
+Parameter g_M_loop1_M1 : (list Z * Z) -> MONAD MretTy.
+Parameter g_M_loop1_to_inner_2 : (list Z * Z) -> MONAD (list Z * Z).
+Parameter g_M_loop1_after_inner_2 : (list Z * Z) -> MretTy -> MONAD (list Z * Z).
+Parameter g_M_loop1_before : list Z -> MONAD (list Z * Z).
+Parameter g_M_loop1_end : MretTy -> MONAD (list Z * Z).
+'''
+
+
+def test_template_recognizes_forest_roles_and_carrier():
+    tmpl = parse_template(FOREST_TEMPLATE)
+    roles = {h.role for h in tmpl.holes}
+    assert {"fM1", "fM2", "to_inner", "after_inner", "fbefore", "fend"} <= roles
+    assert tmpl.func == "g"
+    assert tmpl.carrier_type == "(list Z * Z)"
+
+
+def test_loop_and_child_index():
+    assert _seg_init._loop_index("f_M_loop2_M1") == 2
+    assert _seg_init._loop_index("f_M_loop1_after_inner_2") == 1   # the *parent* loop
+    assert _seg_init._loop_index("f_M") is None
+    assert _seg_init._child_index("f_M_loop1_to_inner_2") == 2     # the *child* loop
+    assert _seg_init._child_index("f_M_loop1_after_inner_2") == 2
+    assert _seg_init._child_index("f_M_loop1_M2") is None
+
+
+# end-to-end forest synthesis on the real two-loop case (skip if the bench file
+# is not present) — the per-loop VC routing fills every glue hole faithfully.
+import os as _os
+
+_IB2_TMPL = "bench-gen/glibc_slist/libs/glibc_slist_iter_back_2_rel_lib.v"
+_IB2_AVC = "bench-gen/glibc_slist/datac/autovc/glibc_slist_iter_back_2_data_autovc.c"
+
+
+@pytest.mark.skipif(not (_os.path.exists(_IB2_TMPL) and _os.path.exists(_IB2_AVC)),
+                    reason="iter_back_2 bench files not present")
+def test_forest_fill_routes_per_loop_vcs():
+    from GenMonads.absprog.segcodegen import fill_from_paths
+    # the loop holes are `Parameter …_M_loop{k}_…`; once filled in place they are
+    # `Definition`s, so there is nothing to synthesize — skip rather than error
+    if not re.search(r"Parameter\s+\w+_M_loop\d+_", open(_IB2_TMPL).read()):
+        pytest.skip("iter_back_2 lib already filled in place (no holes)")
+    n = _norm(fill_from_paths(_IB2_TMPL, _IB2_AVC))
+    # per-loop result types defined (not the single shared MretTy); the outer
+    # invariant `lseg(x, stop) * listrep(stop)` gives loop1 a two-list carrier
+    assert "_M_loop1_MretTy : Type := (list Z * list Z * Z)" in n
+    assert "_M_loop2_MretTy : Type := (list Z * list Z * Z)" in n
+    # to_inner: outer (l1_1, l1_2, s) -> inner (nil, whole list, s)
+    assert "return (nil, l1_1 ++ l1_2, s)" in n
+    # after_inner: with the strengthened outer invariant the continue-path
+    # entailment is closed trivially (no VC), so the resume is the identity —
+    # pass the inner result through as the new outer carrier
+    assert "fun a r => return r." in n
+    # loop1_end projects the list result (witness dropped) — not a tuple
+    assert _norm("return (l1_1 ++ l1_2).") in n
+    # break branches stay the fixed identity
+    assert "fun r => return r." in n
+
+
+# --- recursion: a self-call yields a structural Fixpoint over a match ----------
+RECURSIVE_TEMPLATE = "Parameter rf_M : list Z -> MONAD (list Z).\n"
+
+RECURSIVE_AUTOVC = '''
+long rf(struct list *x)
+/*@
+    With l1
+    Require sll(x, l1)
+    Ensure exists l2 v, __return == v && sll(x@pre, l2)
+ */
+{
+    if (x == 0) { return 0;
+/* !!!
+VC: rf_return_wit_2
+Precondition existentials (in context for this VC):
+  l1_4_free
+Separation-logic state (antecedent P):
+SEP[
+ sll(x_2_pre, l1_4_free) ]
+NestedSolver first solve exist_mapping:
+l2_5 -> nil(Z)
+v_6 -> (Ez_val 0)
+Leftover left Props after solve:
+PROP[
+ l1_4_free == nil(Z);
+ x_2_pre == (Ez_val 0) ]
+!!! */
+    }
+    sum = rf(x->next);
+/* !!!
+VC: rf_funccall_wit_1   (call to rf)
+Callee With-variable instantiation:
+  l1_11_free -> l0_9_free
+Postcondition existentials introduced:
+  l2_15
+  v_16
+  retval_17
+Residual side-condition (partial solve) exist_mapping:
+(empty)
+!!! */
+    return sum + x->data;
+/* !!!
+VC: rf_return_wit_1
+Precondition existentials (in context for this VC):
+  x_7_free
+  l2_15
+  v_16
+  l1_4_free
+  l0_9_free
+Separation-logic state (antecedent P):
+SEP[
+ sll(y_8_free, l2_15) ]
+NestedSolver first solve exist_mapping:
+l2_5 -> cons(Z, x_7_free, l2_15)
+    [l2_15: from call to rf]
+v_6 -> (retval_17 + x_7_free)
+Leftover left Props after solve:
+PROP[
+ retval_17 == v_16;
+ l1_4_free == cons(Z, x_7_free, l0_9_free);
+ x_2_pre != (Ez_val 0) ]
+!!! */
+}
+'''
+
+
+def test_recursion_emits_structural_fixpoint():
+    out = fill_template(RECURSIVE_TEMPLATE, RECURSIVE_AUTOVC)
+    n = _norm(out)
+    assert "Fixpoint rf_M (l1 : list Z) : MONAD (list Z)" in n
+    assert "match l1 with" in n
+    assert "| nil => return nil" in n
+    # the recursion is on the matched tail (structural), result rebuilds the list;
+    # the numeric return feeds only the dropped witness, so `r` is NOT projected
+    assert "| x :: l1' =>" in n
+    assert "r <- rf_M l1'" in n
+    assert "return (x :: r)" in n
+    assert "fst r" not in n and "snd r" not in n

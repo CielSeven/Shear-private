@@ -12,12 +12,14 @@ void array_dutch_flag_sort(int *a, int n)
     low = 0;
     mid = 0;
     high = n - 1;
-    /*@ Inv Assert
-        exists v_tmp,
-        tmp == v_tmp &&
-        0 <= low && low <= mid && mid <= high + 1 && high < n@pre &&
+    tmp = 0;
+    /*@ Inv
+        exists v_low v_mid v_high v_tmp,
+        0 <= v_low && v_low <= v_mid && v_mid <= v_high + 1 && v_high < n@pre &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
+        store(&low, int, v_low) * store(&mid, int, v_mid) *
+        store(&high, int, v_high) * store(&tmp, int, v_tmp) *
         IntArray::full_shape(a@pre, n@pre)
     */
     while (mid <= high) {

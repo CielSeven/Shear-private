@@ -12,12 +12,14 @@ int array_partition_by_pivot(int *a, int n, int pivot)
     left = 0;
     i = 0;
     right = n - 1;
-    /*@ Inv Assert
-        exists v_tmp,
-        tmp == v_tmp &&
-        0 <= left && left <= i && i <= right + 1 && right < n@pre &&
+    tmp = 0;
+    /*@ Inv
+        exists v_left v_i v_right v_tmp,
+        0 <= v_left && v_left <= v_i && v_i <= v_right + 1 && v_right < n@pre &&
         a == a@pre && n == n@pre && pivot == pivot@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
+        store(&left, int, v_left) * store(&i, int, v_i) *
+        store(&right, int, v_right) * store(&tmp, int, v_tmp) *
         IntArray::full_shape(a@pre, n@pre)
     */
     while (i <= right) {

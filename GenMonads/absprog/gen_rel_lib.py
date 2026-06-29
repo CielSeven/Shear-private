@@ -14,7 +14,7 @@ The generated file provides:
 
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from GenMonads.early_return import detect_early_return_shape
 from GenMonads.transshape.process_and_translate import process_and_translate_file
@@ -37,38 +37,80 @@ _C_KEYWORDS_AND_BUILTINS = {
 }
 
 
+_FUNC_DEF_RE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*"
+    r"(?:/\*@[^*]*(?:\*(?!/)[^*]*)*\*/\s*)?\{",
+    re.DOTALL,
+)
+
+
+def _build_sibling_function_table(
+    input_path: str,
+    sibling_dirs: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """Map every function *name* defined in a sibling ``.c`` file to its
+    absolute ``.c`` path.
+
+    Function discovery is by-definition (scanning each candidate file's
+    headers with :data:`_FUNC_DEF_RE`), not by basename — so callees like
+    ``glibc_slist_clean_free`` defined inside ``glibc_slist_free.c`` resolve
+    correctly even when the file stem differs from the function name.
+
+    Search directories default to the directory containing ``input_path``;
+    when ``sibling_dirs`` is provided, those replace the default.  The
+    input file itself is excluded.
+    """
+    if sibling_dirs:
+        search_dirs = [os.path.abspath(d) for d in sibling_dirs]
+    else:
+        search_dirs = [os.path.dirname(os.path.abspath(input_path))]
+    own_path = os.path.abspath(input_path)
+    table: Dict[str, str] = {}
+    for d in search_dirs:
+        try:
+            entries = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.endswith(".c"):
+                continue
+            path = os.path.abspath(os.path.join(d, entry))
+            if path == own_path:
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            for m in _FUNC_DEF_RE.finditer(text):
+                name = m.group(1)
+                if name in _C_KEYWORDS_AND_BUILTINS:
+                    continue
+                # First-wins on collisions — preserves a deterministic
+                # mapping across search directories.
+                table.setdefault(name, path)
+    return table
+
+
 def _collect_cross_file_callees(
     input_path: str,
     func_names: List[str],
     content: str,
     sibling_dirs: Optional[List[str]] = None,
 ) -> List[str]:
-    """Return sorted callee names invoked by any of ``func_names`` whose
-    definition lives in a sibling ``.c`` file.
+    """Return sorted **file basenames** of sibling ``.c`` files whose
+    function definitions are invoked by any of ``func_names``.
 
-    By default the search directory is the directory containing
-    ``input_path``.  When ``sibling_dirs`` is provided, those directories
-    are used instead (replace, not extend).
+    The result is the set of ``_rel_lib`` stems the caller's lib must
+    ``Require Import``.  Lookup is by sibling function *definition*
+    (see :func:`_build_sibling_function_table`), so a callee whose file
+    stem differs from its function name resolves correctly.
     """
-    if sibling_dirs:
-        search_dirs = [os.path.abspath(d) for d in sibling_dirs]
-    else:
-        search_dirs = [os.path.dirname(os.path.abspath(input_path))]
-    own_basename = os.path.splitext(os.path.basename(input_path))[0]
-    siblings = set()
-    for d in search_dirs:
-        try:
-            for entry in os.listdir(d):
-                if entry.endswith(".c"):
-                    stem = os.path.splitext(entry)[0]
-                    if stem != own_basename:
-                        siblings.add(stem)
-        except OSError:
-            continue
-    if not siblings:
+    table = _build_sibling_function_table(input_path, sibling_dirs=sibling_dirs)
+    if not table:
         return []
 
-    call_names = set()
+    call_names: Set[str] = set()
     local_names = set(func_names)
     for caller in func_names:
         body = _extract_function_body(content, caller)
@@ -78,8 +120,12 @@ def _collect_cross_file_callees(
         for match in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", stripped):
             call_names.add(match.group(1))
 
-    callees = call_names & siblings - local_names - _C_KEYWORDS_AND_BUILTINS
-    return sorted(callees)
+    callee_names = (call_names - local_names - _C_KEYWORDS_AND_BUILTINS) & set(table)
+    callee_stems = {
+        os.path.splitext(os.path.basename(table[name]))[0]
+        for name in callee_names
+    }
+    return sorted(callee_stems)
 
 
 # Monad backends selectable via the ``monad`` argument / ``--monad`` CLI flag.
@@ -308,7 +354,8 @@ def generate_func_block(func_name: str, require_var_count: int,
                         has_pre_loop_early_return: bool = False,
                         has_loop_body_early_return: bool = False,
                         mretty_name: str = "MretTy",
-                        declare_mretty: bool = False) -> str:
+                        declare_mretty: bool = False,
+                        coq_guard_struct: Optional[str] = None) -> str:
     """Generate the abstract program skeleton for one function.
 
     Args:
@@ -352,6 +399,10 @@ def generate_func_block(func_name: str, require_var_count: int,
 
     # Function-scoped guard: concrete Definition from GuardGen, or Parameter as fallback
     if coq_guard:
+        # Structured guard (vars + connective) for downstream consumers — so they
+        # don't re-parse the rendered Coq (§3.7).  e.g. `(or (atom l3 ne) (atom l4 ne))`.
+        if coq_guard_struct:
+            lines.append(f"(*@ guard-struct: {coq_guard_struct} @*)")
         # coq_guard already includes "fun a => let '(...) := a in ..."
         lines.append(f"Definition {guard_name} : {st} -> Prop :=")
         # Indent each line of the guard body
@@ -754,6 +805,18 @@ def generate_forest_func_block(
         for t in top_levels[:-1]:
             res_ty_for[t["loop_index"]] = f"{fn}_loop{t['loop_index']+1}_ResTy"
 
+    # Per-loop opaque break-payload types — every loop, including
+    # nested ones, has its own ``MretTy``.  The legacy single-shared
+    # form conflated inner-break and outer-break (semantically distinct
+    # control-flow events).
+    #
+    # Nested loops' break payload is bridged back into the parent's
+    # iteration via the parent's ``after_inner_{k}`` Parameter and the
+    # mechanical ``M_loop{k}_tail`` Definition this code emits below
+    # (which takes the parent's state as an explicit argument).
+    def _mretty_for(idx: int) -> str:
+        return f"{fn}_M_loop{idx + 1}_MretTy"
+
     lines: List[str] = []
     lines.append(
         f"(* ---- Abstract program segments for {fn} "
@@ -762,9 +825,12 @@ def generate_forest_func_block(
     )
     lines.append("")
 
-    if declare_mretty:
-        lines.append(f"Parameter {mretty_name} : Type.")
-        lines.append("")
+    # Declare one ``MretTy`` per loop.  Skip ``declare_mretty`` /
+    # ``mretty_name`` — they're single-MretTy artifacts that don't
+    # apply here.
+    for t in loop_templates:
+        lines.append(f"Parameter {_mretty_for(t['loop_index'])} : Type.")
+    lines.append("")
 
     if res_ty_for:
         for name in res_ty_for.values():
@@ -787,60 +853,156 @@ def generate_forest_func_block(
     for t in top_levels:
         _dfs(t["loop_index"])
 
+    # Helpers for per-loop early-return-aware type formatting.
+    def _aux_ret(t_node):
+        """Return the Coq type of this loop's ``_aux`` output —
+        ``early_result mretty_k ret`` when the subtree contains any
+        direct early ``return``, plain ``mretty_k`` otherwise.  Each
+        loop uses its OWN MretTy."""
+        my_mretty = _mretty_for(t_node["loop_index"])
+        if t_node.get("has_early_return_in_subtree"):
+            return f"({_early_result_type(my_mretty, return_type)})"
+        return my_mretty
+
+    def _m2_ret(t_node):
+        """Return the M2's output type for *t_node* — wrapped in
+        ``early_result`` (so M2 can issue ``ReturnNow``) iff the subtree
+        is tainted."""
+        Sk_inner = t_node["state_type"]
+        Sk_inner_arg = _type_arg(Sk_inner)
+        if t_node.get("has_early_return_in_subtree"):
+            return f"({_early_result_type(Sk_inner_arg, return_type)})"
+        return Sk_inner_arg
+
     for t in bottom_up:
         k = t["loop_index"] + 1
         Sk = t["state_type"]
         Sk_arg = _type_arg(Sk)
         children = t["children"]
+        tainted = bool(t.get("has_early_return_in_subtree"))
+        direct = bool(t.get("has_early_return"))
 
-        lines.append(f"Parameter {fn}_M_loop{k}_M1 : {Sk} -> MONAD {mretty_name}.")
+        my_mretty = _mretty_for(t["loop_index"])
+        # M1: always returns this loop's own MretTy.  M1 is the loop's
+        # break-branch payload — the "normal completion" result — so
+        # early returns never travel through it.  They go through M2.
+        lines.append(f"Parameter {fn}_M_loop{k}_M1 : {Sk} -> MONAD {my_mretty}.")
 
         if not children:
-            # Leaf loop: LLM-provided step.
-            lines.append(f"Parameter {fn}_M_loop{k}_M2 : {Sk} -> MONAD {Sk_arg}.")
+            # Leaf loop: M2 is an LLM-provided Parameter.  Its return
+            # type is wrapped in ``early_result`` iff the leaf itself
+            # has a direct early ``return`` in its body.
+            lines.append(f"Parameter {fn}_M_loop{k}_M2 : {Sk} -> MONAD {_m2_ret(t)}.")
+        elif direct:
+            # Parent loop whose own body has a direct early ``return``
+            # — outside any nested loop.  The mechanical "to_inner →
+            # aux_c → after_inner" body structure can't model that
+            # alternative path, so we expose ``M2`` as an LLM-provided
+            # Parameter (returning ``early_result``) and skip the
+            # boundary-hole + mechanical-Definition emission entirely.
+            # The LLM is responsible for invoking each child's ``_aux``
+            # from inside its M2 implementation.
+            lines.append(f"Parameter {fn}_M_loop{k}_M2 : {Sk} -> MONAD {_m2_ret(t)}.")
         else:
-            # Parent loop: per-child boundary holes, mechanical M2.
+            # Parent loop with no direct early return but possibly
+            # tainted via a child: mechanical M2 with optional
+            # ``ReturnNow`` propagation from a tainted child's aux.
             for c_idx in children:
                 ck = c_idx + 1
                 c_state = by_idx[c_idx]["state_type"]
                 Sc_arg = _type_arg(c_state)
+                # ``after_inner`` consumes the CHILD's own MretTy —
+                # that's what the child's _aux/_M1 produces on normal
+                # completion now that every loop has its own MretTy.
+                child_mretty = _mretty_for(c_idx)
                 lines.append(
                     f"Parameter {fn}_M_loop{k}_to_inner_{ck} : {Sk} -> MONAD {Sc_arg}."
                 )
                 lines.append(
                     f"Parameter {fn}_M_loop{k}_after_inner_{ck} : "
-                    f"{Sk} -> {mretty_name} -> MONAD {Sk_arg}."
+                    f"{Sk} -> {child_mretty} -> MONAD {Sk_arg}."
                 )
             lines.append(
-                f"Definition {fn}_M_loop{k}_M2 : {Sk} -> MONAD {Sk_arg} :="
+                f"Definition {fn}_M_loop{k}_M2 : {Sk} -> MONAD {_m2_ret(t)} :="
             )
             lines.append("  fun a =>")
             if len(children) == 1:
-                ck = children[0] + 1
+                c_idx = children[0]
+                ck = c_idx + 1
+                c_tainted = bool(by_idx[c_idx].get("has_early_return_in_subtree"))
                 lines.append(f"    s' <- {fn}_M_loop{k}_to_inner_{ck} a;;")
                 lines.append(f"    r  <- {fn}_M_loop{ck}_aux s';;")
-                lines.append(f"    {fn}_M_loop{k}_after_inner_{ck} a r.")
+                if c_tainted:
+                    # Child can ``ReturnNow`` — propagate that outward
+                    # so the parent's loop body sees the early return.
+                    lines.append("    match r with")
+                    lines.append(
+                        f"    | Continue r' => a' <- {fn}_M_loop{k}_after_inner_{ck} a r';; return (Continue a')"
+                    )
+                    lines.append("    | ReturnNow r' => return (ReturnNow r')")
+                    lines.append("    end.")
+                else:
+                    # Child is clean — its aux returns plain mretty.
+                    # If the parent is tainted (must be: parent has
+                    # no direct return AND no tainted child contradicts
+                    # ``tainted=True``), wrap the answer in Continue.
+                    if tainted:
+                        lines.append(
+                            f"    a' <- {fn}_M_loop{k}_after_inner_{ck} a r;;"
+                        )
+                        lines.append("    return (Continue a').")
+                    else:
+                        lines.append(
+                            f"    {fn}_M_loop{k}_after_inner_{ck} a r."
+                        )
             else:
+                # Multi-child mechanical M2 — propagate ``ReturnNow``
+                # immediately if any child surfaces one.  Each
+                # ``after_inner`` thread sequences siblings in source
+                # order.  We don't currently handle a *mix* of tainted
+                # and clean siblings at the same level beyond the basic
+                # match-per-tainted-child pattern.
                 acc = "a"
                 for i, c_idx in enumerate(children):
                     ck = c_idx + 1
+                    c_tainted = bool(by_idx[c_idx].get("has_early_return_in_subtree"))
                     s_var = f"s{i+1}"
                     r_var = f"r{i+1}"
                     lines.append(
                         f"    {s_var} <- {fn}_M_loop{k}_to_inner_{ck} {acc};;"
                     )
                     lines.append(f"    {r_var} <- {fn}_M_loop{ck}_aux {s_var};;")
-                    if i == len(children) - 1:
-                        lines.append(
-                            f"    {fn}_M_loop{k}_after_inner_{ck} {acc} {r_var}."
-                        )
+                    if c_tainted:
+                        lines.append(f"    match {r_var} with")
+                        lines.append("    | ReturnNow r' => return (ReturnNow r')")
+                        if i == len(children) - 1:
+                            lines.append(
+                                f"    | Continue r' => a' <- {fn}_M_loop{k}_after_inner_{ck} {acc} r';; return (Continue a')"
+                            )
+                        else:
+                            next_acc = f"a{i+1}"
+                            lines.append(
+                                f"    | Continue r' => {next_acc} <- {fn}_M_loop{k}_after_inner_{ck} {acc} r';; "
+                            )
+                            acc = next_acc
+                        lines.append("    end;;")
                     else:
-                        next_acc = f"a{i+1}"
-                        lines.append(
-                            f"    {next_acc} <- "
-                            f"{fn}_M_loop{k}_after_inner_{ck} {acc} {r_var};;"
-                        )
-                        acc = next_acc
+                        if i == len(children) - 1:
+                            if tainted:
+                                lines.append(
+                                    f"    a' <- {fn}_M_loop{k}_after_inner_{ck} {acc} {r_var};; return (Continue a')."
+                                )
+                            else:
+                                lines.append(
+                                    f"    {fn}_M_loop{k}_after_inner_{ck} {acc} {r_var}."
+                                )
+                        else:
+                            next_acc = f"a{i+1}"
+                            lines.append(
+                                f"    {next_acc} <- "
+                                f"{fn}_M_loop{k}_after_inner_{ck} {acc} {r_var};;"
+                            )
+                            acc = next_acc
 
         guard_name = f"{fn}_loop{k}_guardP"
         if t.get("coq_guard"):
@@ -852,19 +1014,40 @@ def generate_forest_func_block(
             lines.append("(* Guard could not be generated — declare as Parameter *)")
             lines.append(f"Parameter {guard_name} : {Sk} -> Prop.")
 
+        # Body: CntOrBrk's break-payload type tracks whether the loop
+        # is tainted — clean break-branch carries the loop's own
+        # ``mretty_k``, tainted carries ``early_result mretty_k ret``
+        # so a ReturnNow can ride the break wire all the way out of
+        # the loop.
+        body_break_ty = _aux_ret(t)
         lines.append(
             f"Definition {fn}_M_loop{k}_body : "
-            f"{Sk} -> MONAD (CntOrBrk {Sk_arg} {mretty_name}) :="
+            f"{Sk} -> MONAD (CntOrBrk {Sk_arg} {body_break_ty}) :="
         )
         lines.append("  fun a =>")
-        lines.append(
-            f"    choice (assume!! (~ ({guard_name} a));; "
-            f"r <- {fn}_M_loop{k}_M1 a ;; break r)"
-        )
-        lines.append(
-            f"           (assume!! (({guard_name} a));; "
-            f"a' <- {fn}_M_loop{k}_M2 a ;; continue a')."
-        )
+        if tainted:
+            # Break branch wraps the normal-completion result in
+            # Continue.  Continue branch matches M2 to either continue
+            # with the new state or break with ReturnNow.
+            lines.append(
+                f"    choice (assume!! (~ ({guard_name} a));; "
+                f"r <- {fn}_M_loop{k}_M1 a ;; break (Continue r))"
+            )
+            lines.append(f"           (assume!! (({guard_name} a));;")
+            lines.append(f"            a' <- {fn}_M_loop{k}_M2 a ;;")
+            lines.append("            match a' with")
+            lines.append("            | Continue a'' => continue a''")
+            lines.append("            | ReturnNow r' => break (ReturnNow r')")
+            lines.append("            end).")
+        else:
+            lines.append(
+                f"    choice (assume!! (~ ({guard_name} a));; "
+                f"r <- {fn}_M_loop{k}_M1 a ;; break r)"
+            )
+            lines.append(
+                f"           (assume!! (({guard_name} a));; "
+                f"a' <- {fn}_M_loop{k}_M2 a ;; continue a')."
+            )
         lines.append(
             f"Definition {fn}_M_loop{k}_aux := repeat_break {fn}_M_loop{k}_body."
         )
@@ -877,8 +1060,9 @@ def generate_forest_func_block(
             curried = _curried_args(inv_arg_types)
             lam = _lambda_vars(k_arity)
             tup = _tuple_vars(k_arity)
+            wrapper_ret = _aux_ret(t)
             lines.append(
-                f"Definition {fn}_M_loop{k} : {curried}program unit {mretty_name} :="
+                f"Definition {fn}_M_loop{k} : {curried}program unit {wrapper_ret} :="
             )
             lines.append(f"  fun {lam} => {fn}_M_loop{k}_aux {tup}.")
         lines.append("")
@@ -896,14 +1080,15 @@ def generate_forest_func_block(
 
     for i, t in enumerate(top_levels):
         k = t["loop_index"] + 1
+        end_in_ty = _mretty_for(t["loop_index"])
         if i == len(top_levels) - 1:
             lines.append(
-                f"Parameter {fn}_M_loop{k}_end : {mretty_name} -> MONAD ({return_type})."
+                f"Parameter {fn}_M_loop{k}_end : {end_in_ty} -> MONAD ({return_type})."
             )
         else:
             res = res_ty_for[t["loop_index"]]
             lines.append(
-                f"Parameter {fn}_M_loop{k}_end : {mretty_name} -> MONAD {res}."
+                f"Parameter {fn}_M_loop{k}_end : {end_in_ty} -> MONAD {res}."
             )
     lines.append("")
 
@@ -913,53 +1098,196 @@ def generate_forest_func_block(
     # (which for non-terminal top-level loops is only the BRIDGE to the
     # next loop, not the full tail).
     #
-    # Single-loop functions don't need this — there ``M_loop_end`` IS
-    # the tail by definition, and the single-loop scaffold keeps using
-    # ``_end`` directly.  We emit ``_tail`` Definitions only here in
-    # the forest path, where ``_end`` and ``_tail`` are different
-    # objects for every loop except the last.
+    # When any top-level loop in the chain is tainted, the tail has to
+    # match on each tainted loop's ``early_result`` output and
+    # short-circuit a ``ReturnNow`` straight back to the function's
+    # return.  Clean loops thread their plain ``mretty`` payload through
+    # ``_end`` as before.
+    def _emit_chain_from(start_j: int, mretty_var: str, base_indent: str) -> None:
+        """Emit ``end_{kj} ;; before_{kj+1} ;; aux_{kj+1} ;; ...`` starting
+        from ``top_levels[start_j]``.  ``mretty_var`` is the in-scope
+        variable holding the *previous* loop's break-payload (the input
+        to ``end_{kj}``).  ``base_indent`` controls indentation for
+        nested match arms.
+        """
+        ind = base_indent
+        prev_k_local = top_levels[start_j]["loop_index"] + 1
+        # First step: run end_{kj} on the supplied mretty value, then
+        # proceed through subsequent loops.
+        if start_j == len(top_levels) - 1:
+            # Terminal step right here.
+            lines.append(f"{ind}{fn}_M_loop{prev_k_local}_end {mretty_var}.")
+            return
+        lines.append(
+            f"{ind}t{prev_k_local} <- {fn}_M_loop{prev_k_local}_end {mretty_var};;"
+        )
+        for j in range(start_j + 1, len(top_levels)):
+            kj = top_levels[j]["loop_index"] + 1
+            kj_tainted = bool(top_levels[j].get("has_early_return_in_subtree"))
+            lines.append(
+                f"{ind}s{kj} <- {fn}_M_loop{kj}_before t{prev_k_local};;"
+            )
+            lines.append(
+                f"{ind}r{kj} <- {fn}_M_loop{kj}_aux s{kj};;"
+            )
+            if kj_tainted:
+                # The next loop emits an ``early_result`` — short-circuit
+                # any ``ReturnNow`` it produces, otherwise continue
+                # threading through.
+                lines.append(f"{ind}match r{kj} with")
+                lines.append(f"{ind}| ReturnNow rt => return rt")
+                lines.append(f"{ind}| Continue r' =>")
+                _emit_chain_from(j, "r'", ind + "    ")
+                lines.append(f"{ind}end.")
+                return
+            else:
+                if j == len(top_levels) - 1:
+                    lines.append(f"{ind}{fn}_M_loop{kj}_end r{kj}.")
+                    return
+                lines.append(
+                    f"{ind}t{kj} <- {fn}_M_loop{kj}_end r{kj};;"
+                )
+                prev_k_local = kj
+        # Loop fell through without terminating — defensive.  Should
+        # not happen if top_levels is non-empty.
+        return
+
     for i, t in enumerate(top_levels):
         k = t["loop_index"] + 1
         tail_name = f"{fn}_M_loop{k}_tail"
         end_name = f"{fn}_M_loop{k}_end"
-        if i == len(top_levels) - 1:
-            # Terminal loop: the tail and the end coincide.  Emit a
-            # definitional alias so the rel.c can refer to ``_tail``
-            # uniformly across all top-level loops.
+        k_tainted = bool(t.get("has_early_return_in_subtree"))
+        my_mretty = _mretty_for(t["loop_index"])
+        tail_input_ty = (
+            f"({_early_result_type(my_mretty, return_type)})"
+            if k_tainted else my_mretty
+        )
+        # Detect whether ANY downstream loop is tainted — if not and
+        # the current loop is also clean and terminal, we can emit a
+        # cheap definitional alias.
+        downstream_tainted = any(
+            top_levels[j].get("has_early_return_in_subtree")
+            for j in range(i + 1, len(top_levels))
+        )
+        if (i == len(top_levels) - 1) and not k_tainted:
+            # Terminal clean loop — tail IS end.  Definitional alias.
             lines.append(
-                f"Definition {tail_name} : {mretty_name} -> MONAD ({return_type}) :="
+                f"Definition {tail_name} : {my_mretty} -> MONAD ({return_type}) :="
             )
             lines.append(f"  {end_name}.")
+            continue
+
+        lines.append(
+            f"Definition {tail_name} : {tail_input_ty} -> MONAD ({return_type}) :="
+        )
+        lines.append("  fun r =>")
+
+        if k_tainted:
+            lines.append("    match r with")
+            lines.append("    | ReturnNow rt => return rt")
+            lines.append("    | Continue r' =>")
+            _emit_chain_from(i, "r'", "        ")
+            lines.append("    end.")
         else:
-            # Non-terminal loop: tail bridges through end_k, then
-            # threads all subsequent loops' (before; aux; end) in order,
-            # ending at the very last loop's end.
-            lines.append(
-                f"Definition {tail_name} : {mretty_name} -> MONAD ({return_type}) :="
-            )
-            lines.append("  fun r =>")
-            lines.append(f"    t{k} <- {end_name} r;;")
-            prev_k = k
-            for j in range(i + 1, len(top_levels)):
-                kj = top_levels[j]["loop_index"] + 1
-                lines.append(
-                    f"    s{kj} <- {fn}_M_loop{kj}_before t{prev_k};;"
-                )
-                lines.append(
-                    f"    r{kj} <- {fn}_M_loop{kj}_aux s{kj};;"
-                )
-                if j == len(top_levels) - 1:
-                    # Terminal step: final ``_end`` produces the
-                    # function's return value.
-                    lines.append(f"    {fn}_M_loop{kj}_end r{kj}.")
-                else:
-                    lines.append(
-                        f"    t{kj} <- {fn}_M_loop{kj}_end r{kj};;"
-                    )
-                prev_k = kj
+            # Clean tail head — but some downstream loop is tainted
+            # (otherwise we'd have taken the alias branch above).
+            _emit_chain_from(i, "r", "    ")
     lines.append("")
 
-    # Definition {fn}_M = sequential composition.
+    # Nested-loop ``_tail`` Definitions.  Each non-top-level loop k
+    # gets its own tail keyed off its OWN MretTy plus the parent's
+    # state at inner-entry as an extra argument (so the residual
+    # ``after_inner_k ;; parent_aux ;; parent_tail`` chain is
+    # well-typed):
+    #
+    #   Definition M_loop_k_tail : M_loop_k_MretTy -> S_p -> MONAD ret :=
+    #     fun r_k a_p =>
+    #       a_p' <- M_loop_p_after_inner_k a_p r_k ;;
+    #       r_p  <- M_loop_p_aux a_p' ;;
+    #       M_loop_p_tail r_p.
+    #
+    # MVP supports 1-level nesting cleanly (parent is a top-level
+    # loop).  For deeper nesting the parent's tail itself takes a
+    # grandparent state, so we'd have to thread that here too — for
+    # now emit the chain unchanged and rely on the parent's tail
+    # signature; if depth >= 2 the code below currently doesn't
+    # supply the grandparent argument and will emit a malformed
+    # call.  Flag as TODO when we cross that case.
+    for t in loop_templates:
+        if t["parent"] is None:
+            continue  # top-level — already handled above
+        k_idx = t["loop_index"]
+        k = k_idx + 1
+        p_idx = t["parent"]
+        p_node = by_idx[p_idx]
+        p_k = p_idx + 1
+        Sp = p_node["state_type"]
+        Sp_arg = _type_arg(Sp)
+        k_mretty = _mretty_for(k_idx)
+        k_tainted = bool(t.get("has_early_return_in_subtree"))
+        p_tainted = bool(p_node.get("has_early_return_in_subtree"))
+        p_direct = bool(p_node.get("has_early_return"))
+        # When the parent's own body has a direct early return, its
+        # M2 is an LLM Parameter and ``after_inner_k`` is NOT emitted
+        # by this scaffold — so we can't mechanize the nested tail.
+        # Fall back to a Parameter that the LLM fills in.
+        if p_direct:
+            tail_in = (
+                f"({_early_result_type(k_mretty, return_type)})"
+                if k_tainted else k_mretty
+            )
+            lines.append(
+                f"Parameter {fn}_M_loop{k}_tail : {tail_in} -> {Sp} -> MONAD ({return_type})."
+            )
+            continue
+        tail_in = (
+            f"({_early_result_type(k_mretty, return_type)})"
+            if k_tainted else k_mretty
+        )
+        lines.append(
+            f"Definition {fn}_M_loop{k}_tail : {tail_in} -> {Sp} -> MONAD ({return_type}) :="
+        )
+        lines.append("  fun r_k a_p =>")
+        if k_tainted:
+            lines.append("    match r_k with")
+            lines.append("    | ReturnNow rt => return rt")
+            lines.append("    | Continue r_k' =>")
+            ind = "        "
+            r_var = "r_k'"
+        else:
+            ind = "    "
+            r_var = "r_k"
+        lines.append(
+            f"{ind}a_p' <- {fn}_M_loop{p_k}_after_inner_{k} a_p {r_var};;"
+        )
+        lines.append(f"{ind}r_p <- {fn}_M_loop{p_k}_aux a_p';;")
+        # Parent's tail.  For 1-level nesting the parent IS top-level
+        # so its tail takes only ``r_p`` (or its early_result form,
+        # which the parent_tail already handles internally).
+        if p_node["parent"] is None:
+            lines.append(f"{ind}{fn}_M_loop{p_k}_tail r_p.")
+        else:
+            # Parent itself is nested — its tail wants a grandparent
+            # state argument we don't currently thread.  Leave a
+            # syntactically valid TODO marker; this case isn't yet
+            # exercised by the test corpus.
+            lines.append(
+                f"{ind}(* TODO: deeper nesting — parent tail wants grandparent state *)"
+            )
+            lines.append(f"{ind}{fn}_M_loop{p_k}_tail r_p.")
+        if k_tainted:
+            lines.append("    end.")
+    if any(t["parent"] is not None for t in loop_templates):
+        lines.append("")
+
+    # Definition {fn}_M = sequential composition.  When any top-level
+    # loop is tainted, we delegate the post-aux chain to
+    # ``M_loop1_tail`` (already defined above with match-propagation
+    # baked in) — that keeps the M body small and ensures both ``M``
+    # and the loop-1 invariant binding agree on the early-return
+    # semantics.  Forests with no tainted loops keep the inlined
+    # composition, so existing byte outputs are preserved.
+    any_tainted = any(t.get("has_early_return_in_subtree") for t in top_levels)
     m = len(require_var_types)
     lines.append(f"Definition {fn}_M : {req_curried}MONAD ({return_type}) :=")
     if m > 0:
@@ -972,20 +1300,29 @@ def generate_forest_func_block(
         # ``MONAD <state>`` rather than ``... -> MONAD <state>``).
         first_before_args = ""
     indent = "    " if m > 0 else "  "
-    for i, t in enumerate(top_levels):
-        k = t["loop_index"] + 1
-        if i == 0:
-            lines.append(
-                f"{indent}s{i+1} <- {fn}_M_loop{k}_before{first_before_args};;"
-            )
-        else:
-            prev_k = top_levels[i - 1]["loop_index"] + 1
-            lines.append(f"{indent}s{i+1} <- {fn}_M_loop{k}_before t{prev_k};;")
-        lines.append(f"{indent}r{i+1} <- {fn}_M_loop{k}_aux s{i+1};;")
-        if i == len(top_levels) - 1:
-            lines.append(f"{indent}{fn}_M_loop{k}_end r{i+1}.")
-        else:
-            lines.append(f"{indent}t{k} <- {fn}_M_loop{k}_end r{i+1};;")
+
+    if any_tainted:
+        first_k = top_levels[0]["loop_index"] + 1
+        lines.append(
+            f"{indent}s1 <- {fn}_M_loop{first_k}_before{first_before_args};;"
+        )
+        lines.append(f"{indent}r1 <- {fn}_M_loop{first_k}_aux s1;;")
+        lines.append(f"{indent}{fn}_M_loop{first_k}_tail r1.")
+    else:
+        for i, t in enumerate(top_levels):
+            k = t["loop_index"] + 1
+            if i == 0:
+                lines.append(
+                    f"{indent}s{i+1} <- {fn}_M_loop{k}_before{first_before_args};;"
+                )
+            else:
+                prev_k = top_levels[i - 1]["loop_index"] + 1
+                lines.append(f"{indent}s{i+1} <- {fn}_M_loop{k}_before t{prev_k};;")
+            lines.append(f"{indent}r{i+1} <- {fn}_M_loop{k}_aux s{i+1};;")
+            if i == len(top_levels) - 1:
+                lines.append(f"{indent}{fn}_M_loop{k}_end r{i+1}.")
+            else:
+                lines.append(f"{indent}t{k} <- {fn}_M_loop{k}_end r{i+1};;")
     lines.append("")
 
     return "\n".join(lines)
@@ -1005,12 +1342,15 @@ def _collect_func_info_with_guard(func_data: Dict, include_helpers: bool = False
 
     # Take the first invariant's guard (for single-loop functions)
     coq_guard = None
+    coq_guard_struct = None
     for a in inv_assertions:
         if 'coq_guard' in a:
             coq_guard = a['coq_guard']
+            coq_guard_struct = a.get('coq_guard_struct')
             break
 
     info['coq_guard'] = coq_guard
+    info['coq_guard_struct'] = coq_guard_struct
     info['loop_templates'] = _build_func_loop_templates(c_source, inv_assertions) if c_source else []
     # Stash the C source on info so the scaffold renderers can derive
     # block-tree-based annotations (Phase 2a: M_before / M_normal segment
@@ -1169,7 +1509,16 @@ def generate_rel_lib(
     # backward compatibility.  The shared :func:`needs_mretty` predicate is
     # also imported by ``context.py`` so the prompt's must_define list
     # carries the same scoped/bare name the skeleton emits.
-    mretty_users = [info for info in func_infos if needs_mretty(info)]
+    #
+    # Forest-shaped functions (len(loop_templates) > 1) don't use the
+    # shared/per-function ``MretTy`` at all — each loop has its own
+    # ``M_loop{k}_MretTy`` declared inside the forest block.  Exclude
+    # them from the shared-MretTy counting so single-loop siblings keep
+    # the bare ``Parameter MretTy : Type.`` declaration.
+    mretty_users = [
+        info for info in func_infos
+        if needs_mretty(info) and len(info.get("loop_templates") or []) <= 1
+    ]
     scope_mretty_per_function = len(mretty_users) > 1
 
     if mretty_users and not scope_mretty_per_function:
@@ -1240,6 +1589,7 @@ def generate_rel_lib(
                     has_loop_body_early_return=info.get('has_loop_body_early_return', False),
                     mretty_name=mretty_name,
                     declare_mretty=scope_mretty_per_function,
+                    coq_guard_struct=info.get('coq_guard_struct'),
                 ))
         elif info.get('interleaved_decision_count', 0) >= 2:
             # Phase 3C — multiple early-return decisions interleaved

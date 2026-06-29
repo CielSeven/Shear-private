@@ -9,7 +9,7 @@ struct list *glibc_slist_clean_rev(struct list *x)
     struct list *t;
 
     w = 0;
-    /*@ Inv Assert undef_data_at(&t, struct list*) * listrep(w) * listrep(x)
+    /*@ Inv undef_data_at(&t, struct list*) * listrep(w) * listrep(x)
      */
     while (x != 0) {
         t = x->next;

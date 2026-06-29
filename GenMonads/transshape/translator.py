@@ -183,14 +183,28 @@ def _splice_kept_clauses(translated: str, kept: List[str]) -> str:
             continue
         i += 1
 
+    # ``last_amp`` marks a top-level ``&&`` boundary.  Splice kept after it
+    # (joined to the spatial suffix with ``*``) when the suffix is actually
+    # spatial — either it has a later top-level ``*`` or it contains a
+    # predicate call.  Otherwise (pure suffix) fall through and let the
+    # body decide its own treatment.
+    def _is_spatial(text: str) -> bool:
+        return bool(re.search(r'\b\w+\s*\(', text))
     if last_amp != -1:
-        pos = last_amp + 2
-        while pos < len(body) and body[pos] == ' ':
-            pos += 1
-        return head + body[:pos] + kept_str + " * " + body[pos:]
+        suffix = body[last_amp + 2:]
+        if first_star != -1 or _is_spatial(suffix):
+            pos = last_amp + 2
+            while pos < len(body) and body[pos] == ' ':
+                pos += 1
+            return head + body[:pos] + kept_str + " * " + body[pos:]
     if not body:
         return head + kept_str
-    return head + kept_str + " * " + body
+    # No spatial boundary found in body.  Single spatial conjunct →
+    # prepend kept with ``*``.  Otherwise it's a chain of pure conjuncts
+    # → append kept with ``&&``.
+    if _is_spatial(body):
+        return head + kept_str + " * " + body
+    return head + body + " && " + kept_str
 
 
 class ShapeTranslator:
@@ -278,6 +292,14 @@ class ShapeTranslator:
 
         assertion = _desugar_field_equalities(assertion, type_env, struct_decls)
         assertion, kept = _extract_memory_state_predicates(assertion)
+        if not assertion.strip() and kept:
+            # Every conjunct extracted into ``kept`` — there's nothing left
+            # for the parser, so join the memory predicates directly with
+            # ``*`` (the separating conjunction).
+            translated_str = " * ".join(kept)
+            new_vars = self.generated_vars[vars_before:]
+            self.last_generated_var_types = self.generated_var_types[types_before:]
+            return translated_str, new_vars
         ast = parse_assertion(assertion)
         translated_ast = self.translate_formula(ast)
         translated_str = recover_assertion(translated_ast)
@@ -297,6 +319,10 @@ class ShapeTranslator:
         self.reset_var_counter(prefix=prefix)
         assertion = _desugar_field_equalities(assertion, type_env, struct_decls)
         assertion, kept = _extract_memory_state_predicates(assertion)
+        if not assertion.strip() and kept:
+            translated_str = " * ".join(kept)
+            self.last_generated_var_types = self.generated_var_types[:]
+            return translated_str, []
         ast = parse_assertion(assertion)
         translated_ast = self.translate_formula(ast)
         generated_vars = self.generated_vars[:]

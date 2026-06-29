@@ -263,6 +263,14 @@ class AssertionProcessor:
                         extra_vars=extra_vars or None,
                     )
                     result_dict['coq_guard'] = coq_guard
+                    try:        # structured guard, for downstream consumers (§3.7)
+                        from GenMonads.guardgen import guard_structure, serialize_guard_structure
+                        result_dict['coq_guard_struct'] = serialize_guard_structure(
+                            guard_structure(assertion['translated'],
+                                            assertion['command_guard'],
+                                            extra_vars=extra_vars or None))
+                    except Exception:
+                        pass
                 except Exception as guard_error:
                     result_dict['coq_guard_error'] = str(guard_error)
             results.append(result_dict)

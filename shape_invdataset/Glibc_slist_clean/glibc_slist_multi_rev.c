@@ -7,7 +7,7 @@ static struct list *rev_append_local(struct list *src, struct list *dst)
 {
     struct list *node;
 
-    /*@ Inv Assert undef_data_at(&node, struct list*) * listrep(src) * listrep(dst)
+    /*@ Inv undef_data_at(&node, struct list*) * listrep(src) * listrep(dst)
      */
     while (src != 0) {
         node = src;

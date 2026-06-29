@@ -18,7 +18,8 @@ def add_safeexec_predicate(
     program_loop: str,
     program_loop_end: str,
     precondition: str = "ATrue",
-    postcondition: str = "X"
+    postcondition: str = "X",
+    extra_exists_vars: Optional[List[str]] = None,
 ) -> str:
     """
     Add safeExec predicate to a translated loop invariant.
@@ -69,9 +70,17 @@ def add_safeexec_predicate(
     # Combine safeExec with the invariant body using &&
     combined_body = f"{safeexec_pred} && {inv_body}"
 
-    # Reconstruct the full assertion
+    # Reconstruct the full assertion.  Any caller-supplied
+    # ``extra_exists_vars`` (e.g. ``outer_state`` for a nested-loop Inv
+    # that binds its continuation with ``fun r => M_loop_k_tail r
+    # outer_state``) are prepended to the existential list so the
+    # variable is in scope where the bind expression references it.
+    extras = list(extra_exists_vars or [])
     if exists_vars:
-        result = f"exists {exists_vars}, {combined_body}"
+        merged = " ".join(extras + [exists_vars]) if extras else exists_vars
+        result = f"exists {merged}, {combined_body}"
+    elif extras:
+        result = f"exists {' '.join(extras)}, {combined_body}"
     else:
         result = combined_body
 
@@ -122,60 +131,6 @@ def add_safeexec_to_assertion(
 # Function Specification Processing
 # ============================================================================
 
-def add_with_parameter(
-    funcspec: dict,
-    parameter: str = "X"
-) -> dict:
-    """
-    Add a parameter to the With clause of a function specification.
-
-    Args:
-        funcspec: Translated function specification dictionary with 'with', 'require', 'ensure' keys
-        parameter: Parameter to add (default: "X")
-
-    Returns:
-        Updated function specification dictionary
-
-    Example:
-        Input:  {'with': None, 'require': {'translated': 'sll(x, ?l1)'}, ...}
-        Output: {'with': {'original': None, 'translated': 'X'}, ...}
-
-        Input:  {'with': {'original': 'l'}, 'require': {...}, ...}
-        Output: {'with': {'original': 'l', 'translated': 'l X'}, ...}
-    """
-    result = {}
-
-    # Handle With clause
-    if funcspec.get('with') is None:
-        # No With clause - create one with just the parameter
-        # original stays None since there was no original With clause
-        result['with'] = {'original': None, 'translated': parameter}
-    else:
-        # Has With clause - append parameter
-        with_clause = funcspec['with']
-        if isinstance(with_clause, dict):
-            original = with_clause.get('original', '')
-            result['with'] = {
-                'original': original,
-                'translated': f"{original} {parameter}".strip() if original else parameter
-            }
-        else:
-            # String format
-            result['with'] = {
-                'original': with_clause,
-                'translated': f"{with_clause} {parameter}".strip()
-            }
-
-    # Copy require and ensure
-    result['require'] = funcspec.get('require')
-    result['ensure'] = funcspec.get('ensure')
-
-    # Copy variables if present at top level
-    if 'variables' in funcspec:
-        result['variables'] = funcspec['variables']
-
-    return result
-
 
 def extract_variables_from_assertion(assertion: str) -> List[str]:
     """
@@ -200,63 +155,78 @@ def extract_variables_from_assertion(assertion: str) -> List[str]:
     return result
 
 
-def add_safeexec_to_require(
-    translated_require: str,
-    generated_vars: List[str],
-    program: str,
-    precondition: str = "ATrue",
-    postcondition: str = "X"
-) -> str:
+def canonical_funcspec(funcspec: dict) -> dict:
+    """One-stop shape→data decomposition shared by ``--data-only`` and rel.c
+    paths.  Computes everything both layers need without doing any safeExec
+    work — that's strictly a post-processing concern on top of this canonical
+    view.
+
+    Returns a dict with:
+    - ``source_with``: the source ``With`` clause (may be empty)
+    - ``require_promoted_vars``: generated vars in Require (clean, no ``?``)
+        — promoted into the With clause in both data and rel forms
+    - ``require_body``: Require body with ``?`` stripped
+    - ``ensure_clean_vars``: all generated vars in Ensure (clean)
+    - ``ensure_only_vars``: Ensure-generated vars not also in Require —
+        bound by the outer ``exists`` in the data form, and by the safeExec
+        wrapper's ``exists`` in the rel form.
+    - ``ensure_body``: Ensure body with ``?`` stripped (leading source
+        ``exists`` clauses are preserved verbatim; the rel layer may strip
+        them when it lifts data-witnesses out).
+    - ``ensure_data_witnesses``: pre-existing existentials bound by source
+        ``exists`` that name data-field witnesses (e.g. ``d`` in
+        ``exists d, __return -> data == d``).  Carried through so the rel
+        layer can lift them into the abstract return value.
     """
-    Add safeExec predicate to a translated Require assertion.
+    source_with = ""
+    with_clause = funcspec.get('with')
+    if with_clause:
+        if isinstance(with_clause, dict):
+            source_with = (with_clause.get('original') or '').strip()
+        else:
+            source_with = str(with_clause).strip()
 
-    Strips ? prefix from variables, wraps with exists quantifier.
+    require_promoted_vars: List[str] = []
+    require_body = ""
+    if funcspec.get('require') and funcspec['require'].get('translated'):
+        translated = funcspec['require']['translated']
+        require_vars = extract_variables_from_assertion(translated)
+        require_promoted_vars = [v.lstrip('?') for v in require_vars]
+        body = translated
+        for v in require_vars:
+            if v.startswith('?'):
+                body = body.replace(v, v[1:])
+        require_body = body
 
-    Args:
-        translated_require: Translated require assertion, e.g., "sll(x, ?l1)"
-        generated_vars: List of generated variables, e.g., ['?l1']
-        program: Abstract program name for the function, e.g., "sll_copy_M"
-        precondition: Precondition for safeExec (default: "ATrue")
-        postcondition: Postcondition for safeExec (default: "X")
+    ensure_clean_vars: List[str] = []
+    ensure_only_vars: List[str] = []
+    ensure_body = ""
+    ensure_data_witnesses: List[str] = []
+    if funcspec.get('ensure') and funcspec['ensure'].get('translated'):
+        translated = funcspec['ensure']['translated']
+        ensure_vars = extract_variables_from_assertion(translated)
+        ensure_clean_vars = [v.lstrip('?') for v in ensure_vars]
+        ensure_only_vars = [
+            v for v in ensure_clean_vars if v not in require_promoted_vars
+        ]
+        body = translated
+        for v in ensure_vars:
+            if v.startswith('?'):
+                body = body.replace(v, v[1:])
+        ensure_body = body
+        ensure_data_witnesses = list(
+            funcspec['ensure'].get('data_witnesses', []) or []
+        )
 
-    Returns:
-        Require assertion with exists and safeExec added, e.g.,
-        "exists l1, safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)"
-
-    Example:
-        Input:  "sll(x, ?l1)", ['?l1'], "sll_copy_M"
-        Output: "exists l1, safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)"
-    """
-    # Strip ? prefix from variables
-    clean_vars = [v.lstrip('?') for v in generated_vars]
-
-    # Build the program call with clean variables
-    if clean_vars:
-        var_args = ', '.join(clean_vars)
-        program_call = f"{program}({var_args})"
-    else:
-        program_call = program
-
-    # Build the safeExec predicate
-    safeexec_pred = f"safeExec({precondition}, {program_call}, {postcondition})"
-
-    # Replace ?-prefixed vars in the assertion body
-    body = translated_require
-    for var in generated_vars:
-        if var.startswith('?'):
-            body = body.replace(var, var[1:])
-
-    # Combine with the original assertion
-    combined = f"{safeexec_pred} && {body}"
-
-    # Wrap with exists if there are variables
-    if clean_vars:
-        exists_vars = ' '.join(clean_vars)
-        result = f"exists {exists_vars}, {combined}"
-    else:
-        result = combined
-
-    return result
+    return {
+        'source_with': source_with,
+        'require_promoted_vars': require_promoted_vars,
+        'require_body': require_body,
+        'ensure_clean_vars': ensure_clean_vars,
+        'ensure_only_vars': ensure_only_vars,
+        'ensure_body': ensure_body,
+        'ensure_data_witnesses': ensure_data_witnesses,
+    }
 
 
 def _is_void_return_type(return_type: str) -> bool:
@@ -271,116 +241,6 @@ def _is_void_return_type(return_type: str) -> bool:
     if "*" in rt:
         return False
     return rt == "void"
-
-
-def add_safeexec_to_ensure(
-    translated_ensure: str,
-    generated_vars: List[str],
-    precondition: str = "ATrue",
-    postcondition: str = "X",
-    return_type: str = "",
-    data_witnesses: Optional[List[str]] = None,
-) -> str:
-    """
-    Add safeExec predicate to a translated Ensure assertion.
-
-    Strips ? prefix from variables, wraps with exists quantifier.  If the
-    function has a non-void *return_type* and the Ensure body does not
-    mention ``__return``, a fresh witness variable ``r`` is synthesized so the
-    abstract program return value is observable: it is appended to the
-    existentials, threaded into the ``return(...)`` call, and bound by
-    ``__return == r`` in the body.
-
-    Pre-existing existentials that name data-field witnesses (e.g.
-    ``exists d, __return -> data == d``) are *lifted out* of the body into
-    the outer ``exists`` list and threaded into ``return(maketuple(…))``;
-    the now-redundant inner ``exists`` clause is stripped from the body.
-
-    Args:
-        translated_ensure: Translated ensure assertion, e.g., "sll(__return, ?l2) * sll(x, ?l3)"
-        generated_vars: List of generated variables, e.g., ['?l2', '?l3']
-        precondition: Precondition for safeExec (default: "ATrue")
-        postcondition: Postcondition for safeExec (default: "X")
-        return_type: C function return type (e.g. ``"long"``, ``"void"``,
-            ``"struct list *"``).  Empty string or ``"void"`` is treated as
-            void.
-        data_witnesses: Names of pre-existing existentials that bind data-field
-            witnesses (e.g. ``['d']`` for ``exists d, ... __return -> data == d``).
-            These get lifted into the outer ``exists`` and the abstract return.
-
-    Returns:
-        Ensure assertion with exists and safeExec added, e.g.,
-        "exists l2 l3, safeExec(ATrue, return(maketuple(l2, l3)), X) && sll(__return, l2) * sll(x, l3)"
-
-    Example (no __return predicate, non-void return type):
-        Input:  "sll(x@pre, ?l2)", ['?l2'], return_type="long"
-        Output: "exists l2 r, safeExec(ATrue, return(maketuple(l2, r)), X) && __return == r && sll(x@pre, l2)"
-    """
-    data_witnesses = list(data_witnesses or [])
-
-    # Strip ? prefix from variables.
-    clean_vars = [v.lstrip('?') for v in generated_vars]
-
-    # Replace ?-prefixed vars in the assertion body first so we can scan it
-    # for the presence of __return cleanly.
-    body = translated_ensure
-    for var in generated_vars:
-        if var.startswith('?'):
-            body = body.replace(var, var[1:])
-
-    # Strip any leading ``exists <vars>,`` clause from the body so the data
-    # witnesses can be re-bound by the outer wrapper.  Names not promoted to
-    # the outer exists (e.g. pointer existentials we don't track) are
-    # preserved in a residual ``exists`` clause kept inside the body.
-    body, leftover_exists = _strip_leading_exists(body, data_witnesses)
-    if leftover_exists:
-        body = f"exists {' '.join(leftover_exists)}, {body}"
-
-    # Decide whether we need a synthetic return witness for __return.
-    need_witness = (
-        not _is_void_return_type(return_type)
-        and "__return" not in body
-    )
-    witness = "r" if need_witness else None
-    return_vars = clean_vars + data_witnesses + ([witness] if witness else [])
-
-    # Build the return call.
-    if len(return_vars) > 1:
-        var_args = ', '.join(return_vars)
-        return_call = f"return(maketuple({var_args}))"
-    elif len(return_vars) == 1:
-        return_call = f"return({return_vars[0]})"
-    else:
-        # No Ensure-only variables AND no return witness ⇒ unit return type.
-        return_call = "return(tt)"
-
-    safeexec_pred = f"safeExec({precondition}, {return_call}, {postcondition})"
-
-    if witness:
-        body = f"__return == {witness} && {body}"
-
-    combined = f"{safeexec_pred} && {body}"
-
-    if return_vars:
-        exists_vars = ' '.join(return_vars)
-        return f"exists {exists_vars}, {combined}"
-    return combined
-
-
-def _strip_leading_exists(body: str, promote_vars: List[str]) -> tuple:
-    """Strip a leading ``exists v1 v2 ..., `` clause from *body*.
-
-    The variables in *promote_vars* are removed from the binder list (they
-    are being lifted to an outer scope).  Any remaining binders are returned
-    in *leftover_exists* so the caller can re-wrap them around the body.
-    """
-    m = re.match(r"\s*exists\s+([^,]+?)\s*,\s*", body, re.DOTALL)
-    if not m:
-        return body, []
-    binders = m.group(1).split()
-    leftover = [b for b in binders if b not in promote_vars]
-    rest = body[m.end():]
-    return rest, leftover
 
 
 def process_funcspec_with_safeexec(
@@ -415,57 +275,94 @@ def process_funcspec_with_safeexec(
              'require': {'with_safeexec': 'safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)', ...},
              'ensure': {'with_safeexec': 'exists l2 l3, safeExec(ATrue, return(l2, l3), X) && ...', ...}}
     """
-    # First add the With parameter
-    result = add_with_parameter(funcspec, parameter)
+    canon = canonical_funcspec(funcspec)
 
-    # Process Require — produces exists-wrapped result, then lift exists into With
-    require_clean_vars = []
-    if result.get('require') and result['require'].get('translated'):
-        require = result['require'].copy()
-        translated = require['translated']
+    with_parts: List[str] = []
+    if canon['source_with']:
+        with_parts.append(canon['source_with'])
+    with_parts.append(parameter)
+    if canon['require_promoted_vars']:
+        with_parts.append(' '.join(canon['require_promoted_vars']))
 
-        # Extract variables from the translated assertion
-        require_vars = extract_variables_from_assertion(translated)
-        require_clean_vars = [v.lstrip('?') for v in require_vars]
+    source_with_raw = funcspec.get('with')
+    if isinstance(source_with_raw, dict):
+        original_with = source_with_raw.get('original') if source_with_raw.get('original') is not None else None
+    else:
+        original_with = source_with_raw
 
-        require['with_safeexec'] = add_safeexec_to_require(
-            translated,
-            require_vars,
-            program,
-            precondition,
-            parameter  # postcondition is the parameter (X)
-        )
+    result: dict = {
+        'with': {
+            'original': original_with,
+            'translated': ' '.join(with_parts),
+        },
+    }
 
-        # Strip the exists wrapper — those vars go into With instead
-        if require_clean_vars:
-            exists_prefix = f"exists {' '.join(require_clean_vars)}, "
-            if require['with_safeexec'].startswith(exists_prefix):
-                require['with_safeexec'] = require['with_safeexec'][len(exists_prefix):]
-
+    if canon['require_body']:
+        if canon['require_promoted_vars']:
+            program_call = f"{program}({', '.join(canon['require_promoted_vars'])})"
+        else:
+            program_call = program
+        safeexec = f"safeExec({precondition}, {program_call}, {parameter})"
+        rel_require_body = f"{safeexec} && {canon['require_body']}"
+        require = (funcspec.get('require') or {}).copy()
+        require['with_safeexec'] = rel_require_body
         result['require'] = require
+    elif funcspec.get('require'):
+        # Caller handed us an already-processed Require (no ``translated``,
+        # only ``with_safeexec``).  Pass it through unchanged so downstream
+        # rendering can still pick up the pre-baked safeExec form.
+        result['require'] = (funcspec['require'] or {}).copy()
 
-    # Lift Require's existential vars into the With clause
-    if require_clean_vars and result.get('with'):
-        current_with = result['with']['translated']
-        result['with']['translated'] = f"{current_with} {' '.join(require_clean_vars)}"
+    if canon['ensure_body']:
+        body = canon['ensure_body']
+        data_witnesses = canon['ensure_data_witnesses']
 
-    # Process Ensure — keeps exists wrapper
-    if result.get('ensure') and result['ensure'].get('translated'):
-        ensure = result['ensure'].copy()
-        translated = ensure['translated']
+        # Strip the leading source ``exists ...,`` (if any) and lift data
+        # witnesses out of it.  Non-witness binders (e.g. pointer
+        # existentials we don't track) stay inside as a leftover ``exists``.
+        leading_exists = re.match(r'^exists\s+(.+?),\s*(.+)$', body, re.DOTALL)
+        if leading_exists:
+            inner_vars = leading_exists.group(1).split()
+            inner_body = leading_exists.group(2)
+            leftover = [v for v in inner_vars if v not in data_witnesses]
+            if leftover:
+                body = f"exists {' '.join(leftover)}, {inner_body}"
+            else:
+                body = inner_body
 
-        # Extract variables from the translated assertion
-        ensure_vars = extract_variables_from_assertion(translated)
-        ensure_data_witnesses = ensure.get('data_witnesses', [])
-
-        ensure['with_safeexec'] = add_safeexec_to_ensure(
-            translated,
-            ensure_vars,
-            precondition,
-            parameter,  # postcondition is the parameter (X)
-            return_type=return_type,
-            data_witnesses=ensure_data_witnesses,
+        ensure_translated_raw = (funcspec.get('ensure') or {}).get('translated', '') or ''
+        need_witness = (
+            not _is_void_return_type(return_type)
+            and "__return" not in ensure_translated_raw
         )
+        witness = "r" if need_witness else None
+        return_vars = (
+            list(canon['ensure_only_vars'])
+            + list(data_witnesses)
+            + ([witness] if witness else [])
+        )
+
+        if len(return_vars) > 1:
+            return_call = f"return(maketuple({', '.join(return_vars)}))"
+        elif len(return_vars) == 1:
+            return_call = f"return({return_vars[0]})"
+        else:
+            return_call = "return(tt)"
+
+        safeexec = f"safeExec({precondition}, {return_call}, {parameter})"
+
+        if witness:
+            body = f"__return == {witness} && {body}"
+
+        rel_ensure_body = f"{safeexec} && {body}"
+        if return_vars:
+            rel_ensure_body = f"exists {' '.join(return_vars)}, {rel_ensure_body}"
+
+        ensure = (funcspec.get('ensure') or {}).copy()
+        ensure['with_safeexec'] = rel_ensure_body
         result['ensure'] = ensure
+    elif funcspec.get('ensure'):
+        # As for Require above — preserve a caller-provided pre-baked Ensure.
+        result['ensure'] = (funcspec['ensure'] or {}).copy()
 
     return result

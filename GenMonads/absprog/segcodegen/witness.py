@@ -27,7 +27,7 @@ survivors are ordered to the template's slots (`(list Z * list Z * Z)`).
 from __future__ import annotations
 
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 
 from . import terms
 from .synth import base_name
@@ -101,9 +101,17 @@ def _var_types(blocks: List[VCBlock]) -> Dict[str, str]:
     return types
 
 
-def _classify(base: str, blocks: List[VCBlock], types: Dict[str, str]) -> str:
+def _classify(base: str, blocks: List[VCBlock], types: Dict[str, str],
+              scalar_bases: Optional[Set[str]] = None) -> str:
     """``'list'`` | ``'witness'`` | ``'unknown'`` for a carrier/ensure component,
-    from how every `exist_mapping` that targets it assigns it."""
+    from how every `exist_mapping` that targets it assigns it.
+
+    A component named in `scalar_bases` (stored at a non-pointer C type) is a
+    scalar ``Z`` witness outright — this catches a *flag/accumulator* carried as
+    a bare literal (`ty -> 1`/`-> 0`), which leaves no operator/type evidence in
+    its `exist_mapping` for the inference below to latch onto."""
+    if scalar_bases and base in scalar_bases:
+        return "witness"
     saw_list = saw_witness = False
     for b in blocks:
         for mp in b.exist_mapping:
@@ -146,14 +154,15 @@ def _assign_to_slots(vars: List[str], kind: Dict[str, str], kinds: List[str]) ->
     return out
 
 
-def refine(vars: List[str], blocks: List[VCBlock], type_expr: str) -> List[str]:
+def refine(vars: List[str], blocks: List[VCBlock], type_expr: str,
+           scalar_bases: Optional[Set[str]] = None) -> List[str]:
     """The logical components of `vars` (a `Inv`/`Ensure` existential list),
     ordered to the abstract `type_expr`'s slots, with surplus pointer
     existentials dropped.  For an all-list tuple with no surplus this is the
     identity (so list-only functions are unaffected)."""
     kinds = tuple_kinds(type_expr)
     types = _var_types(blocks)
-    kind = {v: _classify(v, blocks, types) for v in vars}
+    kind = {v: _classify(v, blocks, types, scalar_bases) for v in vars}
     if len(vars) > len(kinds):
         # drop the surplus pointer existentials (those with no logical evidence)
         surplus = len(vars) - len(kinds)

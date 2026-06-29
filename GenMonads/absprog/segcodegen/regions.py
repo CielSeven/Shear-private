@@ -22,7 +22,8 @@ from typing import List, Optional, Tuple
 from .synth import base_name
 from .vcparse import VCBlock
 
-Guard = Tuple[str, str]   # (carrier variable, relation e.g. "ne")
+Atom = Tuple[str, str]    # (carrier variable, relation e.g. "ne")
+Guard = List[Atom]        # disjunction of atoms: the loop runs while ANY holds
 
 
 def region(vc: VCBlock) -> str:
@@ -33,18 +34,21 @@ def region(vc: VCBlock) -> str:
 
 
 def parse_guard(template_text: str) -> Optional[Guard]:
-    """Read the guard variable/relation from a ``(*@ guard-struct: (atom l3 ne) @*)``
-    comment, e.g. ``("l3", "ne")``."""
-    m = re.search(r"guard-struct:\s*\(atom\s+(\w+)\s+(\w+)\)", template_text)
-    return (m.group(1), m.group(2)) if m else None
+    """Read the loop guard from a ``(*@ guard-struct: ... @*)`` comment as a
+    *disjunction* of atoms.  ``(atom l3 ne)`` -> ``[("l3","ne")]``;
+    ``(or (atom l3 ne) (atom l4 ne))`` -> ``[("l3","ne"), ("l4","ne")]``.  The
+    loop continues while ANY atom holds, so it exits only when ALL are false."""
+    m = re.search(r"guard-struct:\s*(.+)", template_text)
+    if not m:
+        return None
+    atoms = re.findall(r"\(atom\s+(\w+)\s+(\w+)\)", m.group(1))
+    return [(v, r) for v, r in atoms] if atoms else None
 
 
-def guard_is_false(vc: VCBlock, guard: Optional[Guard]) -> bool:
-    """True if a leftover prop pins the guard variable's instance to its empty
-    form (for ``ne`` guards, ``<guard_var>ᵢ == nil``) — i.e. the loop exit."""
-    if not guard:
-        return False
-    var, rel = guard
+def _atom_is_false(vc: VCBlock, atom: Atom) -> bool:
+    """True if a leftover prop pins this atom's guard variable to its empty form
+    (for ``ne``, ``<guard_var>ᵢ == nil``)."""
+    var, rel = atom
     for p in vc.leftover_props:
         m = re.match(r"(\w+)\s*==\s*(.+)", p)
         if not m or base_name(m.group(1)) != var:
@@ -52,6 +56,15 @@ def guard_is_false(vc: VCBlock, guard: Optional[Guard]) -> bool:
         if rel == "ne" and m.group(2).strip().startswith("nil("):
             return True
     return False
+
+
+def guard_is_false(vc: VCBlock, guard: Optional[Guard]) -> bool:
+    """True if the loop guard is false in this VC — the normal loop exit.  For a
+    disjunctive guard every atom must be pinned empty (``l3==nil`` *and*
+    ``l4==nil``); a single-atom guard reduces to the obvious case."""
+    if not guard:
+        return False
+    return all(_atom_is_false(vc, a) for a in guard)
 
 
 def loop_return_vcs(blocks: List[VCBlock]) -> List[VCBlock]:
@@ -65,10 +78,15 @@ def before_return_vcs(blocks: List[VCBlock]) -> List[VCBlock]:
 
 
 def inloop_early_return_vcs(blocks: List[VCBlock], guard: Optional[Guard]) -> List[VCBlock]:
-    """Loop-region `return` VCs other than the normal loop exit — in-loop early
-    returns (guard true).  They feed ``M_loop_M2``'s ReturnNow arm."""
+    """Loop-region `return` VCs that are genuine in-loop early returns (guard
+    *true*).  They feed ``M_loop_M2``'s ReturnNow arm.  The selected normal exit
+    and every guard-*false* return (multi-path exits reach the same program
+    point) are excluded — so a plain loop, whose only loop-region return is its
+    exit, yields none, and a multi-path exit does not leak a bogus early-return
+    into M2 (regardless of whether that exit pins the guard variable empty)."""
     end = select_end_return(blocks, guard)
-    return [b for b in loop_return_vcs(blocks) if b is not end]
+    return [b for b in loop_return_vcs(blocks)
+            if b is not end and not guard_is_false(b, guard)]
 
 
 def select_end_return(blocks: List[VCBlock], guard: Optional[Guard]) -> Optional[VCBlock]:

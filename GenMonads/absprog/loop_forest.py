@@ -331,6 +331,33 @@ def build_loop_templates(
             "has_inner_loops": bool(loop.children),
             "has_early_return": _body_has_top_level_return(body_span),
         })
+
+    # Propagate the early-return flag upward.  If any loop in a subtree
+    # contains an early ``return``, every ancestor on the path to the
+    # function root must model the propagation: the inner loop's control
+    # leaves the function by passing through the enclosing loop, so the
+    # enclosing loop's M2/M1/_after_loop scaffolding has to thread an
+    # ``early_result`` through too.  Stored separately from the
+    # direct-only ``has_early_return`` so consumers can distinguish the
+    # origin loop from the tainted ancestors.
+    by_idx = {t["loop_index"]: t for t in templates}
+    visited: set = set()
+
+    def _propagate(idx: int) -> bool:
+        if idx in visited:
+            return by_idx[idx].get("has_early_return_in_subtree", False)
+        visited.add(idx)
+        t = by_idx[idx]
+        flag = t["has_early_return"]
+        for c in t["children"]:
+            if c in by_idx:
+                flag = flag or _propagate(c)
+        t["has_early_return_in_subtree"] = flag
+        return flag
+
+    for t in templates:
+        _propagate(t["loop_index"])
+
     return templates
 
 

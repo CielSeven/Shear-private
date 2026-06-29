@@ -77,7 +77,12 @@ branched segment** (`synth_branched`) whose arms carry two extra things:
 The dispatch is exactly the region classification: `M_loop_before`'s ReturnNow
 arms are the **before-region** returns (`regions.before_return_vcs`);
 `M_loop_M2`'s are the **in-loop early** returns (`regions.inloop_early_return_vcs`
-= loop-region returns minus the `M_loop_end` exit). The arms are wrapped at
+= loop-region returns that are *not* a normal exit — the selected `M_loop_end`
+nor any guard-false return). The guard may be a **disjunction**
+(`(or (atom l3 ne) (atom l4 ne))`, `merge`/`multi_merge`): the exit fires only
+when *every* atom is false (`l3 = nil` and `l4 = nil`), and a normal exit reached
+by several proof paths (each a guard-false return) is excluded wholesale, so no
+duplicate exit leaks into `M_loop_M2`. The arms are wrapped at
 construction (`synth_parts(..., wrap="Continue"|"ReturnNow")`) and composed with
 the same common-prefix + `choice` as any branch. A point with no early return
 (but an `early_result` type because the loop returns early elsewhere) just yields
@@ -106,6 +111,53 @@ Definition glibc_slist_clean_app_M : list Z -> list Z -> MONAD (list Z) :=
 
 Whether the binder is curried (`fun l1 l2 =>`, several arguments) or tupled
 (`fun '(l1, l2, l3) =>`, one carrier argument) is read off the hole's type.
+
+## Program shapes beyond the single loop
+
+The `_segment_arms` role model — "pick which VCs are relevant, hand uniform arms
+to `synth_branched`" — extends to richer control flow by adding *roles*, never by
+changing the synthesizer. The template declares the shape (which holes exist);
+each new role just routes to the right VCs (or, where the structure is fixed, a
+type-correct passthrough).
+
+**No-loop early return** (`list_append_raw`: `if (x==0) return y; … return x;`).
+The template splits the function into `M_before : … -> MONAD (early_result MretTy
+R)` and `M_normal : MretTy -> MONAD R`, with `MretTy` left abstract. Since there
+is no `Inv`, the abstract carrier is the threaded inputs (the `With` vars) and
+`MretTy` is defined as their tuple. `M_before` is an `early_result` branch like
+any other: the **ReturnNow** arms are the before-region early returns; the
+**Continue** arm threads the inputs through unchanged — a synthetic identity
+entail guarded by the *negated* early-return discriminator (`l1 = nil` ⇒ the
+Continue guard `l1 <> nil`), so the arms stay mutually exclusive. `M_normal` is
+the straight-line tail, synthesized from the normal `return_wit` over the carrier.
+
+**Loop forest** (`iter_back_2`: an outer loop whose body runs an inner loop). The
+template names the loops `_M_loop{k}_*` and adds nesting glue — `to_inner`
+(outer carrier → inner carrier before the inner loop) and `after_inner` (outer
+carrier + inner result → outer carrier after it), i.e. the outer loop *calls* the
+inner one. `MretTy` is the shared loop carrier. The outermost `before` is
+synthesized from the loop-entry entail; the glue and per-loop `M1`/`M2`/`end`
+holes that the tool leaves without VCs are filled with type-correct identity
+passthroughs (`fun r => return r`, `fun a r => return r`). When the tool emits
+incomplete inner VCs (degenerate invariants, ungenerated guards), this yields a
+**well-typed** scaffold — not a refinement-faithful body; completing it needs the
+upstream VCs.
+
+**Recursion** (`iter_back`: `sum = iter_back(x->next); …`). A whole-function `_M`
+hole whose VCs call the function itself becomes a `Fixpoint`. The arms already
+synthesize the right body — a base arm (`l1 = nil`) and a step arm that calls
+`…_M` on the tail — but the tail is introduced by `any`, so the self-call is not
+structural. `synth_recursive` rewrites the single-input destructuring `any +
+assume` into a `match` on the recursion argument, so the matched tail *is* a
+subterm and the `Fixpoint` guard-checks:
+
+```coq
+Fixpoint glibc_slist_clean_iter_back_M (l1 : list Z) : MONAD (list Z) :=
+  match l1 with
+  | nil => return nil
+  | x :: l1' => r <- glibc_slist_clean_iter_back_M l1';; return (x :: r)
+  end.
+```
 
 ## How a segment is synthesized
 
@@ -272,6 +324,40 @@ change:
   this scalar context (`(Ez_val 0)` → `0`). The witness is then produced like
   any other output term (`return (l1 ++ (x :: nil), l2', s + x)`).
 
+### A scalar witness carried as a bare flag/literal
+
+A data witness is not always reachable through an operator. A boolean **flag**
+(`multi_merge`'s `take_y`, the carrier's `ty`) is assigned literal `0`/`1` per
+branch, so its `exist_mapping` (`ty -> 1`) carries no operator/type evidence for
+the inference above. It is still a scalar: the registry-style signal is its
+**store type** — `store(&take_y, int, ty)` stores an *int*, not a pointer.
+`vcparse.scalar_witness_bases` collects the base names stored at any non-pointer C
+type (`int`/`long`/…), and `witness._classify` treats those as scalar `Z`
+witnesses outright, sorting them into the carrier's `Z` slot. The branch guards
+that toggle the flag (`ty == 0`, `ty != 0`) ride along as the pure scalar
+`assume!!` guards already covered above.
+
+### Multi-result calls
+
+A callee may return several logical values at once —
+`list_tail : list Z -> MONAD (list Z * Z)` returns a prefix list *and* the popped
+element. Its results appear together in one `funccall_wit`'s *Postcondition
+existentials*, in the callee's result-tuple order. One bind destructures the
+whole tuple result with a pattern (`'(r1, r2) <- …`), binding a fresh name per
+component:
+
+```coq
+'(r1, r2) <- list_tail_M l1;;
+return (r1 ++ (r2 :: l2)).
+```
+
+How many components a call contributes is read from the **output cone** — the
+variables that actually flow into the result tuple (reached from the output
+terms through constructor equations and chained-call arguments). A
+post-existential that feeds only a *dropped* witness (e.g. the numeric return of
+a list-returning recursive call) is therefore not mistaken for an extra tuple
+component, so a single-list callee stays a single bind.
+
 ### Operator signatures are external data
 
 `GenMonads/data/list_op_signatures.json` describes each term operator:
@@ -304,14 +390,16 @@ hardcoded in `terms.py`.
   `synth_branched` (combine several branch VCs into one segment via a common
   prefix + `choice`).
 - `__init__.py` — orchestration (`fill_template`, `fill_from_paths`). Every
-  VC-driven hole (`before`/`M2`/`end`/`M`) goes through **one** path:
-  `_segment_arms` picks the relevant VCs (the *only* role-specific logic) and
-  hands a list of arms to `synth_branched`. Whether the hole is curried, branched,
-  or `early_result` is encoded entirely in the arms — single vs many, the per-arm
-  output group, and the per-arm `Continue`/`ReturnNow` wrap — not in the
-  dispatch. Relevant VCs are scoped to the hole's own function, so in a
-  multi-function file one function's returns never leak into another's loop body
-  (and a no-loop `M` with several returns simply becomes a branched segment).
-  Only `MretTy` (a type definition) and `M_loop_M1` (the fixed break branch) are
-  not VC-driven.
+  VC-driven hole (`before`/`M2`/`end`/`M`, plus the new shapes' `before_noloop`/
+  `normal`/`fbefore`) goes through **one** path: `_segment_arms` picks the
+  relevant VCs (the *only* role-specific logic) and hands a list of arms to
+  `synth_branched`. Whether the hole is curried, branched, or `early_result` is
+  encoded entirely in the arms — single vs many, the per-arm output group, and
+  the per-arm `Continue`/`ReturnNow` wrap — not in the dispatch. Relevant VCs are
+  scoped to the hole's own function, so in a multi-function file one function's
+  returns never leak into another's loop body (and a no-loop `M` with several
+  returns simply becomes a branched segment). The non-VC-driven holes are
+  `MretTy` (a type definition), `M_loop_M1` (the fixed break branch), the loop
+  forest's identity glue (`fM1`/`fM2`/`fend`/`to_inner`/`after_inner`), and a
+  self-recursive `M` (emitted as a `Fixpoint` over a `match` — `synth_recursive`).
 - `cli.py` — command-line entry point.

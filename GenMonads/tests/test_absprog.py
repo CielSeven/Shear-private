@@ -1226,7 +1226,11 @@ class TestForestFuncBlock:
         assert "Parameter f_M_loop2_M2 :" in block
         # Parent emits boundary holes + mechanical M2.
         assert "Parameter f_M_loop1_to_inner_2 : (list Z * Z) -> MONAD (list Z * Z)." in block
-        assert "Parameter f_M_loop1_after_inner_2 : (list Z * Z) -> MretTy -> MONAD (list Z * Z)." in block
+        # after_inner consumes the CHILD's own MretTy now that every
+        # loop has its own opaque break-payload type.  The child's
+        # tail definition is responsible for bridging that back into
+        # the parent's iteration.
+        assert "Parameter f_M_loop1_after_inner_2 : (list Z * Z) -> f_M_loop2_MretTy -> MONAD (list Z * Z)." in block
         assert "Definition f_M_loop1_M2 : (list Z * Z) -> MONAD (list Z * Z) :=" in block
         # Mechanical sequencing: to_inner ;; inner_aux ;; after_inner.
         assert "s' <- f_M_loop1_to_inner_2 a;;" in block
@@ -1242,8 +1246,16 @@ class TestForestFuncBlock:
         assert "repeat_break f_M_loop2_body" in block
         # Top-level composition: only loop1 has before/end.
         assert "Parameter f_M_loop1_before : list Z -> MONAD (list Z * Z)." in block
-        assert "Parameter f_M_loop1_end : MretTy -> MONAD ((list Z * Z))." in block
+        assert "Parameter f_M_loop1_end : f_M_loop1_MretTy -> MONAD ((list Z * Z))." in block
         assert "Parameter f_M_loop2_before" not in block
+        # Nested loop2 also has its own ``_tail`` Definition keyed off
+        # its own MretTy plus the parent's state at inner-entry.
+        assert "Definition f_M_loop2_tail : f_M_loop2_MretTy -> (list Z * Z) -> MONAD ((list Z * Z)) :=" in block
+        # Body mechanically threads through parent's after_inner / aux
+        # / tail.
+        assert "a_p' <- f_M_loop1_after_inner_2 a_p r_k;;" in block
+        assert "r_p <- f_M_loop1_aux a_p';;" in block
+        assert "f_M_loop1_tail r_p." in block
         assert "Parameter f_M_loop2_end" not in block
         # Definition f_M composes the outermost loop only.
         assert "s1 <- f_M_loop1_before l1;;" in block
@@ -1277,8 +1289,8 @@ class TestForestFuncBlock:
         assert "Parameter f_loop1_ResTy : Type." in block
         assert "Parameter f_loop2_ResTy" not in block
         # loop1_end returns the intermediate ResTy; loop2_end returns T.
-        assert "Parameter f_M_loop1_end : MretTy -> MONAD f_loop1_ResTy." in block
-        assert "Parameter f_M_loop2_end : MretTy -> MONAD ((list Z * Z))." in block
+        assert "Parameter f_M_loop1_end : f_M_loop1_MretTy -> MONAD f_loop1_ResTy." in block
+        assert "Parameter f_M_loop2_end : f_M_loop2_MretTy -> MONAD ((list Z * Z))." in block
         # loop2_before takes the previous loop's ResTy.
         assert "Parameter f_M_loop2_before : f_loop1_ResTy -> MONAD (list Z * Z)." in block
         # Composition threads t1 through.
@@ -1310,19 +1322,146 @@ class TestForestFuncBlock:
         assert "Definition f_M_loop1_M2 :" in block
         assert "r  <- f_M_loop2_aux s';;" in block
 
-    def test_declare_mretty_emits_parameter_when_requested(self):
+    def test_each_loop_gets_its_own_mretty(self):
+        """Forest scaffold declares one ``MretTy`` per loop — including
+        nested loops.  Inner and outer break-payload types are
+        semantically distinct (they represent different break points),
+        so each gets its own opaque type.  Nested loops bridge their
+        break payload back into the parent's iteration via a
+        per-loop ``_tail`` Definition that takes the parent's state
+        as an extra argument."""
         templates = [_parent(0, children=[1]), _leaf(1, parent=0)]
         block = generate_forest_func_block(
             "f", ["list Z"], "(list Z * Z)", templates,
             mretty_name="f_MretTy", declare_mretty=True,
         )
-        assert "Parameter f_MretTy : Type." in block
-        # All references use the scoped name.
-        assert "MONAD f_MretTy" in block
-        assert "f_M_loop2_M1 : (list Z * Z) -> MONAD f_MretTy." in block
+        # Per-loop type Parameters — one for each loop.
+        assert "Parameter f_M_loop1_MretTy : Type." in block
+        assert "Parameter f_M_loop2_MretTy : Type." in block
+        # No legacy shared MretTy declaration in the forest block.
+        assert "Parameter f_MretTy : Type." not in block
+        # Each loop's M1 produces its OWN MretTy.
+        assert "f_M_loop1_M1 : (list Z * Z) -> MONAD f_M_loop1_MretTy." in block
+        assert "f_M_loop2_M1 : (list Z * Z) -> MONAD f_M_loop2_MretTy." in block
+        # Parent's after_inner consumes the CHILD's MretTy.
+        assert "f_M_loop1_after_inner_2 : (list Z * Z) -> f_M_loop2_MretTy -> MONAD (list Z * Z)." in block
+        # Inner loop has its own ``_tail`` Definition that takes the
+        # parent's state at inner-entry and threads it through
+        # after_inner ;; parent_aux ;; parent_tail.
+        assert "Definition f_M_loop2_tail : f_M_loop2_MretTy -> (list Z * Z) -> MONAD ((list Z * Z)) :=" in block
 
     def test_empty_loop_templates_returns_empty(self):
         assert generate_forest_func_block("f", ["list Z"], "list Z", []) == ""
+
+    # ---- Early-return propagation in the forest scaffold ----
+
+    def test_nested_inner_early_return_taints_outer_mechanical_m2(self):
+        """Inner loop has a direct ``return`` in its body.  Per the
+        bottom-up propagation rule, the outer is tainted too — its
+        mechanical M2 has to match on the inner's ``early_result`` and
+        forward ``ReturnNow`` outward; its body/aux carry the
+        ``early_result`` payload; its curried wrapper exposes
+        ``early_result mretty ret``.
+        """
+        outer = _parent(0, children=[1])
+        inner = _leaf(1, parent=0)
+        outer["has_early_return"] = False
+        outer["has_early_return_in_subtree"] = True
+        inner["has_early_return"] = True
+        inner["has_early_return_in_subtree"] = True
+        block = generate_forest_func_block(
+            "f", ["list Z"], "(list Z)", [outer, inner],
+        )
+        # Leaf M2: LLM hole, with early_result wrap.
+        assert "Parameter f_M_loop2_M2 : (list Z * Z) -> MONAD (early_result (list Z * Z) (list Z))." in block
+        # Parent M2: mechanical, matching on the child's early_result.
+        assert "Definition f_M_loop1_M2 : (list Z * Z) -> MONAD (early_result (list Z * Z) (list Z)) :=" in block
+        assert "match r with" in block
+        assert "| ReturnNow r' => return (ReturnNow r')" in block
+        assert "| Continue r' => a' <- f_M_loop1_after_inner_2 a r';; return (Continue a')" in block
+        # Body break-branch wraps M1's result in Continue.
+        assert "r <- f_M_loop1_M1 a ;; break (Continue r)" in block
+        assert "r <- f_M_loop2_M1 a ;; break (Continue r)" in block
+        # Body continue-branch matches on M2's early_result.
+        assert "| Continue a'' => continue a''" in block
+        assert "| ReturnNow r' => break (ReturnNow r')" in block
+        # Curried wrapper carries early_result mretty_k ret (per-loop MretTy).
+        assert "Definition f_M_loop1 : list Z -> Z -> program unit (early_result f_M_loop1_MretTy (list Z)) :=" in block
+        # Outer top-level _tail matches and short-circuits.
+        assert "Definition f_M_loop1_tail : (early_result f_M_loop1_MretTy (list Z)) -> MONAD ((list Z)) :=" in block
+        # _M delegates to _tail rather than inlining.
+        assert "f_M_loop1_tail r1." in block
+
+    def test_outer_direct_early_return_makes_m2_an_llm_parameter(self):
+        """Outer has a direct ``return`` in its own body (outside the
+        inner).  The mechanical "to_inner;; aux;; after_inner" structure
+        can't model that alternative path, so M2 becomes an LLM-provided
+        Parameter and the inner stays clean.
+        """
+        outer = _parent(0, children=[1])
+        inner = _leaf(1, parent=0)
+        outer["has_early_return"] = True
+        outer["has_early_return_in_subtree"] = True
+        inner["has_early_return"] = False
+        inner["has_early_return_in_subtree"] = False
+        block = generate_forest_func_block(
+            "f", ["list Z"], "(list Z)", [outer, inner],
+        )
+        # Outer M2: Parameter (LLM hole) with early_result, no
+        # mechanical chain emitted.
+        assert "Parameter f_M_loop1_M2 : (list Z * Z) -> MONAD (early_result (list Z * Z) (list Z))." in block
+        assert "Definition f_M_loop1_M2 " not in block
+        # The mechanical boundary holes (to_inner / after_inner) are
+        # NOT emitted — the LLM's M2 invokes the child loop directly.
+        assert "f_M_loop1_to_inner_2" not in block
+        assert "f_M_loop1_after_inner_2" not in block
+        # Inner stays plain (no early_result anywhere on its signatures).
+        assert "Parameter f_M_loop2_M2 : (list Z * Z) -> MONAD (list Z * Z)." in block
+
+    def test_sequential_first_loop_tainted_short_circuits_second(self):
+        """Two sequential top-level loops, first has direct early return.
+        The tail/M chain must surface a ``ReturnNow`` from loop 1's aux
+        as the function's return value without invoking loop 2 at all.
+        """
+        first = _leaf(0)
+        second = _leaf(1)
+        first["has_early_return"] = True
+        first["has_early_return_in_subtree"] = True
+        second["has_early_return"] = False
+        second["has_early_return_in_subtree"] = False
+        block = generate_forest_func_block(
+            "f", ["list Z"], "(list Z)", [first, second],
+        )
+        # First aux carries early_result; tail_1 matches on it.
+        assert "Definition f_M_loop1_tail : (early_result f_M_loop1_MretTy (list Z)) -> MONAD ((list Z)) :=" in block
+        assert "| ReturnNow rt => return rt" in block
+        # Continue branch threads through loop 2 normally.
+        assert "| Continue r' =>" in block
+        assert "t1 <- f_M_loop1_end r';;" in block
+        assert "s2 <- f_M_loop2_before t1;;" in block
+        assert "r2 <- f_M_loop2_aux s2;;" in block
+        assert "f_M_loop2_end r2." in block
+        # _M delegates to _tail rather than inlining the chain.
+        assert "f_M_loop1_tail r1." in block
+        # Second loop stays clean — no early_result on its body / aux.
+        assert "Definition f_M_loop2_body : (list Z * Z) -> MONAD (CntOrBrk (list Z * Z) f_M_loop2_MretTy) :=" in block
+
+    def test_clean_forest_emits_no_early_result_anywhere(self):
+        """Regression guard: forests with no taint must not introduce
+        any ``early_result`` types — keeps backward compatibility for
+        the dozens of existing forest test fixtures.
+        """
+        outer = _parent(0, children=[1])
+        inner = _leaf(1, parent=0)
+        outer["has_early_return"] = False
+        outer["has_early_return_in_subtree"] = False
+        inner["has_early_return"] = False
+        inner["has_early_return_in_subtree"] = False
+        block = generate_forest_func_block(
+            "f", ["list Z"], "(list Z * Z)", [outer, inner],
+        )
+        assert "early_result" not in block
+        assert "ReturnNow" not in block
 
 
 class TestForestEndToEnd:
@@ -1414,22 +1553,32 @@ class TestForestAssembler:
     def test_assembler_replaces_forest_parameters(self, tmp_path):
         """End-to-end: feed synthesized Definitions for every forest component
         of glibc_slist_iter_back_2 and verify the assembler replaces each
-        Parameter line with the supplied Definition."""
+        Parameter line with the supplied Definition.
+
+        The forest scaffold declares one MretTy per loop, so the synth
+        response supplies both ``M_loop1_MretTy`` and ``M_loop2_MretTy``
+        Definitions.  ``after_inner_{c}`` consumes the CHILD's MretTy.
+        """
         fn = "glibc_slist_clean_iter_back_2"
+        # Subtree-shared MretTy: outer + inner reference the root's
+        # ``M_loop1_MretTy`` everywhere.
+        mretty = f"{fn}_M_loop1_MretTy"
         response = "\n".join([
-            "Definition MretTy : Type := (list Z * list Z * Z).",
+            f"Definition {mretty} : Type := (list Z * Z).",
             f"Definition {fn}_loop1_guardP : (list Z * Z) -> Prop := fun a => let '(l, s) := a in l <> nil.",
             f"Definition {fn}_loop2_guardP : (list Z * Z) -> Prop := fun a => let '(l, s) := a in l <> nil.",
-            f"Definition {fn}_M_loop1_M1 : (list Z * Z) -> MONAD MretTy := fun a => let '(l, s) := a in return (nil, l, s).",
-            f"Definition {fn}_M_loop2_M1 : (list Z * Z) -> MONAD MretTy := fun a => let '(l, s) := a in return (nil, l, s).",
-            f"Definition {fn}_M_loop2_M2 : (list Z * Z) -> MONAD (list Z * Z) := fun a => return a.",
-            f"Definition {fn}_M_loop1_to_inner_2 : (list Z * Z) -> MONAD (list Z * Z) := fun a => return a.",
-            f"Definition {fn}_M_loop1_after_inner_2 : (list Z * Z) -> MretTy -> MONAD (list Z * Z) := fun a r => return a.",
+            f"Definition {fn}_M_loop1_M1 : (list Z * Z) -> MONAD {mretty} := fun a => return a.",
+            f"Definition {fn}_M_loop2_M1 : (list Z * list Z * Z) -> MONAD {mretty} := fun a => let '(l, _, _) := a in return (l, 0).",
+            f"Definition {fn}_M_loop2_M2 : (list Z * list Z * Z) -> MONAD (list Z * list Z * Z) := fun a => return a.",
+            f"Definition {fn}_M_loop1_to_inner_2 : (list Z * Z) -> MONAD (list Z * list Z * Z) := fun a => let '(l, s) := a in return (nil, l, s).",
+            f"Definition {fn}_M_loop1_after_inner_2 : (list Z * Z) -> {mretty} -> MONAD (list Z * Z) := fun a r => return a.",
             f"Definition {fn}_M_loop1_before : list Z -> MONAD (list Z * Z) := fun l1 => return (l1, 0).",
-            f"Definition {fn}_M_loop1_end : MretTy -> MONAD ((list Z * Z)) := fun r => let '(processed, _, s) := r in return (processed, s).",
+            f"Definition {fn}_M_loop1_end : {mretty} -> MONAD ((list Z * Z)) := fun r => return r.",
         ])
+        # parse_synthesized_components auto-prepends the function name
+        # to every entry — pass suffix names only.
         required = [
-            "MretTy",
+            "M_loop1_MretTy",
             "loop1_guardP", "loop2_guardP",
             "M_loop1_M1", "M_loop2_M1", "M_loop2_M2",
             "M_loop1_to_inner_2", "M_loop1_after_inner_2",
@@ -1517,23 +1666,31 @@ class TestForestRelCAndLibAgree:
         assert translate_c_file(c_file, str(out))
         text = out.read_text()
         fn = "glibc_slist_clean_iter_back_2"
-        extern = text.split("/*@ Extern Coq", 2)[2].split("*/", 1)[0]
 
-        # Per-loop declarations are present.
-        assert f"{fn}_M_loop1:" in extern
-        assert f"{fn}_M_loop2:" in extern
-        # Tail (the residual program after loop1) is what the Inv binds
-        # with — ``_end`` is internal to the lib and not exposed.
-        assert f"{fn}_M_loop1_tail:" in extern
-        assert f"{fn}_M_loop1_end:" not in extern
+        # Per-loop declarations are present somewhere in the rel.c
+        # (multiple ``Extern Coq`` blocks now exist — one per per-loop
+        # MretTy plus the main program-declaration block).
+        assert f"{fn}_M_loop1:" in text
+        assert f"{fn}_M_loop2:" in text
+        # Per-loop MretTy: every loop has its own opaque break-payload
+        # type, including nested loops.
+        assert f"{fn}_M_loop1_MretTy" in text
+        assert f"{fn}_M_loop2_MretTy" in text
+        # Per-loop ``_tail`` Declarations — both top-level and nested.
+        # ``_end`` is internal to the lib and not exposed.
+        assert f"{fn}_M_loop1_tail:" in text
+        assert f"{fn}_M_loop2_tail:" in text
+        assert f"{fn}_M_loop1_end:" not in text
         # The single-loop names that used to appear unconditionally are gone.
-        assert f"{fn}_M_loop:" not in extern
-        assert f"{fn}_M_loop_end:" not in extern
+        assert f"{fn}_M_loop:" not in text
+        assert f"{fn}_M_loop_end:" not in text
 
     def test_per_inv_programs_thread_loop_indices_into_invariants(self, tmp_path):
-        """Each ``Inv`` in the ``_rel.c`` must reference its own loop's
-        ``_M_loop{k}`` (not all the same name) and bind the
-        continuation with the root loop's ``_M_loop{root_k}_tail``."""
+        """Each ``Inv`` in the ``_rel.c`` references its OWN loop's
+        ``_M_loop{k}`` and binds the continuation with that loop's
+        ``_M_loop{k}_tail`` — including nested loops, which now have
+        their own per-loop tail (with the parent's state at inner-entry
+        as an extra ``outer_state`` argument)."""
         from GenMonads.translate_c_file import translate_c_file
 
         c_file = _forest_fixture_path(tmp_path)
@@ -1545,9 +1702,12 @@ class TestForestRelCAndLibAgree:
         # Outer Inv references loop1; inner references loop2.
         assert "_M_loop1(" in invs[0] and "_M_loop2(" not in invs[0]
         assert "_M_loop2(" in invs[1] and "_M_loop1(" not in invs[1]
-        # Both bind with the root loop's tail (the full residual from
-        # the outer loop's exit to function return).
-        assert all("_M_loop1_tail" in iv for iv in invs)
+        # Outer Inv binds to ``_M_loop1_tail`` directly.
+        assert "_M_loop1_tail" in invs[0]
+        # Inner Inv binds with a lambda that passes the outer state
+        # to ``_M_loop2_tail``.
+        assert "_M_loop2_tail" in invs[1]
+        assert "outer_state" in invs[1]
         # And NOT with ``_end`` — that name is internal-lib-only.
         assert not any("_M_loop1_end" in iv for iv in invs)
 

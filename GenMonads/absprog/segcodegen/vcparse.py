@@ -51,6 +51,20 @@ def parse_spec(text: str) -> Spec:
     )
 
 
+def parse_all_invs(text: str) -> List[List[str]]:
+    """Every loop ``Inv``'s existential variables, in source order — so a loop
+    forest yields one list per loop (outermost first).  `parse_spec` keeps only
+    the first for backward compatibility; the forest synthesizer needs them all
+    to give each loop its own carrier."""
+    out: List[List[str]] = []
+    for m in re.finditer(r"\bInv\b\s*((?:exists\s+[A-Za-z0-9_ ]+?\s*,\s*)+)", text):
+        vs: List[str] = []
+        for grp in re.findall(r"exists\s+([A-Za-z0-9_ ]+?)\s*,", m.group(1)):
+            vs.extend(grp.split())
+        out.append(vs)
+    return out
+
+
 # ---- proof blocks ----------------------------------------------------------
 
 @dataclass
@@ -186,6 +200,27 @@ def _parse_one(body: str) -> VCBlock:
             vc.post_exists.append(line)
 
     return vc
+
+
+def scalar_witness_bases(text: str) -> set:
+    """Base names of logical variables that hold a *scalar* (``Z``) value, read
+    from local-variable ``store(&v, <ctype>, val)`` atoms in the annotations.
+
+    A store whose C type is **not** a pointer (`int`, `long`, `signed int`, …)
+    carries a scalar; a pointer store (`struct list*`) carries an address.  This
+    is the registry-style signal that distinguishes a flag/accumulator data
+    witness (e.g. ``take_y``'s ``ty``, the sum ``s``) — which the abstract
+    carrier keeps as a ``Z`` — from a pointer existential, which it drops.  Only
+    simple ``&name`` stores match (the source-annotation form ``store(&v, ty,
+    val)``); field stores ``store(&(p->f), val, ty)`` use the opposite operand
+    order and are skipped here."""
+    from .synth import base_name
+    out: set = set()
+    for m in re.finditer(r"store\(\s*&(\w+)\s*,\s*([^,]+?)\s*,\s*(\w+)\s*\)", text):
+        ctype, val = m.group(2), m.group(3)
+        if "*" not in ctype:
+            out.add(base_name(val))
+    return out
 
 
 def find_funccall(blocks: List[VCBlock], callee: str, result_var: str) -> Optional[VCBlock]:

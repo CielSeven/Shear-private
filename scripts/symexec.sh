@@ -22,6 +22,12 @@
 #
 #   scripts/symexec.sh --FULL_AUTO=false
 #     Explicitly skip --full-auto, even if enabled via environment/config.
+#
+#   scripts/symexec.sh --FILE=... --AUTO_VC
+#     Also pass --Auto-VC-Checking to the binary, writing each VC's
+#     WitnessTrySolve steps + result to <AUTOVC_DIR>/<base>_autovc.c.
+#     AUTOVC_DIR defaults to <input-dir>/autovc (single FILE) or
+#     <C_DIR>/autovc (directory mode); override with --AUTOVC_DIR=<dir>.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,6 +44,8 @@ if [ -z "${SYMEXEC_INCLUDE_DIRS:-}" ] && [ -n "${SYMEXEC_HEADER_DIR:-}" ]; then
 fi
 
 SYMEXEC_FULL_AUTO="${SYMEXEC_FULL_AUTO:-0}"
+AUTO_VC="${SYMEXEC_AUTO_VC:-0}"
+AUTOVC_DIR="${AUTOVC_DIR:-}"
 
 parse_bool() {
   case "$1" in
@@ -67,6 +75,9 @@ for arg in "$@"; do
     -CLEAN|--CLEAN|-clean|--clean|clean) CLEAN_FLAG=1;;
     -FULL_AUTO|--FULL_AUTO|-full-auto|--full-auto|full-auto|-SYMEXEC_FULL_AUTO|--SYMEXEC_FULL_AUTO) SYMEXEC_FULL_AUTO=1;;
     -NO_FULL_AUTO|--NO_FULL_AUTO|-NO_SYMEXEC_FULL_AUTO|--NO_SYMEXEC_FULL_AUTO) SYMEXEC_FULL_AUTO=0;;
+    -AUTO_VC|--AUTO_VC|-auto-vc|--auto-vc|-Auto-VC-Checking|--Auto-VC-Checking) AUTO_VC=1;;
+    -NO_AUTO_VC|--NO_AUTO_VC) AUTO_VC=0;;
+    -AUTOVC_DIR=*|--AUTOVC_DIR=*) AUTOVC_DIR="${arg#*=}"; AUTO_VC=1;;
     -FULL_AUTO=*|--FULL_AUTO=*|-SYMEXEC_FULL_AUTO=*|--SYMEXEC_FULL_AUTO=*)
       parsed_full_auto="$(parse_bool "${arg#*=}")" || exit 1
       SYMEXEC_FULL_AUTO="$parsed_full_auto"
@@ -116,6 +127,14 @@ if [ "$CLEAN_FLAG" = "1" ]; then
     FILES=("$C_DIR_ABS"/*.c)
   fi
 
+  if [ -n "$AUTOVC_DIR" ]; then
+    clean_autovc_dir="$(abspath "$AUTOVC_DIR")"
+  elif [ -n "$FILE_ARG" ]; then
+    clean_autovc_dir="$(dirname "$(abspath "$FILE_ARG")")/autovc"
+  else
+    clean_autovc_dir="$C_DIR_ABS/autovc"
+  fi
+
   count=0
   for f in "${FILES[@]}"; do
     [ -f "$f" ] || continue
@@ -125,7 +144,8 @@ if [ "$CLEAN_FLAG" = "1" ]; then
       "$OUTPUT_ABS/${base}_goal.v" \
       "$OUTPUT_ABS/${base}_proof_auto.v" \
       "$OUTPUT_ABS/${base}_proof_manual.v" \
-      "$OUTPUT_ABS/${base}_goal_check.v"; do
+      "$OUTPUT_ABS/${base}_goal_check.v" \
+      "$clean_autovc_dir/${base}_autovc.c"; do
       if [ -f "$target" ]; then
         rm -f "$target"
         count=$((count + 1))
@@ -219,6 +239,19 @@ else
   FILES=(*.c)
 fi
 
+# --- Resolve the --Auto-VC-Checking output directory (per-file path built in the loop)
+autovc_dir_abs=""
+if [ "$AUTO_VC" = "1" ]; then
+  if [ -n "$AUTOVC_DIR" ]; then
+    autovc_dir_abs="$(abspath "$AUTOVC_DIR")"
+  elif [ -n "$FILE_ARG" ]; then
+    autovc_dir_abs="$(dirname "$file_abs")/autovc"
+  else
+    autovc_dir_abs="$C_DIR_ABS/autovc"
+  fi
+  mkdir -p "$autovc_dir_abs"
+fi
+
 for f in "${FILES[@]}"; do
   base="$(basename "${f%.c}")"
   log="$LOGDIR_ABS/${base}_log.txt"
@@ -235,14 +268,22 @@ for f in "${FILES[@]}"; do
     symexec_cmd+=("${FULL_AUTO_FLAGS[@]}")
   fi
 
+  if [ "$AUTO_VC" = "1" ]; then
+    symexec_cmd+=(--Auto-VC-Checking "$autovc_dir_abs/${base}_autovc.c")
+  fi
+
   symexec_cmd+=(
     --input-file="$f"
     --goal-file="$goal_out"
     --proof-auto-file="$auto_out"
     --proof-manual-file="$manual_out"
-    --basic-assertion
     # --user-info=2
   )
+
+  # --basic-assertion is incompatible with --Auto-VC-Checking; omit it then.
+  # if [ "$AUTO_VC" != "1" ]; then
+  #   symexec_cmd+=(--basic-assertion)
+  # fi
 
   [ -z "$FILE_ARG" ] && echo ">>> Processing $f"
   {

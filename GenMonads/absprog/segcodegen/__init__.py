@@ -20,9 +20,10 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from . import facts, regions, witness
-from .synth import base_name, referenced_funccalls, synth_branched
-from .template import Hole, Template, parse_template
-from .vcparse import Mapping, Spec, VCBlock, parse_blocks, parse_spec
+from .synth import base_name, referenced_funccalls, synth_branched, synth_recursive
+from .template import Hole, Template, parse_template, _arg_type
+from .vcparse import (Mapping, Spec, VCBlock, parse_all_invs, parse_blocks,
+                      parse_spec, scalar_witness_bases)
 
 __all__ = ["fill_template", "fill_from_paths"]
 
@@ -64,7 +65,28 @@ def _definition(hole: Hole, body: str) -> str:
     return f"Definition {hole.name} : {hole.type_str} :=\n{indented}"
 
 
-_HOLE_SUFFIXES = ("_M_loop_before", "_M_loop_M1", "_M_loop_M2", "_M_loop_end", "_M")
+def _result_after_arrow(type_str: str) -> str:
+    """The result type of ``ARG -> RESULT`` (everything right of the top-level
+    ``->``)."""
+    arg = _arg_type(type_str)
+    return type_str[len(arg):].lstrip()[2:].strip() if arg else type_str
+
+
+def _recursive_definition(hole: Hole, arg_name: str, body: str) -> str:
+    """Emit a `Fixpoint` for a self-recursive whole-function hole: the argument
+    is named (so the `match` body can recurse on its subterms) and the result
+    type follows the colon — ``Fixpoint f (l1 : list Z) : MONAD (list Z) := …``."""
+    arg_type = _arg_type(hole.type_str)
+    result = _result_after_arrow(hole.type_str)
+    indented = "\n".join("  " + l for l in body.split("\n"))
+    return f"Fixpoint {hole.name} ({arg_name} : {arg_type}) : {result} :=\n{indented}."
+
+
+_HOLE_SUFFIXES = ("_M_loop_before", "_M_loop_M1", "_M_loop_M2", "_M_loop_end",
+                  "_M_before", "_M_normal", "_M")
+
+
+_FOREST_SUFFIX_RE = re.compile(r"_M_loop\d+_.+$")
 
 
 def _hole_func(name: str) -> str:
@@ -72,6 +94,9 @@ def _hole_func(name: str) -> str:
     `rev_append_local`.  In a multi-function file this scopes a hole to its own
     VCs (whose names share the prefix), so one function's returns never leak into
     another's loop body."""
+    forest = _FOREST_SUFFIX_RE.sub("", name)       # `..._M_loop2_M1` -> `...`
+    if forest != name:
+        return forest
     for suf in _HOLE_SUFFIXES:
         if name.endswith(suf):
             return name[: -len(suf)]
@@ -102,7 +127,9 @@ def _segment_arms(hole: Hole, blocks: List[VCBlock], spec: Spec, guard) -> Tuple
     cont_wrap = "Continue" if early else None
     ret_wrap = "ReturnNow" if early else None
 
-    if hole.role == "before":
+    if hole.role in ("before", "fbefore"):
+        # `fbefore` is the outermost loop's entry in a loop forest — same shape as
+        # a single loop's `before` (initial carrier from the loop-entry entail).
         input_group = spec.with_vars
         entail_vcs, return_vcs = [before_vc], regions.before_return_vcs(fblocks)
     elif hole.role == "M2":
@@ -111,6 +138,21 @@ def _segment_arms(hole: Hole, blocks: List[VCBlock], spec: Spec, guard) -> Tuple
     elif hole.role == "end":
         input_group = spec.carrier_vars
         entail_vcs, return_vcs = [], [end_vc]
+    elif hole.role == "before_noloop":
+        # no-loop early-return prelude: the Continue arm threads the inputs
+        # through unchanged (a synthetic identity entail, guarded by the negated
+        # early-return discriminator); the ReturnNow arms are the early returns.
+        input_group = spec.with_vars
+        before_rets = regions.before_return_vcs(fblocks)
+        entail_vcs = [_noloop_continue_vc(spec.carrier_vars, before_rets)]
+        return_vcs = before_rets
+    elif hole.role == "normal":
+        # the straight-line tail after the decision point: input is the carrier
+        # (= the threaded inputs), output is the function result.
+        input_group = spec.carrier_vars
+        entail_vcs = []
+        return_vcs = [b for b in fblocks
+                      if b.kind == "return" and regions.region(b) != "before"]
     else:   # "M" — no-loop whole function: every return is a result path
         input_group = spec.with_vars
         entail_vcs, return_vcs = [], [b for b in fblocks if b.kind == "return"]
@@ -125,10 +167,172 @@ def _segment_arms(hole: Hole, blocks: List[VCBlock], spec: Spec, guard) -> Tuple
     return input_group, arms
 
 
+def _noloop_continue_vc(carrier_vars: List[str], before_returns: List[VCBlock]) -> VCBlock:
+    """A synthetic entail VC for a no-loop ``M_before``'s Continue arm: it maps
+    the carrier to itself (the inputs pass through untouched) and guards on the
+    negation of each early return's list discriminator (``l1 == nil`` becomes the
+    pure guard ``l1 != nil``), so Continue and the ReturnNow arms are mutually
+    exclusive.  No real VC describes the fall-through, so we build it here rather
+    than special-casing the synthesizer."""
+    from .synth import base_name
+    vc = VCBlock(name="__noloop_continue", kind="entail")
+    vc.exist_mapping = [Mapping(v, v) for v in carrier_vars]      # identity
+    for b in before_returns:
+        for p in b.leftover_props:
+            m = re.match(r"(.+?)\s*==\s*(nil\(.*\))\s*$", p.strip())
+            if m and base_name(m.group(1)) in carrier_vars:
+                neg = f"{base_name(m.group(1))} != {m.group(2)}"
+                if neg not in vc.leftover_props:
+                    vc.leftover_props.append(neg)
+    return vc
+
+
+def _carrier_type_from_vars(vars: List[str], scalar_bases: set) -> str:
+    """The abstract-state tuple type for a no-loop early-return function, whose
+    carrier is just the threaded inputs: a scalar (stored at an int type) is
+    ``Z``, everything else a ``list Z``."""
+    parts = ["Z" if v in scalar_bases else "list Z" for v in vars]
+    return "(" + " * ".join(parts) + ")"
+
+
+_LOOP_RE = re.compile(r"_M_loop(\d+)_")
+_CHILD_RE = re.compile(r"_(?:to_inner|after_inner)_(\d+)$")
+
+
+def _loop_index(name: str) -> Optional[int]:
+    m = _LOOP_RE.search(name)
+    return int(m.group(1)) if m else None
+
+
+def _child_index(name: str) -> Optional[int]:
+    m = _CHILD_RE.search(name)
+    return int(m.group(1)) if m else None
+
+
+def fill_forest(tmpl: Template, blocks: List[VCBlock], spec: Spec,
+                invs: List[List[str]], scalar_bases: set) -> Dict[str, str]:
+    """Fill a loop-forest template's holes from the (now complete) per-loop VCs.
+
+    The synthesizer is untouched: every hole still becomes ``synth_branched(arms,
+    input_group)``.  The forest only adds a *richer routing* — each `entail`/
+    `return` VC is classified by the **(from-loop -> to-loop)** transition it
+    proves, and the holes are wired to the matching VCs:
+
+    * ``loop{k}_before``  <- precond -> loop k         (entry; outermost loop)
+    * ``loop{p}_to_inner_{c}``     <- loop p -> loop c  (enter the nested loop)
+    * ``loop{k}_M2``      <- loop k -> loop k           (a body iteration)
+    * ``loop{p}_after_inner_{c}``  <- loop c -> loop p  (resume the outer body)
+    * ``loop{k}_end``     <- loop k -> result           (the loop's exit return)
+    * ``loop{k}_M1``      = ``fun r => return r``        (break — fixed)
+    * ``loop{k}_MretTy``  := loop k's carrier type        (per-loop result type)
+
+    A loop is identified by its *distinguishing list variables* (its `Inv`'s list
+    components, which differ per loop); the shared scalar witness does not
+    disambiguate.  ``after_inner`` is the one curried hole — synthesized from the
+    inner result (its VC's roots) with the unused outer-carrier argument prepended,
+    so the binder shape the template demands is produced without touching synth."""
+    holes = tmpl.holes
+    loop_ct: Dict[int, str] = {}
+    for h in holes:                                  # carrier type from each loop's M1 arg
+        if h.role == "fM1":
+            loop_ct[_loop_index(h.name)] = _arg_type(h.type_str)
+    loops = sorted(k for k in loop_ct if k is not None)
+
+    # loop k <-> invs[k-1] (source order: outermost loop is loop 1, first `Inv`)
+    loop_vars: Dict[int, List[str]] = {}
+    loop_list: Dict[int, List[str]] = {}             # distinguishing list vars
+    for k in loops:
+        inv = invs[k - 1] if 0 <= k - 1 < len(invs) else []
+        cv = witness.refine(inv, blocks, loop_ct[k], scalar_bases)
+        loop_vars[k] = cv
+        loop_list[k] = [v for v in cv if v not in scalar_bases]
+
+    ensure_vars = spec.ensure_vars
+    res_ty = _result_type(holes)
+    if res_ty:
+        ensure_vars = witness.refine(spec.ensure_vars, blocks, res_ty, scalar_bases)
+
+    def loop_of(bases: set) -> Optional[int]:
+        for k in loops:
+            if any(b in bases for b in loop_list[k]):
+                return k
+        return None
+
+    def src(vc: VCBlock):                            # the "from" location of a VC
+        ctx = vc.context_exists
+        if ctx and all(c.endswith("_free") for c in ctx):
+            return "precond"
+        return loop_of({base_name(c) for c in ctx})
+
+    def dst(vc: VCBlock):                            # the "to" location of a VC
+        bases = {base_name(m.lhs) for m in vc.exist_mapping}
+        if bases and bases <= set(ensure_vars):
+            return "result"
+        return loop_of(bases)
+
+    fblocks = [b for b in blocks if b.name.startswith(tmpl.func + "_")]
+    entail_by: Dict[tuple, List[VCBlock]] = {}
+    return_by: Dict[object, List[VCBlock]] = {}
+    for b in fblocks:
+        if b.kind == "entail":
+            entail_by.setdefault((src(b), dst(b)), []).append(b)
+        elif b.kind == "return":
+            return_by.setdefault(src(b), []).append(b)
+
+    def arms(vcs, out_group):
+        return [(vc, referenced_funccalls(vc, fblocks), out_group, None) for vc in vcs]
+
+    repl: Dict[str, str] = {}
+    for h in holes:
+        k = _loop_index(h.name)
+        if h.role == "loop_mretty":
+            repl[h.name] = f"Definition {h.name} : Type := {loop_ct[k]}."
+        elif h.role == "fM1":                        # break branch (fixed)
+            repl[h.name] = _definition(h, "fun r => return r.")
+        elif h.role == "fM2":                        # loop k body iteration
+            repl[h.name] = _definition(
+                h, synth_branched(arms(entail_by.get((k, k), []), loop_vars[k]), loop_vars[k]))
+        elif h.role == "fbefore":                    # precond -> loop k
+            repl[h.name] = _definition(
+                h, synth_branched(arms(entail_by.get(("precond", k), []), loop_vars[k]),
+                                  spec.with_vars, curried=h.curried))
+        elif h.role == "fend":                       # loop k -> result
+            repl[h.name] = _definition(
+                h, synth_branched(arms(return_by.get(k, []), ensure_vars), loop_vars[k]))
+        elif h.role == "to_inner":                   # loop k -> child loop c
+            c = _child_index(h.name)
+            repl[h.name] = _definition(
+                h, synth_branched(arms(entail_by.get((k, c), []), loop_vars[c]), loop_vars[k]))
+        elif h.role == "after_inner":                # child loop c -> loop k
+            c = _child_index(h.name)
+            resume_vcs = entail_by.get((c, k), [])
+            if not resume_vcs:
+                # No resume entailment: a strengthened outer invariant (e.g.
+                # `lseg(x, stop) * listrep(stop)`) makes the child's exit state
+                # *be* the outer carrier, so the solver closed the continue-path
+                # entailment trivially and emitted no proof block.  The resume is
+                # then the identity — pass the inner loop's result through as the
+                # new outer carrier.
+                repl[h.name] = _definition(h, "fun a r => return r.")
+            else:
+                body = synth_branched(arms(resume_vcs, loop_vars[k]), loop_vars[c])
+                body = body.replace("fun ", "fun a ", 1)  # prepend the unused outer-carrier arg
+                repl[h.name] = _definition(h, body)
+    return repl
+
+
+def _is_recursive(func: str, blocks: List[VCBlock]) -> bool:
+    """A whole-function hole is recursive iff one of its VCs calls the function
+    itself (a `funccall_wit` whose callee is `func`)."""
+    return any(b.kind == "funccall" and b.call_target == func
+               for b in blocks if b.name.startswith(func + "_"))
+
+
 def _result_type(holes: List[Hole]) -> Optional[str]:
     """The `MONAD <R>` result type of the hole that produces the function result
-    (`end` / `M` / `normal`), used to shape the `Ensure` tuple."""
-    for role in ("end", "M", "normal"):
+    (`end` / `M` / `normal`, or the forest's outer-loop `fend`), used to shape the
+    `Ensure` tuple."""
+    for role in ("end", "M", "normal", "fend"):
         for h in holes:
             if h.role == role:
                 m = re.search(r"MONAD\s*(.+?)\s*$", h.type_str)
@@ -170,25 +374,51 @@ def fill_template(template_text: str, autovc_text: str) -> str:
     # Resolve the abstract carrier / result to their *logical* components: drop
     # pointer existentials, keep lists + data witnesses, ordered to the template
     # (registry-driven — see witness.py).  List-only functions are unchanged.
+    scalar_bases = scalar_witness_bases(autovc_text)
+    # Loop forest (`_M_loop{k}_*`): several loops, each with its own carrier and
+    # result type — filled by per-loop VC routing (see `fill_forest`), not the
+    # single-carrier path below.
+    forest = any(h.role in ("fM1", "fM2", "fbefore", "fend", "to_inner",
+                            "after_inner", "loop_mretty") for h in tmpl.holes)
+    forest_repl: Dict[str, str] = {}
+    if forest:
+        forest_repl = fill_forest(tmpl, blocks, spec, parse_all_invs(autovc_text), scalar_bases)
+    # No-loop early-return shape (`M_before`/`M_normal`): there is no `Inv`, so the
+    # abstract carrier is the threaded inputs — the `With` vars — and `MretTy` is
+    # their tuple type (the template declares it abstract: `Parameter MretTy`).
+    noloop_early = any(h.role in ("before_noloop", "normal") for h in tmpl.holes)
+    if noloop_early and not tmpl.carrier_type:
+        tmpl.carrier_type = _carrier_type_from_vars(spec.with_vars, scalar_bases)
+        spec = Spec(with_vars=spec.with_vars, carrier_vars=list(spec.with_vars),
+                    ensure_vars=spec.ensure_vars)
     carrier_vars = spec.carrier_vars
-    if tmpl.carrier_type:
-        carrier_vars = witness.refine(spec.carrier_vars, blocks, tmpl.carrier_type)
+    if tmpl.carrier_type and not noloop_early and not forest:
+        carrier_vars = witness.refine(spec.carrier_vars, blocks, tmpl.carrier_type, scalar_bases)
     ensure_vars = spec.ensure_vars
     res_ty = _result_type(tmpl.holes)
-    if res_ty:
-        ensure_vars = witness.refine(spec.ensure_vars, blocks, res_ty)
+    if res_ty and not forest:
+        ensure_vars = witness.refine(spec.ensure_vars, blocks, res_ty, scalar_bases)
     spec = Spec(with_vars=spec.with_vars, carrier_vars=carrier_vars, ensure_vars=ensure_vars)
 
     guard = regions.parse_guard(tmpl.text)
 
     out = tmpl.text
     for hole in tmpl.holes:
-        if hole.role == "mretty":                       # type definition, not a segment
+        if hole.name in forest_repl:                    # loop-forest hole (per-loop routing)
+            replacement = forest_repl[hole.name]
+        elif hole.role == "mretty":                     # type definition, not a segment
             replacement = f"Definition MretTy : Type := {tmpl.carrier_type}."
         elif hole.role == "M1":                          # fixed break branch (no VC drives it)
             replacement = _definition(hole, "fun r => return r.")
-        elif hole.role in ("before", "M2", "end", "M"):  # VC-driven: one uniform path
+        elif hole.role == "M" and _is_recursive(_hole_func(hole.name), blocks):
+            # self-recursive function: a `Fixpoint` over a `match` on the
+            # recursion argument (the arms' destructuring becomes the patterns).
             input_group, arms = _segment_arms(hole, blocks, spec, guard)
+            body = synth_recursive(arms, input_group[0])
+            replacement = _recursive_definition(hole, input_group[0], body)
+        elif hole.role in ("before", "M2", "end", "M",
+                           "before_noloop", "normal", "fbefore"):
+            input_group, arms = _segment_arms(hole, blocks, spec, guard)  # VC-driven: one uniform path
             body = synth_branched(arms, input_group, curried=hole.curried)
             replacement = _definition(hole, body)
         else:

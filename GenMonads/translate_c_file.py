@@ -28,7 +28,7 @@ from GenMonads.addabstract.addexec import (
 from GenMonads.header_mapping import translate_headers
 
 
-LLM4PV_DEFAULT_BACKEND = "command"
+LLM4PV_DEFAULT_BACKEND = "segcodegen"
 # Workdir-mode owns the codex invocation internally — no shell template here.
 # Retained as a legacy CLI default that's ignored by the rewired backend.
 LLM4PV_DEFAULT_COMMAND = ""
@@ -412,6 +412,317 @@ def collect_callee_functions(content: str, functions: List[Dict]) -> set[str]:
     return callees
 
 
+def _process_funcspec_data_only(funcspec: Dict) -> Dict:
+    """Build a raw (no-safeExec) funcspec for ``--data-only`` mode from the
+    canonical shape→data decomposition.
+
+    This is the same first stage the rel.c path uses
+    (:func:`process_funcspec_with_safeexec` consumes
+    :func:`canonical_funcspec` too) — emitted without any safeExec wrapping.
+    """
+    from GenMonads.addabstract.addexec import canonical_funcspec
+    canon = canonical_funcspec(funcspec)
+    result: Dict[str, Dict] = {}
+
+    if canon['require_body']:
+        result['require'] = {'translated': canon['require_body']}
+
+    if canon['ensure_body']:
+        body = canon['ensure_body']
+        if canon['ensure_only_vars']:
+            body = f"exists {' '.join(canon['ensure_only_vars'])}, {body}"
+        result['ensure'] = {'translated': body}
+
+    with_parts: List[str] = []
+    if canon['source_with']:
+        with_parts.append(canon['source_with'])
+    if canon['require_promoted_vars']:
+        with_parts.append(' '.join(canon['require_promoted_vars']))
+    if with_parts:
+        result['with'] = {'translated': ' '.join(with_parts)}
+    return result
+
+
+def _build_data_only_funcspec_parts(processed: Dict) -> List[str]:
+    parts: List[str] = []
+    if processed.get('with'):
+        parts.append(f"With {processed['with']['translated']}")
+    if processed.get('require'):
+        parts.append(f"Require {processed['require']['translated']}")
+    if processed.get('ensure'):
+        parts.append(f"Ensure {processed['ensure']['translated']}")
+    return parts
+
+
+def _replace_funcspec_data_only(
+    content: str, func_name: str, funcspec: Optional[Dict],
+) -> str:
+    if not funcspec:
+        return content
+    processed = _process_funcspec_data_only(funcspec)
+    if not processed:
+        return content
+    rendered = _format_funcspec_comment(_build_data_only_funcspec_parts(processed))
+
+    func_pattern = (
+        rf'((?:[a-zA-Z_][a-zA-Z0-9_\s\*]*?)\b{re.escape(func_name)}\s*\([^)]*\)\s*)'
+        rf'(/\*@.*?\*/)'
+    )
+    if re.search(func_pattern, content, re.DOTALL):
+        return re.sub(
+            func_pattern,
+            lambda m: f"{m.group(1)}{rendered}",
+            content, flags=re.DOTALL,
+        )
+    before_pattern = (
+        rf'(/\*@\s*(?:(?!/\*@).)*?\*/)'
+        rf'(\s*(?:[a-zA-Z_][a-zA-Z0-9_\s\*]*?)\b{re.escape(func_name)}\s*'
+        rf'\([^)]*\)\s*[;{{])'
+    )
+    match = re.search(before_pattern, content, re.DOTALL)
+    if match:
+        return content.replace(match.group(1) + match.group(2), rendered + match.group(2))
+    return content
+
+
+def _replace_inner_assertions_data_only(
+    body: str, inner_assertions: List[Dict],
+) -> str:
+    """Rewrite each ``/*@ Inv ... */`` or ``/*@ Assert ... */`` inside *body*
+    using only the shape→data translated form (no safeExec wrapping).
+    """
+    if not inner_assertions:
+        return body
+    annot_pattern = r'/\*@\s*(Inv|Assert)\s+(.*?)\s*\*/'
+    matches = list(re.finditer(annot_pattern, body, flags=re.DOTALL))
+    for i, match in enumerate(reversed(matches)):
+        idx = len(matches) - 1 - i
+        if idx >= len(inner_assertions):
+            continue
+        assertion = inner_assertions[idx]
+        keyword = match.group(1)
+        translated = assertion.get('translated')
+        if not translated:
+            continue
+        if keyword == 'Inv' and assertion['type'] == 'Inv':
+            kw = "Inv Assert" if assertion.get('inv_assert') else "Inv"
+            new_text = f"/*@ {kw} {translated} */"
+        elif keyword == 'Assert' and assertion['type'] == 'Assert':
+            new_text = f"/*@ Assert {translated} */"
+        else:
+            continue
+        body = body[:match.start()] + new_text + body[match.end():]
+    return body
+
+
+def _apply_data_only_inner_to_function(
+    content: str, func_name: str, inner_assertions: List[Dict],
+) -> str:
+    pattern = (
+        rf'\b{re.escape(func_name)}\s*\((?:[^)]*)\)\s*'
+        rf'(?:/\*@.*?\*/\s*)?\{{'
+    )
+    match = re.search(pattern, content, re.DOTALL)
+    if not match:
+        return content
+    start = match.end()
+    brace_count, pos = 1, start
+    while pos < len(content) and brace_count > 0:
+        if content[pos] == '{':
+            brace_count += 1
+        elif content[pos] == '}':
+            brace_count -= 1
+        pos += 1
+    if brace_count != 0:
+        return content
+    body = content[start:pos - 1]
+    new_body = _replace_inner_assertions_data_only(body, inner_assertions)
+    return content[:start] + new_body + content[pos - 1:]
+
+
+def _caller_program_return_type(
+    funcspec: Optional[Dict], return_type: str
+) -> str:
+    """Compute the Coq return type of the caller's abstract program.
+
+    Mirrors :func:`collect_func_extern_info`'s ``ensure_only`` derivation so
+    the ``B`` instantiation in ``where(low_level_spec_aux) ... B = <type>``
+    matches the type the caller's ``{fn}_M`` was declared with.
+    """
+    if (
+        not funcspec
+        or not funcspec.get('ensure')
+        or not funcspec['ensure'].get('translated')
+    ):
+        return "unit"
+    require_var_names: List[str] = []
+    if funcspec.get('require') and funcspec['require'].get('translated'):
+        require_vars, _ = _extract_generated_var_info(funcspec['require'])
+        require_var_names = [v.lstrip('?') for v in require_vars]
+    ensure_vars, raw_ensure_types = _extract_generated_var_info(funcspec['ensure'])
+    ensure_only = [
+        (name, vt)
+        for name, vt in zip(ensure_vars, raw_ensure_types)
+        if name.lstrip('?') not in require_var_names
+    ]
+    for witness in (funcspec['ensure'].get('data_witnesses', []) or []):
+        ensure_only.append((witness, 'Z'))
+    ensure_body = funcspec['ensure'].get('translated', '') or ''
+    if (
+        return_type
+        and not _is_void_return_type(return_type)
+        and '__return' not in ensure_body
+    ):
+        ensure_only.append(('r', 'Z'))
+    count = len(ensure_only)
+    types = [vt for _, vt in ensure_only]
+    return _return_type(types, count)
+
+
+def _format_callsite_spec_comment(caller_return_type: str) -> str:
+    return (
+        f"/*@ where(low_level_spec_aux) X = X; B = {caller_return_type} */"
+    )
+
+
+def _collect_callsite_callees(
+    input_path: str, content: str, func_names: List[str],
+) -> Set[str]:
+    """Names whose call sites in this file's bodies deserve a
+    ``/*@ where(low_level_spec_aux) X = X */`` annotation.
+
+    Union of (a) functions actually *defined* in any sibling ``.c`` file in
+    the same directory (looked up via
+    :func:`_build_sibling_function_table`, which scans function headers
+    rather than matching by file stem) and (b) the file's own function
+    names (self-recursion).
+    """
+    from GenMonads.absprog.gen_rel_lib import _build_sibling_function_table
+    siblings = set(_build_sibling_function_table(input_path).keys())
+    return siblings | set(func_names)
+
+
+def _insert_callsite_specs(
+    body: str, callees: Set[str], spec_comment: str
+) -> str:
+    """Append *spec_comment* after each call to a function in *callees*.
+    Idempotent: skips call sites already followed by a ``/*@`` annotation.
+    """
+    if not callees:
+        return body
+
+    # Mask comments and string literals so we don't match identifiers inside
+    # them, but keep length unchanged so positions in *body* stay valid.
+    def _mask(text: str) -> str:
+        out = list(text)
+        i, n = 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch == '/' and i + 1 < n and text[i + 1] == '*':
+                j = text.find('*/', i + 2)
+                if j == -1:
+                    j = n
+                else:
+                    j += 2
+                for k in range(i, j):
+                    out[k] = ' '
+                i = j
+            elif ch == '/' and i + 1 < n and text[i + 1] == '/':
+                j = text.find('\n', i)
+                j = n if j == -1 else j
+                for k in range(i, j):
+                    out[k] = ' '
+                i = j
+            elif ch in ('"', "'"):
+                quote = ch
+                j = i + 1
+                while j < n and text[j] != quote:
+                    if text[j] == '\\' and j + 1 < n:
+                        j += 2
+                        continue
+                    j += 1
+                for k in range(i, min(j + 1, n)):
+                    out[k] = ' '
+                i = j + 1
+            else:
+                i += 1
+        return ''.join(out)
+
+    masked = _mask(body)
+    insertions: List[int] = []  # positions (in original body) after `)`
+    pattern = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]*)\s*\(')
+    for m in pattern.finditer(masked):
+        name = m.group(1)
+        if name not in callees:
+            continue
+        # Find matching close paren in the masked text so embedded strings /
+        # comments don't fool the depth counter.
+        depth = 1
+        i = m.end()
+        n = len(masked)
+        while i < n and depth > 0:
+            ch = masked[i]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            i += 1
+        if depth != 0:
+            continue
+        # i now points just past the matching `)`.
+        # Skip whitespace and check if a `/*@` already follows.
+        j = i
+        while j < n and masked[j] in ' \t':
+            j += 1
+        if masked.startswith('/*@', j):
+            continue
+        insertions.append(i)
+
+    if not insertions:
+        return body
+
+    out_parts: List[str] = []
+    prev = 0
+    for pos in insertions:
+        out_parts.append(body[prev:pos])
+        out_parts.append(f" {spec_comment}")
+        prev = pos
+    out_parts.append(body[prev:])
+    return ''.join(out_parts)
+
+
+def _apply_callsite_specs_to_function(
+    content: str, func_name: str, callees: Set[str],
+    caller_return_type: str,
+) -> str:
+    """Rewrite *content* by inserting call-site specs in *func_name*'s body."""
+    if not callees:
+        return content
+    pattern = (
+        rf'\b{re.escape(func_name)}\s*\((?:[^)]*)\)\s*'
+        rf'(?:/\*@.*?\*/\s*)?\{{'
+    )
+    match = re.search(pattern, content, re.DOTALL)
+    if not match:
+        return content
+    start = match.end()
+    brace_count, pos = 1, start
+    while pos < len(content) and brace_count > 0:
+        if content[pos] == '{':
+            brace_count += 1
+        elif content[pos] == '}':
+            brace_count -= 1
+        pos += 1
+    if brace_count != 0:
+        return content
+    body = content[start:pos - 1]
+    spec_comment = _format_callsite_spec_comment(caller_return_type)
+    new_body = _insert_callsite_specs(body, callees, spec_comment)
+    if new_body == body:
+        return content
+    return content[:start] + new_body + content[pos - 1:]
+
+
 def _format_funcspec_comment(parts: List[str], header: Optional[str] = None) -> str:
     """Render one annotation comment from a header label and clause lines."""
     lines = []
@@ -459,19 +770,12 @@ def _build_helper_aux_funcspec(
     any synthetic ``r`` witness AddAbstract introduced for non-void scalar
     returns.
     """
-    ret_types, _ = _extract_funcspec_return_info(funcspec)
-    # Replicate AddAbstract's synthetic-witness rule so the cont type and
-    # the return-call form agree with what was actually emitted in the
-    # Ensure clause.
-    ensure_translated = (funcspec.get('ensure') or {}).get('translated', '') or ''
-    need_witness = (
-        return_type
-        and not _is_void_return_type(return_type)
-        and "__return" not in ensure_translated
-    )
-    if need_witness:
-        ret_types = list(ret_types) + ["Z"]
-    cont_arg_type = _return_type(ret_types, len(ret_types))
+    # Cont type must match the M signature exactly, which means accounting
+    # for Ensure-only vars, data-witnesses lifted into the abstract return,
+    # and any synthetic ``r:Z`` witness for non-void scalar returns.  The
+    # shared :func:`_caller_program_return_type` already encodes all three
+    # rules — defer to it instead of re-deriving here.
+    cont_arg_type = _caller_program_return_type(funcspec, return_type)
     base_with = processed.get('with', {}).get('translated', '').strip()
     with_prefix = f"{{B}} (cont: {cont_arg_type} -> program unit B)"
     with_clause = f"{with_prefix} {base_with}".strip()
@@ -564,17 +868,38 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
     ]
     per_function_mretty = len(mretty_users) >= 2
 
+    def _info_is_forest(info: Dict) -> bool:
+        return len(info.get('loop_templates') or []) > 1
+
     def _mretty_for(info):
         return f"{info['func_name']}_MretTy" if per_function_mretty else "MretTy"
+
+    def _per_loop_mretty(info: Dict, loop_index: int) -> str:
+        """Per-loop MretTy name — every loop has its own opaque
+        break-payload type.  Nested loops bridge their break into the
+        parent's iteration via a per-loop ``_tail`` Definition (emitted
+        by the rel_lib scaffold) that takes the parent's state as an
+        extra argument."""
+        return f"{info['func_name']}_M_loop{loop_index + 1}_MretTy"
 
     # Extern Coq type constructors.  Only emit MretTy when at least one
     # function in this file actually has a loop program that references it;
     # a no-loop / recursive-only file has no MretTy users and the shared
     # `MretTy :: *` would dangle (nothing else in the block uses it).
+    #
+    # Forest-shaped functions declare one MretTy per loop (top-level
+    # and nested alike — they're semantically distinct break points).
+    for info in mretty_users:
+        if _info_is_forest(info):
+            for t in info.get('loop_templates') or []:
+                lines.append(
+                    f"/*@ Extern Coq ({_per_loop_mretty(info, t['loop_index'])} :: *) */"
+                )
+    non_forest_mretty_users = [u for u in mretty_users if not _info_is_forest(u)]
     if per_function_mretty:
-        for info in mretty_users:
+        for info in non_forest_mretty_users:
             lines.append(f'/*@ Extern Coq ({_mretty_for(info)} :: *) */')
-    elif mretty_users:
+    elif non_forest_mretty_users:
         lines.append('/*@ Extern Coq (MretTy :: *) */')
     if any(
         info.get('needs_early_result', False)
@@ -611,27 +936,48 @@ def generate_coq_blocks(basename: str, func_infos: List[Dict], needs_maketuple: 
         if has_loop_program:
             loop_templates = info.get('loop_templates') or []
             if len(loop_templates) > 1:
-                # Forest case: emit per-loop ``_M_loop{k}`` declarations and
-                # one ``_M_loop{k}_end`` per top-level loop (the only ones
-                # the forest scaffold concretely defines an ``end`` for).
+                # Forest case: emit per-loop ``_M_loop{k}`` declarations
+                # and one ``_M_loop{k}_tail`` per top-level loop (the
+                # only ones the forest scaffold concretely defines an
+                # ``end`` for).  Each loop has its own MretTy and, when
+                # its subtree contains an early return, its payload is
+                # wrapped in ``early_result``.
                 for t in loop_templates:
                     k = t['loop_index'] + 1
+                    k_mretty = _per_loop_mretty(info, t['loop_index'])
                     loop_inv_args = _curried_type(t['inv_var_types']) if t['inv_var_types'] else ""
-                    decl_lines.append(
-                        f'({fn}_M_loop{k}: {loop_inv_args}program unit {mretty})'
+                    tainted = bool(t.get('has_early_return_in_subtree'))
+                    loop_payload = (
+                        f"({_early_result_type(k_mretty, ret_type)})"
+                        if tainted else k_mretty
                     )
+                    decl_lines.append(
+                        f'({fn}_M_loop{k}: {loop_inv_args}program unit {loop_payload})'
+                    )
+                # Per-loop ``_M_loop{k}_tail`` declarations.  Top-level
+                # tails take only the loop's own MretTy; nested tails
+                # additionally take the parent's state at inner-entry
+                # so the residual ``after_inner_k ;; parent_aux ;;
+                # parent_tail`` chain in the rel_lib type-checks.
+                by_idx = {tt['loop_index']: tt for tt in loop_templates}
                 for t in loop_templates:
-                    if t.get('parent') is not None:
-                        continue
                     k = t['loop_index'] + 1
-                    # Expose ``_tail`` (the full residual from this loop
-                    # to function return) — the Inv binding uses this.
-                    # ``_end`` is still a Parameter in the lib (the LLM
-                    # fills it) but is internal to the lib's M
-                    # composition; the rel.c never references it.
-                    decl_lines.append(
-                        f'({fn}_M_loop{k}_tail: {mretty} -> program unit {ret_type})'
+                    k_mretty = _per_loop_mretty(info, t['loop_index'])
+                    tainted = bool(t.get('has_early_return_in_subtree'))
+                    tail_in = (
+                        f"({_early_result_type(k_mretty, ret_type)})"
+                        if tainted else k_mretty
                     )
+                    p_idx = t.get('parent')
+                    if p_idx is None:
+                        decl_lines.append(
+                            f'({fn}_M_loop{k}_tail: {tail_in} -> program unit {ret_type})'
+                        )
+                    else:
+                        parent_state = by_idx[p_idx].get('state_type') or 'unit'
+                        decl_lines.append(
+                            f'({fn}_M_loop{k}_tail: {tail_in} -> {parent_state} -> program unit {ret_type})'
+                        )
             else:
                 # {func}_M_loop: t1 -> ... -> program unit {mretty}
                 inv_args = _curried_type(inv_types)
@@ -680,7 +1026,28 @@ def insert_blocks_after_includes(content: str, blocks: str) -> str:
     return '\n'.join(lines)
 
 
-def translate_c_file(input_path: str, output_path: str, monad: str = "staterel") -> bool:
+def _redirect_data_to_rel_includes(content: str, output_dir: str) -> str:
+    """Rewrite ``#include "X_data.h"`` to ``#include "X_rel.h"`` for any
+    header whose rel form lives in *output_dir*.  Used when ``--translate-header``
+    is set in rel mode: rel.c files should consume the rel-form header
+    (which already wraps safeexec and exposes the abstract-program M
+    signatures) rather than the data-form one.
+    """
+    def _replace(match: re.Match) -> str:
+        name = match.group(1)
+        if not name.endswith("_data.h"):
+            return match.group(0)
+        rel_name = name[: -len("_data.h")] + "_rel.h"
+        if os.path.isfile(os.path.join(output_dir, rel_name)):
+            return f'#include "{rel_name}"'
+        return match.group(0)
+    return re.sub(r'#include\s+"([^"]+)"', _replace, content)
+
+
+def translate_c_file(
+    input_path: str, output_path: str, monad: str = "staterel",
+    prefer_rel_header: bool = False,
+) -> bool:
     """
     Translate a C file with shape assertions to use translated assertions.
     """
@@ -709,6 +1076,8 @@ def translate_c_file(input_path: str, output_path: str, monad: str = "staterel")
     # If we have multiple functions (new logic), process each
     if 'functions' in result and result['functions']:
         callee_functions = collect_callee_functions(content, result['functions'])
+        all_func_names = [f['function'] for f in result['functions'] if f.get('function')]
+        callsite_callees = _collect_callsite_callees(input_path, content, all_func_names)
         for func_data in result['functions']:
             func_name = func_data['function']
             program = f"{func_name}_M"
@@ -751,6 +1120,15 @@ def translate_c_file(input_path: str, output_path: str, monad: str = "staterel")
                 program_loop,
                 program_after_loop if early_shape['has_loop_body_early_return'] else program_loop_end,
                 per_inv_programs=per_inv_programs,
+            )
+
+            # 2b. Annotate sibling/self call sites with low_level_spec_aux,
+            # instantiating B to the caller's abstract-program return type.
+            caller_ret_type = _caller_program_return_type(
+                func_data.get('funcspec'), func_data.get('return_type', ''),
+            )
+            content = _apply_callsite_specs_to_function(
+                content, func_name, callsite_callees, caller_ret_type,
             )
 
             # 3. Collect extern info
@@ -802,6 +1180,14 @@ def translate_c_file(input_path: str, output_path: str, monad: str = "staterel")
             per_inv_programs=per_inv_programs,
         )
 
+        callsite_callees = _collect_callsite_callees(input_path, content, [func_name])
+        caller_ret_type = _caller_program_return_type(
+            result.get('funcspec'), result.get('return_type', ''),
+        )
+        content = _apply_callsite_specs_to_function(
+            content, func_name, callsite_callees, caller_ret_type,
+        )
+
         # Collect extern info for single-function mode
         info = collect_func_extern_info(
             result,
@@ -817,6 +1203,14 @@ def translate_c_file(input_path: str, output_path: str, monad: str = "staterel")
     # Translate header file includes
     content = translate_headers(content)
 
+    # When a rel-form header (``X_rel.h``) was generated alongside this
+    # file, swap any ``X_data.h`` include over to it — the rel.h transitively
+    # pulls in safeexec and the M signatures, so the rel.c shouldn't redo
+    # those itself.
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    if prefer_rel_header:
+        content = _redirect_data_to_rel_includes(content, output_dir)
+
     # Insert safeexec_def.h include, unless a header already includes it
     # (directly or transitively).  Search:
     #   - the input directory (for unmapped headers shipped alongside the .c),
@@ -824,7 +1218,7 @@ def translate_c_file(input_path: str, output_path: str, monad: str = "staterel")
     #     `glibc_slist_clean_data.h` that live next to the generated _rel.c).
     header_search_dirs = [
         os.path.dirname(os.path.abspath(input_path)),
-        os.path.dirname(os.path.abspath(output_path)),
+        output_dir,
     ]
     content = insert_safeexec_include(content, header_search_dirs=header_search_dirs, monad=monad)
 
@@ -933,53 +1327,52 @@ def _loop_template_summary(
     return build_loop_templates("", func_source, inner_assertions)
 
 
+_OUTER_STATE_VAR = "outer_state"
+
+
 def _build_per_inv_programs(
     func_name: str, inner_assertions: list, func_source: Optional[str],
 ) -> List[tuple]:
-    """Compute the abstract-program name pair (``M_loop{k}``,
-    ``M_loop{k}_end``) for each Inv annotation in source order, when the
-    function has multiple loops.  Returns ``[]`` for single-loop / no-loop
-    functions (callers fall back to the function-wide ``M_loop`` name).
+    """Compute the binding triple ``(M_loop{k}, continuation, extra_exists)``
+    for each Inv annotation in source order, when the function has
+    multiple loops.  Returns ``[]`` for single-loop / no-loop functions
+    (callers fall back to the function-wide single-loop name).
 
-    The k-th loop (1-based source order) drives the k-th Inv — and only
-    top-level loops have a ``_M_loop{k}_end`` Definition in the forest
-    scaffold, so nested loops' Inv annotations reuse their nearest top-level
-    ancestor's ``_end`` to keep the residual program well-typed.
+    For each Inv:
+
+    * **Top-level loop k**: continuation is ``M_loop{k}_tail``, no extra
+      existentials.  The tail signature is ``MretTy_k -> MONAD ret``.
+    * **Nested loop k (parent p)**: each loop now has its own MretTy,
+      so the binding must use the loop's OWN tail — and the nested tail
+      signature is ``MretTy_k -> S_p -> MONAD ret`` (it takes the
+      parent's state at inner-entry as an extra argument).  Continuation
+      becomes the lambda ``fun r => M_loop{k}_tail r outer_state``;
+      ``extra_exists = ["outer_state"]`` so the Inv-rewriter can add
+      the variable to the existential list.
     """
     summary = _loop_template_summary(inner_assertions, func_source)
     if len(summary) <= 1:
         return []
-    by_idx = {t['loop_index']: t for t in summary}
-
-    def _root(loop_idx: int) -> int:
-        cur = loop_idx
-        while by_idx[cur]['parent'] is not None:
-            cur = by_idx[cur]['parent']
-        return cur
-
     invs = [a for a in inner_assertions if a.get('type') == 'Inv' and 'variables' in a]
-    pairs: List[tuple] = []
-    # The i-th Inv pairs with the i-th LOOP in source order (the summary is
-    # already in source order and only contains loops with assigned Invs).
+    triples: List[tuple] = []
     summary_sorted = sorted(summary, key=lambda t: t['loop_index'])
     for i, t in enumerate(summary_sorted):
         if i >= len(invs):
             break
         k = t['loop_index'] + 1
-        root_k = _root(t['loop_index']) + 1
-        # Bind the loop's continuation with ``_M_loop{root_k}_tail`` —
-        # the residual program from this loop's exit through to the
-        # function's return.  For non-terminal top-level loops, the
-        # bare ``_end`` Parameter is only the BRIDGE to the next loop;
-        # using it would silently under-quantify the residual.  The
-        # forest scaffold emits a ``Definition M_loop{k}_tail`` for
-        # every top-level loop (the last one is just an alias of
-        # ``_end``, so semantics are preserved everywhere).
-        pairs.append((
-            f"{func_name}_M_loop{k}",
-            f"{func_name}_M_loop{root_k}_tail",
-        ))
-    return pairs
+        if t['parent'] is None:
+            triples.append((
+                f"{func_name}_M_loop{k}",
+                f"{func_name}_M_loop{k}_tail",
+                [],
+            ))
+        else:
+            triples.append((
+                f"{func_name}_M_loop{k}",
+                f"(fun r => {func_name}_M_loop{k}_tail r {_OUTER_STATE_VAR})",
+                [_OUTER_STATE_VAR],
+            ))
+    return triples
 
 
 def _loop_program_names(
@@ -988,15 +1381,22 @@ def _loop_program_names(
     program_loop_end: str,
     per_inv_programs: Optional[List[tuple]] = None,
 ) -> tuple:
-    """Pick the abstract-program names to wrap the *i*-th Inv with.
+    """Pick the abstract-program triple ``(M_loop, continuation, extra_exists)``
+    to wrap the *i*-th Inv with.
 
-    When *per_inv_programs* is supplied (multi-loop / forest case) and indexes
-    into the list, use its loop-indexed names — otherwise fall back to the
-    function-wide single-loop names.
+    When *per_inv_programs* is supplied (multi-loop / forest case) and
+    indexes into the list, use its loop-indexed triples — otherwise fall
+    back to the function-wide single-loop names with no extra
+    existentials.
     """
     if per_inv_programs and i < len(per_inv_programs):
-        return per_inv_programs[i]
-    return program_loop, program_loop_end
+        entry = per_inv_programs[i]
+        if len(entry) == 3:
+            return entry
+        # Backward-compat: a 2-tuple (M_loop, continuation) from older
+        # callers means no extra existentials.
+        return (entry[0], entry[1], [])
+    return program_loop, program_loop_end, []
 
 
 def replace_inner_assertions_original(
@@ -1025,7 +1425,7 @@ def replace_inner_assertions_original(
             if (keyword == 'Inv'
                     and assertion['type'] == 'Inv'
                     and 'translated' in assertion):
-                pl, ple = _loop_program_names(
+                pl, ple, extra_exists = _loop_program_names(
                     assertion_index, program_loop, program_loop_end, per_inv_programs,
                 )
                 with_safeexec = add_safeexec_predicate(
@@ -1033,6 +1433,7 @@ def replace_inner_assertions_original(
                     assertion['variables'],
                     pl,
                     ple,
+                    extra_exists_vars=extra_exists,
                 )
                 kw = "Inv Assert" if assertion.get('inv_assert') else "Inv"
                 new_comment = f"/*@ {kw} {with_safeexec} */"
@@ -1088,7 +1489,7 @@ def replace_inner_assertions_for_func(
             if (keyword == 'Inv'
                     and assertion['type'] == 'Inv'
                     and 'translated' in assertion):
-                pl, ple = _loop_program_names(
+                pl, ple, extra_exists = _loop_program_names(
                     assertion_index, program_loop, program_loop_end, per_inv_programs,
                 )
                 with_safeexec = add_safeexec_predicate(
@@ -1096,6 +1497,7 @@ def replace_inner_assertions_for_func(
                     assertion['variables'],
                     pl,
                     ple,
+                    extra_exists_vars=extra_exists,
                 )
                 kw = "Inv Assert" if assertion.get('inv_assert') else "Inv"
                 new_text = f"/*@ {kw} {with_safeexec} */"
@@ -1108,24 +1510,144 @@ def replace_inner_assertions_for_func(
 
     return content[:start] + body + content[pos-1:]
 
-def translate_directory(input_dir: str, output_dir: str, monad: str = "staterel") -> Dict[str, bool]:
+def translate_directory(
+    input_dir: str, output_dir: str, monad: str = "staterel",
+    translate_header: bool = False,
+) -> Dict[str, bool]:
     results = {}
     if not os.path.exists(input_dir):
         print(f"Error: Input directory not found: {input_dir}")
         return results
     os.makedirs(output_dir, exist_ok=True)
-    for filename in os.listdir(input_dir):
+
+    entries = sorted(os.listdir(input_dir))
+    # Process .h files first so the .c translator can find the generated
+    # ``*_rel.h`` next to the rel.c outputs and redirect its includes to it.
+    if translate_header:
+        for filename in entries:
+            if not filename.endswith('.h'):
+                continue
+            from GenMonads.header_translator import (
+                derive_output_header_name_rel, translate_header_rel,
+            )
+            input_path = os.path.join(input_dir, filename)
+            output_filename = derive_output_header_name_rel(input_path)
+            output_path = os.path.join(output_dir, output_filename)
+            print(f"Processing {filename}...", end=' ')
+            success = translate_header_rel(
+                input_path, output_path, input_dir, monad=monad,
+            )
+            results[filename] = success
+            if success:
+                print(f"OK -> {output_filename}")
+            else:
+                print("FAILED")
+
+    for filename in entries:
+        if not filename.endswith('.c'):
+            continue
+        input_path = os.path.join(input_dir, filename)
+        base_name = os.path.splitext(filename)[0]
+        output_filename = f"{base_name}_rel.c"
+        output_path = os.path.join(output_dir, output_filename)
+        print(f"Processing {filename}...", end=' ')
+        success = translate_c_file(
+            input_path, output_path, monad=monad,
+            prefer_rel_header=translate_header,
+        )
+        results[filename] = success
+        if success: print(f"OK -> {output_filename}")
+        else: print("FAILED")
+    return results
+
+
+def translate_c_file_data_only(input_path: str, output_path: str) -> bool:
+    """Translate a single C file into a ``*_data.c`` form: shape→data
+    rewriting only, no ``safeExec`` wrapping, no Coq blocks, no call-site
+    helper-spec annotations, no ``safeexec_def.h`` include.
+    """
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        print(f"Error reading file {input_path}: {e}")
+        return False
+    try:
+        result = process_and_translate_file(input_path, generate_guards=False)
+    except Exception as e:
+        print(f"Error processing file {input_path}: {e}")
+        return False
+    if 'error' in result:
+        print(f"Error in result: {result['error']}")
+        return False
+
+    if 'functions' in result and result['functions']:
+        for func_data in result['functions']:
+            func_name = func_data['function']
+            content = _replace_funcspec_data_only(
+                content, func_name, func_data.get('funcspec'),
+            )
+            content = _apply_data_only_inner_to_function(
+                content, func_name, func_data.get('inner_assertions', []),
+            )
+    else:
+        func_name = result['function']
+        content = _replace_funcspec_data_only(
+            content, func_name, result.get('funcspec'),
+        )
+        content = _apply_data_only_inner_to_function(
+            content, func_name, result.get('inner_assertions', []),
+        )
+
+    content = translate_headers(content)
+
+    try:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return True
+    except Exception as e:
+        print(f"Error writing file {output_path}: {e}")
+        return False
+
+
+def translate_directory_data_only(
+    input_dir: str, output_dir: str, translate_header: bool = False,
+) -> Dict[str, bool]:
+    results: Dict[str, bool] = {}
+    if not os.path.exists(input_dir):
+        print(f"Error: Input directory not found: {input_dir}")
+        return results
+    os.makedirs(output_dir, exist_ok=True)
+    for filename in sorted(os.listdir(input_dir)):
         if filename.endswith('.c'):
             input_path = os.path.join(input_dir, filename)
             base_name = os.path.splitext(filename)[0]
-            output_filename = f"{base_name}_rel.c"
+            output_filename = f"{base_name}_data.c"
             output_path = os.path.join(output_dir, output_filename)
             print(f"Processing {filename}...", end=' ')
-            success = translate_c_file(input_path, output_path, monad=monad)
+            success = translate_c_file_data_only(input_path, output_path)
             results[filename] = success
-            if success: print(f"OK -> {output_filename}")
-            else: print("FAILED")
+            if success:
+                print(f"OK -> {output_filename}")
+            else:
+                print("FAILED")
+        elif translate_header and filename.endswith('.h'):
+            from GenMonads.header_translator import (
+                derive_output_header_name, translate_header_data_only,
+            )
+            input_path = os.path.join(input_dir, filename)
+            output_filename = derive_output_header_name(input_path)
+            output_path = os.path.join(output_dir, output_filename)
+            print(f"Processing {filename}...", end=' ')
+            success = translate_header_data_only(input_path, output_path)
+            results[filename] = success
+            if success:
+                print(f"OK -> {output_filename}")
+            else:
+                print("FAILED")
     return results
+
 
 def _build_main_parser():
     import argparse
@@ -1151,15 +1673,29 @@ def _build_main_parser():
         help='Directory for synthesis artifacts. Required unless --no-synth is set.',
     )
     parser.add_argument(
-        '--backend', choices=['gold-example', 'response-file', 'command'],
+        '--backend', choices=['response-file', 'command', 'segcodegen'],
         default=LLM4PV_DEFAULT_BACKEND,
-        help=f'Synthesis backend (default: {LLM4PV_DEFAULT_BACKEND}).',
+        help=(
+            f'Synthesis backend (default: {LLM4PV_DEFAULT_BACKEND}).  '
+            "``segcodegen`` is the deterministic VC-driven filler "
+            "(needs ``{base}_data_autovc.c`` on disk); ``command`` "
+            "invokes codex in workdir mode; ``response-file`` replays "
+            "a pre-recorded LLM response."
+        ),
+    )
+    parser.add_argument(
+        '--autovc-dir', default=None,
+        help=(
+            "Directory containing ``{base}_data_autovc.c`` files (output "
+            "of ``scripts/symexec.sh --AUTO_VC``).  Required by the "
+            "segcodegen backend.  Symexec runs outside the Python "
+            "pipeline; produce the autovc files first and point us here."
+        ),
     )
     parser.add_argument(
         '--command', default=LLM4PV_DEFAULT_COMMAND,
         help=f'Shell command for the command backend (default: {LLM4PV_DEFAULT_COMMAND!r}).',
     )
-    parser.add_argument('--replay-from', help='Auto-example JSON for the gold-example backend.')
     parser.add_argument('--response-file', help='Raw LLM response file for the response-file backend.')
     parser.add_argument(
         '--few-shot', action='append', default=[],
@@ -1197,6 +1733,26 @@ def _build_main_parser():
         help=(
             "Monad backend for the generated rel_lib: 'staterel' (StateRelMonad, "
             "default) or 'staterr' (error-aware MonadErr)."
+        ),
+    )
+    parser.add_argument(
+        '--data-only', action='store_true', default=False,
+        help=(
+            "Emit shape→data translated ``*_data.c`` files only: no safeExec "
+            "wrapping, no Coq Import/Extern blocks, no safeexec_def.h include, "
+            "no call-site helper-spec annotations.  Implies --no-rel-lib and "
+            "--no-synth.  Output filenames use a ``_data.c`` suffix."
+        ),
+    )
+    parser.add_argument(
+        '--translate-header', action='store_true', default=False,
+        help=(
+            "When set with --data-only and a directory input, also translate "
+            "every ``*.h`` sibling header: rewrites #includes, augments "
+            "``Extern Coq`` blocks with data predicates, retargets "
+            "``Import Coq Require Import`` lib names and ``include strategies`` "
+            "paths via ``data/coq_resource_mappings.json``, and rewrites each "
+            "function declaration's funcspec into data form."
         ),
     )
     parser.add_argument(
@@ -1304,12 +1860,16 @@ def _run_stage3(input_c: str, rel_c_path: str, args) -> int:
     synth_argv = [
         'llm4pv-synth',
         f'--FILE={input_c}',
-        f'--OUTPUT_PATH={args.synth_output_dir}',
         f'--backend={args.backend}',
         f'--max-retries={args.max_retries}',
         f'--command-timeout={args.command_timeout}',
         f'--monad={args.monad}',
     ]
+    # ``--OUTPUT_PATH`` is only meaningful for LLM-style backends that
+    # log per-attempt prompts/responses; segcodegen writes the lib
+    # straight to ``--coq-lib-dir``.
+    if args.synth_output_dir:
+        synth_argv.insert(3, f'--OUTPUT_PATH={args.synth_output_dir}')
     # Forward the per-invocation lib dir so the synth pre-spawn check looks
     # at the same place the rel_lib stage wrote to (instead of falling back
     # to CONFIGURE's default).  Without this, --coq-lib-dir was honored at
@@ -1318,10 +1878,10 @@ def _run_stage3(input_c: str, rel_c_path: str, args) -> int:
         synth_argv += [f'--coq-lib-dir={args.coq_lib_dir}']
     if getattr(args, 'use_block_renderer', False):
         synth_argv += ['--use-block-renderer']
+    if getattr(args, 'autovc_dir', None):
+        synth_argv += [f'--autovc-dir={args.autovc_dir}']
     if args.backend == 'command' and args.command:
         synth_argv += ['--command', args.command]
-    if args.replay_from:
-        synth_argv += [f'--replay-from={args.replay_from}']
     if args.response_file:
         synth_argv += [f'--response-file={args.response_file}']
     for fs in args.few_shot:
@@ -1370,6 +1930,25 @@ def main():
         is_path=True,
     )
 
+    if args.data_only:
+        # Force later stages off — data-only mode only emits *_data.c files.
+        args.no_rel_lib = True
+        args.no_synth = True
+        if os.path.isdir(input_path):
+            results = translate_directory_data_only(
+                input_path, output_path,
+                translate_header=args.translate_header,
+            )
+            total, success = len(results), sum(1 for v in results.values() if v)
+            print(f"\nSummary: {success}/{total} files translated successfully")
+            sys.exit(0 if success == total else 1)
+        ok = translate_c_file_data_only(input_path, output_path)
+        if not ok:
+            print("Translation failed", file=sys.stderr)
+            sys.exit(1)
+        print(f"Translation successful: {output_path}")
+        sys.exit(0)
+
     run_synth = not args.no_synth
     run_lib = not args.no_rel_lib
 
@@ -1377,14 +1956,21 @@ def main():
         parser.error(
             "synth requires the rel_lib template; pass --no-synth or drop --no-rel-lib."
         )
-    if run_synth and not args.synth_output_dir:
+    # ``segcodegen`` writes its filled lib directly into ``--coq-lib-dir``
+    # without the prompt/context/response artifact tree, so
+    # ``--synth-output-dir`` is unused.  LLM-style backends still
+    # require it for prompt/response logging.
+    if run_synth and args.backend != "segcodegen" and not args.synth_output_dir:
         parser.error("--synth-output-dir is required when synthesis is enabled (default).")
 
     lib_dir = _resolve_lib_dir(args, parser) if run_lib else None
 
     # ---- Stage 1 ----
     if os.path.isdir(input_path):
-        results = translate_directory(input_path, output_path, monad=args.monad)
+        results = translate_directory(
+            input_path, output_path, monad=args.monad,
+            translate_header=args.translate_header,
+        )
         total, success = len(results), sum(1 for v in results.values() if v)
         print(f"\nSummary: {success}/{total} files translated successfully")
         if success != total:
@@ -1447,6 +2033,21 @@ def main():
                 print(f"rel_lib generated: {lib_path}")
         if lib_failures:
             sys.exit(2)
+
+        # Header-level re-exporter rel_libs (directory mode only).  Runs
+        # AFTER every per-file rel_lib so each ``Require Export`` target
+        # already exists on disk.
+        if directory_mode:
+            from GenMonads.header_translator import generate_header_rel_lib
+            for entry in sorted(os.listdir(input_path)):
+                if not entry.endswith(".h"):
+                    continue
+                header_input = os.path.join(input_path, entry)
+                header_lib = generate_header_rel_lib(
+                    header_input, input_path, lib_dir,
+                )
+                if header_lib:
+                    print(f"header rel_lib generated: {header_lib}")
 
     # ---- Stage 3 ----
     if run_synth:

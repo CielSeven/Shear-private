@@ -1,0 +1,10 @@
+{
+  "lib_mappings": {
+    "sll_shape_lib": "sll_lib",
+    "dll_shape_lib": "dll_lib"
+  },
+  "strategy_mappings": {
+    "sll_shape.strategies": "sll_data.strategies",
+    "dll_shape.strategies": "dll_data.strategies"
+  }
+}

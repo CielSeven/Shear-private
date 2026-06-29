@@ -184,28 +184,6 @@ def synth_parts(
         out_terms[output_group.index(b)] = terms.parse_term(mp.rhs)
     out_terms = [t if t is not None else Var("(* missing *)") for t in out_terms]
 
-    # every variable that appears in a logical-list position somewhere in this VC
-    # (used to tell a call's list result apart from its pointer results)
-    list_vars: set[str] = set()
-    for t in out_terms:
-        list_vars.update(terms.free_vars(t))
-    for mp in vc.exist_mapping:
-        list_vars.update(terms.free_vars(terms.parse_term(mp.rhs)))
-    for prop in vc.leftover_props:
-        m = re.match(r"(.+?)\s*==\s*(.+)", prop)
-        if not m:
-            continue
-        rhs = terms.parse_term(m.group(2))
-        # `lhs == <list constructor>` makes lhs a logical list too
-        if isinstance(rhs, Op):
-            list_vars.add(m.group(1).strip())
-            list_vars.update(terms.free_vars(rhs))
-    # call arguments are list terms, so a call result consumed only as another
-    # call's argument is still a logical list (chained calls).
-    for fb in funccalls:
-        for v in fb.with_instantiation.values():
-            list_vars.update(terms.free_vars(terms.parse_term(v)))
-
     # A variable is *introduced* by a function call iff it is one of that call's
     # *Postcondition existentials*.  Everything else is a **root**: a variable
     # bound by the annotation that precedes this VC's program point — the loop
@@ -222,21 +200,63 @@ def synth_parts(
     for fb in funccalls:
         introduced_by_call.update(fb.post_exists)
 
+    # The *output cone*: the variables that actually flow into the result tuple,
+    # reached from `out_terms` through list-constructor equations (`lhs == term`
+    # with `lhs` already in the cone) and through chained-call arguments.  A
+    # call's projected results are its post-existentials *in* this cone — so a
+    # post-existential that feeds only a dropped data witness (e.g. the numeric
+    # return of a list-returning recursive call) is not mistaken for an extra
+    # tuple component.
+    cone: set[str] = set()
+    for t in out_terms:
+        cone.update(terms.free_vars(t))
+    changed = True
+    while changed:
+        changed = False
+        for prop in vc.leftover_props:
+            m = re.match(r"(.+?)\s*==\s*(.+)", prop)
+            if not m:
+                continue
+            rhs = terms.parse_term(m.group(2))
+            if not isinstance(rhs, Op):       # only logical-list constructor equations
+                continue
+            # the equation `lhs == cons(h, t)` links both sides: a destructured
+            # call result (`res == cons(h, t)`, lhs fresh) is reached *from* its
+            # components, and a constructed output reaches *into* them — so the
+            # cone propagates in either direction.
+            linked = [m.group(1).strip()] + terms.free_vars(rhs)
+            if any(v in cone for v in linked):
+                for v in linked:
+                    if v not in cone:
+                        cone.add(v); changed = True
+        for fb in funccalls:
+            if any(rv in cone for rv in fb.post_exists):
+                for val in fb.with_instantiation.values():
+                    for v in terms.free_vars(terms.parse_term(val)):
+                        if v not in cone:
+                            cone.add(v); changed = True
+
     # ---- build candidate steps & the producer index ----
     steps: List[_Step] = []
     producer: Dict[str, _Step] = {}   # fresh var -> the step that produces it
 
-    # call steps: a funccall block's list-typed result is its abstract return.
+    # call steps: a funccall block's logical results are its abstract return.  A
+    # callee may return *several* logical values (e.g. `list_tail : list Z ->
+    # MONAD (list Z * Z)` yields a prefix list and the popped element); they
+    # appear together in `post_exists` in the callee's result-tuple order.  One
+    # `r <- FN_M args` binds the whole result and each component is projected
+    # out of it (`fst`/`snd`) — see `_proj`.
     for fb in funccalls:
-        for rv in fb.post_exists:
-            if rv not in list_vars or rv in producer:
-                continue
-            ordered = sorted(fb.with_instantiation.items(), key=lambda kv: _natural_key(kv[0]))
-            arg_terms = tuple(terms.parse_term(v) for _, v in ordered)
-            refs = tuple(v for t in arg_terms for v in terms.free_vars(t))
-            st = _Step(idx=len(steps), kind="call", produces=(rv,), refs=refs,
-                       rv=rv, callee=fb.call_target, arg_terms=arg_terms)
-            steps.append(st)
+        results = [rv for rv in fb.post_exists if rv in cone and rv not in producer]
+        if not results:
+            continue
+        ordered = sorted(fb.with_instantiation.items(), key=lambda kv: _natural_key(kv[0]))
+        arg_terms = tuple(terms.parse_term(v) for _, v in ordered)
+        refs = tuple(v for t in arg_terms for v in terms.free_vars(t))
+        st = _Step(idx=len(steps), kind="call", produces=tuple(results), refs=refs,
+                   rv=results[0], callee=fb.call_target, arg_terms=arg_terms)
+        steps.append(st)
+        for rv in results:
             producer[rv] = st
 
     # bind every root whose base name is an input to its canonical name
@@ -305,9 +325,16 @@ def synth_parts(
             binds.append(f"assume!! ({known.get(st.lhs, st.lhs)} {st.rel} {terms.render(st.term, known)});;")
         else:  # call
             args = [terms.render(t, known, top=False) for t in st.arg_terms]
-            name = names.result()
-            known[st.rv] = name
-            binds.append(f"{name} <- {st.callee}_M {' '.join(args)};;")
+            if len(st.produces) == 1:
+                name = names.result()
+                binds.append(f"{name} <- {st.callee}_M {' '.join(args)};;")
+                known[st.produces[0]] = name
+            else:                            # multi-result callee: destructure
+                comps = [names.result() for _ in st.produces]
+                pat = "'(" + ", ".join(comps) + ")"
+                binds.append(f"{pat} <- {st.callee}_M {' '.join(args)};;")
+                for rv, nm in zip(st.produces, comps):
+                    known[rv] = nm
 
     if not out_terms:                        # empty output tuple -> unit (`tt`, not `()`)
         inner = "tt"
@@ -384,12 +411,23 @@ def _arm_lines(binds: List[str], ret: str, pad: str) -> List[str]:
 
 
 def _choice_lines(arms: List[Tuple[List[str], str]], pad: str) -> List[str]:
-    """Right-nested binary `choice` over the arms (each a (binds, ret) pair)."""
+    """Right-nested binary `choice` over the arms (each a (binds, ret) pair).
+
+    `choice` is a binary combinator, so a chain of three or more arms must
+    parenthesize its second operand: ``choice A (choice B (choice C D))``.
+    Without the parens ``choice A choice B …`` parses as ``choice`` over-applied
+    to four arguments."""
     if len(arms) == 1:
         return _arm_lines(arms[0][0], arms[0][1], pad)
     lines = [f"{pad}choice"]
     lines += _arm_lines(arms[0][0], arms[0][1], pad + "  ")
-    lines += _choice_lines(arms[1:], pad + "  ")
+    rest = arms[1:]
+    if len(rest) == 1:
+        lines += _arm_lines(rest[0][0], rest[0][1], pad + "  ")
+    else:                                    # wrap the nested choice in parens
+        lines.append(pad + "  (")
+        lines += _choice_lines(rest, pad + "    ")
+        lines.append(pad + "  )")
     return lines
 
 
@@ -433,6 +471,58 @@ def synth_branched(
     parts = [synth_parts(vc, fcs, input_group, out, curried=curried, wrap=wrap)
              for vc, fcs, out, wrap in arms]
     return _compose_arms(parts)
+
+
+def _match_branch(binds: List[str], ret: str, input_var: str) -> Tuple[str, List[str]]:
+    """Turn one synthesized arm into a `match` branch on `input_var`.
+
+    The arm discriminates the recursion argument with `v <- any T;; … assume!!
+    (input_var = <pattern>)`.  In a `match` that destructuring is the branch
+    pattern itself, so we read the pattern off the `assume`, drop it together
+    with the `any` binds of the variables it introduces (now bound by the
+    pattern), and keep the rest as the branch body.  An arm with no such
+    destructuring keeps all its binds under a wildcard."""
+    pattern = "_"
+    any_vars: set = set()
+    destructure_idx = None
+    for i, b in enumerate(binds):
+        am = re.match(r"([A-Za-z_][\w']*) <- any ", b)
+        if am:
+            any_vars.add(am.group(1))
+        dm = re.match(rf"assume!! \(\s*{re.escape(input_var)}\s*=\s*(.+?)\s*\);;\s*$", b)
+        if dm:
+            pattern, destructure_idx = dm.group(1), i
+    if destructure_idx is None:
+        return "_", list(binds) + [ret]
+    pat_vars = set(re.findall(r"[A-Za-z_][\w']*", pattern))
+    kept = []
+    for i, b in enumerate(binds):
+        if i == destructure_idx:
+            continue
+        am = re.match(r"([A-Za-z_][\w']*) <- any ", b)
+        if am and am.group(1) in pat_vars:     # the freshes are now match-bound
+            continue
+        kept.append(b)
+    return pattern, kept + [ret]
+
+
+def synth_recursive(arms: List[Arm], input_var: str) -> str:
+    """Assemble a structurally-recursive body: a `match` on the single recursion
+    argument whose branches are the synthesized arms with their destructuring
+    `any + assume` replaced by the match pattern.  A self-call on the matched
+    tail is then a structural subterm, so the enclosing definition can be a
+    `Fixpoint`."""
+    lines = [f"match {input_var} with"]
+    for vc, fcs, out, wrap in arms:
+        _binder, binds, ret = synth_parts(vc, fcs, [input_var], out, wrap=wrap)
+        pattern, body = _match_branch(binds, ret, input_var)
+        if len(body) == 1:
+            lines.append(f"| {pattern} => {body[0]}")
+        else:
+            lines.append(f"| {pattern} =>")
+            lines += [f"    {b}" for b in body]
+    lines.append("end")
+    return "\n".join(lines)
 
 
 def _binder(input_group: List[str], curried: bool) -> str:

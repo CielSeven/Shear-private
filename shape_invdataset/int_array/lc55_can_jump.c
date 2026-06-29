@@ -1,25 +1,23 @@
 #include "int_array_def.h"
 
 int array_can_jump(int *a, int n)
-/*@ With l
-    Require 0 <= n && n < 1000000 && IntArray::full(a, n, l) &&
-            (forall (k: Z), (0 <= k && k < n) => 0 <= l[k] && l[k] <= n)
-    Ensure IntArray::full(a, n, l)
+/*@
+    Require 0 <= n && n < 1000000 && IntArray::full_shape(a, n)
+    Ensure IntArray::full_shape(a, n)
 */
 {
     int i;
     int farthest;
     i = 0;
     farthest = 0;
-    /*@ Inv Assert
-        exists v,
-        farthest == v &&
-        0 <= i && i <= n@pre &&
+    /*@ Inv
+        exists v_i v_farthest,
+        0 <= v_i && v_i <= n@pre &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < 1000000 &&
-        0 <= v && v <= 2 * n@pre &&
-        (forall (k: Z), (0 <= k && k < n@pre) => 0 <= l[k] && l[k] <= n@pre) &&
-        IntArray::full(a@pre, n@pre, l)
+        0 <= v_farthest && v_farthest <= n@pre + n@pre &&
+        store(&i, int, v_i) * store(&farthest, int, v_farthest) *
+        IntArray::full_shape(a@pre, n@pre)
     */
     while (i < n) {
         if (i > farthest) {

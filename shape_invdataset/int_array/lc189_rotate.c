@@ -7,13 +7,15 @@ void array_reverse_range(int *a, int n, int left, int right)
 */
 {
     int tmp;
-    /*@ Inv Assert
-        exists v_tmp,
-        tmp == v_tmp &&
-        0 <= left && left <= right + 1 && right < n@pre &&
-        left@pre <= left && right <= right@pre &&
+    tmp = 0;
+    /*@ Inv
+        exists v_left v_right v_tmp,
+        0 <= v_left && v_left <= v_right + 1 && v_right < n@pre &&
+        left@pre <= v_left && v_right <= right@pre &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
+        store(&left, int, v_left) * store(&right, int, v_right) *
+        store(&tmp, int, v_tmp) *
         IntArray::full_shape(a@pre, n@pre)
     */
     while (left < right) {

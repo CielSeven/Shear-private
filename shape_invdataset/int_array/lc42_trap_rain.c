@@ -1,10 +1,9 @@
 #include "int_array_def.h"
 
 int array_trap_rain_water(int *height, int n)
-/*@ With l
-    Require 0 <= n && n < 10000 && IntArray::full(height, n, l) &&
-            (forall (k: Z), (0 <= k && k < n) => 0 <= l[k] && l[k] <= 100)
-    Ensure IntArray::full(height, n, l)
+/*@ 
+    Require IntArray::full_shape(height, n) 
+    Ensure IntArray::full_shape(height, n)
 */
 {
     int left;
@@ -17,17 +16,14 @@ int array_trap_rain_water(int *height, int n)
     left_max = 0;
     right_max = 0;
     water = 0;
-    /*@ Inv Assert
-        exists v_left_max v_right_max v_water,
-        left_max == v_left_max && right_max == v_right_max && water == v_water &&
-        0 <= left && left <= right + 1 && right < n@pre &&
+    /*@ Inv
+        exists v_left v_right v_left_max v_right_max v_water,
+        0 <= v_left && v_left <= v_right + 1 && v_right < n@pre &&
         height == height@pre && n == n@pre &&
-        0 <= n@pre && n@pre < 10000 &&
-        0 <= v_left_max && v_left_max <= 100 &&
-        0 <= v_right_max && v_right_max <= 100 &&
-        0 <= v_water && v_water <= 1000000 &&
-        (forall (k: Z), (0 <= k && k < n@pre) => 0 <= l[k] && l[k] <= 100) &&
-        IntArray::full(height@pre, n@pre, l)
+        store(&left, int, v_left) * store(&right, int, v_right) *
+        store(&left_max, int, v_left_max) * store(&right_max, int, v_right_max) *
+        store(&water, int, v_water) *
+        IntArray::full_shape(height@pre, n@pre) 
     */
     while (left < right) {
         if (height[left] < height[right]) {

@@ -77,5 +77,21 @@
       "abs": 4
     },
     "abs_names": ["abs"]
+  },
+  "_composition_rules": {
+    "root_null": [
+      {
+        "name": "seg_then_root_concat",
+        "description": "When a segment's end is the start of a root, treat the segment's start as a virtual root over the concatenation. Models the 'peeled tail' invariant idiom (lseg(p,q) * listrep(q)).",
+        "match": [
+          { "role": "S", "kind": "segment", "where": { "start": "$ptr" } },
+          { "role": "R", "kind": "root",    "where": { "ptr":   "$S.end" } }
+        ],
+        "emit": {
+          "eq": "({S.seg_abs} = [] /\\ {R.abs} = [])",
+          "ne": "({S.seg_abs} <> [] \\/ {R.abs} <> [])"
+        }
+      }
+    ]
   }
 }

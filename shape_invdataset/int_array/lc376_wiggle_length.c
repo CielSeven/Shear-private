@@ -14,14 +14,15 @@ int array_wiggle_max_length(int *a, int n)
     up = 1;
     down = 1;
     i = 1;
-    /*@ Inv Assert
-        exists v_up v_down,
-        up == v_up && down == v_down &&
-        1 <= i && i <= n@pre &&
+    /*@ Inv
+        exists v_i v_up v_down,
+        1 <= v_i && v_i <= n@pre &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
-        1 <= v_up && v_up <= i + 1 &&
-        1 <= v_down && v_down <= i + 1 &&
+        1 <= v_up && v_up <= v_i + 1 &&
+        1 <= v_down && v_down <= v_i + 1 &&
+        store(&i, int, v_i) * store(&up, int, v_up) *
+        store(&down, int, v_down) *
         IntArray::full_shape(a@pre, n@pre)
     */
     while (i < n) {

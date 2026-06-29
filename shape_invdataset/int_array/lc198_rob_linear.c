@@ -12,14 +12,17 @@ int array_rob_linear(int *a, int n)
     int next_take;
     skip = 0;
     take = 0;
+    next_skip = 0;
+    next_take = 0;
     i = 0;
-    /*@ Inv Assert
-        exists v_skip v_take v_next_skip v_next_take,
-        skip == v_skip && take == v_take &&
-        next_skip == v_next_skip && next_take == v_next_take &&
-        0 <= i && i <= n@pre &&
+    /*@ Inv
+        exists v_i v_skip v_take v_next_skip v_next_take,
+        0 <= v_i && v_i <= n@pre &&
         a == a@pre && n == n@pre &&
         0 <= n@pre && n@pre < INT_MAX &&
+        store(&i, int, v_i) * store(&skip, int, v_skip) *
+        store(&take, int, v_take) * store(&next_skip, int, v_next_skip) *
+        store(&next_take, int, v_next_take) *
         IntArray::full_shape(a@pre, n@pre)
     */
     while (i < n) {

@@ -93,7 +93,7 @@ def test_translate_cli_exits_nonzero_on_directory_failure(monkeypatch, tmp_path,
 
 def test_translate_cli_runs_all_three_stages_with_default_synth_command(monkeypatch, tmp_path, capsys):
     """Default `llm4pv` should translate, generate the rel_lib template, and
-    invoke synthesis with the codex command backend."""
+    invoke synthesis with the segcodegen deterministic backend."""
     monkeypatch.setattr(translate_cli, "translate_c_file", lambda *_args, **_kw: True)
     lib_calls = []
 
@@ -130,10 +130,13 @@ def test_translate_cli_runs_all_three_stages_with_default_synth_command(monkeypa
 
     assert lib_calls == [("input/demo.c", str(tmp_path / "lib"))]
     argv = synth_calls["argv"]
-    assert "--backend=command" in argv
-    # Workdir-mode owns the codex invocation; no shell-template string is
-    # passed via --command anymore.  The default is left as an empty stub
-    # for CLI backwards-compat only.
+    # Default backend is segcodegen (deterministic VC-driven filler) —
+    # no codex / LLM required.
+    assert "--backend=segcodegen" in argv
+    assert translate_cli.LLM4PV_DEFAULT_BACKEND == "segcodegen"
+    # The shell-template ``--command`` is preserved as an empty stub
+    # for CLI backwards-compat when callers explicitly request the
+    # ``command`` backend; default invocation doesn't pass it.
     assert translate_cli.LLM4PV_DEFAULT_COMMAND == ""
     assert "--patch-rel-c" in argv
     assert f"--rel-c-path=output/demo_rel.c" in argv
@@ -378,6 +381,10 @@ def test_translate_cli_requires_synth_output_dir_when_synth_enabled(monkeypatch,
             "--FILE=input/demo.c",
             "--OUTPUT_PATH=output/demo_rel.c",
             f"--coq-lib-dir={tmp_path}",
+            # Force a non-segcodegen backend — segcodegen (the default)
+            # doesn't need ``--synth-output-dir``; it writes directly
+            # to ``--coq-lib-dir``.
+            "--backend=command",
         ],
     )
 

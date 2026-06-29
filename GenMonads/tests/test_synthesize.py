@@ -629,34 +629,6 @@ def _write_example_with_gold(tmp_path):
     return str(path)
 
 
-def test_run_synthesis_pipeline_replay_backend_writes_artifacts(tmp_path):
-    output_dir = tmp_path / "synth"
-    example_path = _write_example_with_gold(tmp_path)
-
-    summary = run_synthesis_pipeline(
-        input_path=example_path,
-        output_dir=str(output_dir),
-        backend="gold-example",
-        few_shot_paths=[example_path],
-        run_check=False,
-    )
-
-    assert summary["status"] == "assembled"
-    files = summary["files"]
-    assert (output_dir / "sll_reverse.prompt.txt").exists()
-    assert (output_dir / "sll_reverse.response.txt").exists()
-    assert (output_dir / "sll_reverse.parsed.json").exists()
-    assert (output_dir / "sll_reverse_rel_lib.v").exists()
-    assert files["context"] == example_path
-
-    assembled = (output_dir / "sll_reverse_rel_lib.v").read_text(encoding="utf-8")
-    assert "Definition MretTy : Type := list Z." in assembled
-    assert "Definition sll_reverse_M_loop_M2 : (list Z * list Z) -> MONAD (list Z * list Z) :=" in assembled
-
-    summary_json = json.loads((output_dir / "sll_reverse.summary.json").read_text(encoding="utf-8"))
-    assert summary_json["check"]["status"] == "skipped"
-
-
 def _fake_codex_writes_filled_skeleton(filled_text: str):
     """Build a monkeypatch ``subprocess.run`` that emulates codex completing
     successfully, having written *filled_text* to the workdir's
