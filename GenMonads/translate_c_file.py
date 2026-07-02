@@ -80,12 +80,20 @@ def collect_func_extern_info(
         for witness in ensure_data_witnesses:
             ensure_only.append((witness, 'Z'))
 
-        # If the C function has a non-void return type but the Ensure does
-        # not mention __return, ``add_safeexec_to_ensure`` synthesizes a
-        # witness ``r`` of type Z.  Mirror that here so the abstract program's
-        # return type matches the emitted ``return(...)`` arity.
-        ensure_body = funcspec['ensure'].get('translated', '')
+        # Source-level ``exists v, __return == v`` binders for scalar
+        # returns are lifted into the abstract return tuple the same way
+        # data witnesses are.
         return_type = func_data.get('return_type', '')
+        from GenMonads.addabstract.addexec import extract_return_value_witnesses
+        for witness, coq_t in extract_return_value_witnesses(funcspec, return_type):
+            ensure_only.append((witness, coq_t))
+
+        # If the C function has a non-void return type but the Ensure
+        # neither mentions ``__return`` nor binds a scalar return witness,
+        # ``add_safeexec_to_ensure`` synthesizes a witness ``r`` of type Z.
+        # Mirror that here so the abstract program's return type matches
+        # the emitted ``return(...)`` arity.
+        ensure_body = funcspec['ensure'].get('translated', '')
         if (
             not _is_void_return_type(return_type)
             and '__return' not in ensure_body
@@ -412,7 +420,7 @@ def collect_callee_functions(content: str, functions: List[Dict]) -> set[str]:
     return callees
 
 
-def _process_funcspec_data_only(funcspec: Dict) -> Dict:
+def _process_funcspec_data_only(funcspec: Dict, return_type: str = "") -> Dict:
     """Build a raw (no-safeExec) funcspec for ``--data-only`` mode from the
     canonical shape→data decomposition.
 
@@ -421,7 +429,7 @@ def _process_funcspec_data_only(funcspec: Dict) -> Dict:
     :func:`canonical_funcspec` too) — emitted without any safeExec wrapping.
     """
     from GenMonads.addabstract.addexec import canonical_funcspec
-    canon = canonical_funcspec(funcspec)
+    canon = canonical_funcspec(funcspec, return_type=return_type)
     result: Dict[str, Dict] = {}
 
     if canon['require_body']:
@@ -429,8 +437,14 @@ def _process_funcspec_data_only(funcspec: Dict) -> Dict:
 
     if canon['ensure_body']:
         body = canon['ensure_body']
-        if canon['ensure_only_vars']:
-            body = f"exists {' '.join(canon['ensure_only_vars'])}, {body}"
+        outer_exists = (
+            list(canon['ensure_leftover_source_vars'])
+            + list(canon['ensure_data_witnesses'])
+            + list(canon['ensure_return_witnesses'])
+            + list(canon['ensure_only_vars'])
+        )
+        if outer_exists:
+            body = f"exists {' '.join(outer_exists)}, {body}"
         result['ensure'] = {'translated': body}
 
     with_parts: List[str] = []
@@ -456,10 +470,11 @@ def _build_data_only_funcspec_parts(processed: Dict) -> List[str]:
 
 def _replace_funcspec_data_only(
     content: str, func_name: str, funcspec: Optional[Dict],
+    return_type: str = "",
 ) -> str:
     if not funcspec:
         return content
-    processed = _process_funcspec_data_only(funcspec)
+    processed = _process_funcspec_data_only(funcspec, return_type=return_type)
     if not processed:
         return content
     rendered = _format_funcspec_comment(_build_data_only_funcspec_parts(processed))
@@ -567,6 +582,9 @@ def _caller_program_return_type(
     ]
     for witness in (funcspec['ensure'].get('data_witnesses', []) or []):
         ensure_only.append((witness, 'Z'))
+    from GenMonads.addabstract.addexec import extract_return_value_witnesses
+    for witness, coq_t in extract_return_value_witnesses(funcspec, return_type):
+        ensure_only.append((witness, coq_t))
     ensure_body = funcspec['ensure'].get('translated', '') or ''
     if (
         return_type
@@ -1564,6 +1582,7 @@ def translate_c_file_data_only(input_path: str, output_path: str) -> bool:
             func_name = func_data['function']
             content = _replace_funcspec_data_only(
                 content, func_name, func_data.get('funcspec'),
+                return_type=func_data.get('return_type', ''),
             )
             content = _apply_data_only_inner_to_function(
                 content, func_name, func_data.get('inner_assertions', []),
@@ -1572,6 +1591,7 @@ def translate_c_file_data_only(input_path: str, output_path: str) -> bool:
         func_name = result['function']
         content = _replace_funcspec_data_only(
             content, func_name, result.get('funcspec'),
+            return_type=result.get('return_type', ''),
         )
         content = _apply_data_only_inner_to_function(
             content, func_name, result.get('inner_assertions', []),
@@ -1994,6 +2014,35 @@ def main():
                 print(f"Skipped (no synthesis targets): {src}")
     else:
         synthesizable = list(c_files)
+
+    # ---- Residual-call annotations ----
+    # Frame-carrying function calls need their `where(low_level_spec_aux)`
+    # continuation supplied explicitly (the abstract `*_M` is `Extern`/opaque to
+    # symexec, so `cont` cannot be solved).  Now that the `_rel.c` exists, inject
+    # `cont = residual(params)` (+ an `Extern Coq` decl and a `/*@ Given … */`
+    # for loop-`Inv` params) per call, derived from the data-VC's frame.  Needs
+    # the autovc (run symexec --AUTO_VC first); a no-op for files without frames.
+    if getattr(args, 'autovc_dir', None):
+        from GenMonads.absprog.segcodegen.residual import inject_residual_annotations
+        from GenMonads.absprog.synthesize import _resolve_autovc_path
+        for src, rel_c in c_files:
+            base = os.path.splitext(os.path.basename(src))[0]
+            avc = _resolve_autovc_path(src, base, args.autovc_dir)
+            if not avc or not os.path.isfile(rel_c):
+                continue
+            try:
+                with open(rel_c, encoding='utf-8') as f:
+                    relc_text = f.read()
+                with open(avc, encoding='utf-8') as f:
+                    avc_text = f.read()
+                new_text = inject_residual_annotations(relc_text, avc_text)
+                if new_text != relc_text:
+                    with open(rel_c, 'w', encoding='utf-8') as f:
+                        f.write(new_text)
+                    print(f"Residual annotations injected: {rel_c}")
+            except Exception as exc:
+                print(f"residual-annotation injection failed for {rel_c}: {exc}",
+                      file=sys.stderr)
 
     # ---- Stage 2 ----
     if run_lib:

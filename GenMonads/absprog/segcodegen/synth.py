@@ -45,6 +45,57 @@ def _natural_key(s: str):
     return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
 
 
+def _scalar_result_vars(post_sep: List[str]) -> set:
+    """Post-existentials that a call returns as a **scalar (Z)** — the `data`
+    value of a *field store with a non-pointer C type*, e.g.
+    ``store(&(retval->data), v, signed int)`` marks ``v`` scalar.  These are the
+    `addabstract` *data witnesses*, which are appended to the abstract result
+    tuple *after* the list components (see `_post_sep_order`)."""
+    out: set = set()
+    for atom in post_sep:
+        # field store `store(&(p->f), VALUE, TYPE)` — value then type
+        m = re.search(r"store\(\s*&\([^)]*\)\s*,\s*(\w+)\s*,\s*([^,)]+)\)", atom)
+        if m and "*" not in m.group(2):
+            out.add(m.group(1))
+        # simple store `store(&name, TYPE, VALUE)` — type then value
+        m = re.search(r"store\(\s*&(\w+)\s*,\s*([^,]+?)\s*,\s*(\w+)\s*\)", atom)
+        if m and "*" not in m.group(2):
+            out.add(m.group(3))
+    return out
+
+
+def _post_sep_order(fb: VCBlock) -> Dict[str, int]:
+    """Rank each of a call's post-existentials to reflect the callee's real
+    abstract result-tuple order, read from the call's *contributed postcondition
+    SEP* (``fb.post_sep``).
+
+    The SEP reproduces the callee's ``Ensure`` heap conjuncts.  The tuple order
+    `addabstract` builds from that Ensure is: **list/heap components first, in
+    their SEP-conjunct order, then scalar data-witnesses appended last** (the
+    ``store(&(_->data), v, int)`` values — see :func:`_scalar_result_vars`).
+    A borrowing copy (``sll(src@pre, l2) * sll(__return, l3)``) has no scalar, so
+    its two lists keep SEP order ``(l2, l3)``; ``list_tail``
+    (``… data == v … sllseg(x, __return, l2)``) returns ``(l2, v)`` — the list
+    ``l2`` first, the scalar ``v`` last — even though ``v`` precedes ``l2`` in the
+    SEP.  This matches the callee's generated ``_M`` tuple, so the destructure
+    pattern binds ``fst``/``snd`` to the right components.  A *pointer*
+    existential (a returned address) gets a rank too but the output cone drops it,
+    so only the surviving components' relative order matters.
+
+    Empty when the autovc predates this block (older tool output); callers then
+    keep the legacy ``post_exists`` order."""
+    post = set(fb.post_exists)
+    scalars = _scalar_result_vars(fb.post_sep)
+    appear: List[str] = []
+    seen: set = set()
+    for tok in re.findall(r"[A-Za-z_]\w*", "\n".join(fb.post_sep)):
+        if tok in post and tok not in seen:
+            seen.add(tok)
+            appear.append(tok)
+    ordered = [v for v in appear if v not in scalars] + [v for v in appear if v in scalars]
+    return {v: i for i, v in enumerate(ordered)}
+
+
 def _any_type(ty: str) -> str:
     ty = ty.strip()
     return f"({ty})" if " " in ty else ty
@@ -250,6 +301,15 @@ def synth_parts(
         results = [rv for rv in fb.post_exists if rv in cone and rv not in producer]
         if not results:
             continue
+        # Order the projected results by the callee's actual result-tuple order,
+        # read from the call's contributed postcondition SEP (see
+        # `_post_sep_order`).  The raw `post_exists` list order does NOT track the
+        # tuple order, so the `'(a, b)` destructure would otherwise bind `fst`/
+        # `snd` to the wrong logical values.  Falls back to `post_exists` order
+        # when the autovc has no such SEP block.
+        rank = _post_sep_order(fb)
+        if rank:
+            results.sort(key=lambda rv: rank.get(rv, len(rank)))
         ordered = sorted(fb.with_instantiation.items(), key=lambda kv: _natural_key(kv[0]))
         arg_terms = tuple(terms.parse_term(v) for _, v in ordered)
         refs = tuple(v for t in arg_terms for v in terms.free_vars(t))

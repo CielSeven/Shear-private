@@ -161,6 +161,104 @@ argument `a_p` through the tail); should such a case arise, the tail signature
 would have to widen back to `MretTy -> parent_carrier -> MONAD _`. For the
 current benchmark family the carry-everything-inward assumption holds.
 
+**Function-call residuals** (`residual.py`). A call site `r = callee(args)` lowers
+to `r <- callee_M <args> ;; residual r`, where the *residual* is a named
+`Definition` — the continuation after the call. The inner-loop tail above is the
+**degenerate, empty-frame instance** of this same splice: a real function call
+differs only in that its **frame** (the heap the callee does not touch) is
+non-empty and *mandatory* — the callee is independently specified, so its
+footprint cannot absorb the caller's surrounding state, and that state must be
+threaded through the continuation explicitly.
+
+The whole residual is derived from VCs the `*_data_autovc.c` already carries, and
+its body is produced by `synth_parts` **unchanged**, via a *synthetic
+continuation VC*:
+
+* the **owner VC** — the `entail`/`return` whose program point is *after* the
+  call (it consumes the call's results) — supplies the continuation: the next
+  carrier (`entail`) or the function result (`return`);
+* the **parameters are faithful** — they are the SE fresh variables the
+  continuation actually reads: `free_vars(owner output terms ∪ re-emitted
+  downstream call args)` minus the callee's own results (and any downstream call
+  results). These are exactly the pieces the loop body already *unfolded* at the
+  call site (the frame — `store(&node->data, x) * sll(y, l0) * sllseg(.., l1)`),
+  so the residual captures `x, l0, l1` **verbatim** and takes them as parameters
+  ordered by their appearance in the frame. It does **not** resolve a cons-split
+  piece to its nameable parent (`l0 → l2`) and re-derive it inside with `any +
+  assume`; the obsolete unfold prop (`l2 == cons(x, l0)`, whose parent `l2` is no
+  longer a parameter) is dropped from the synthetic VC (`_keep_prop`) so nothing
+  dangles;
+* the callee's logical results (its `post_exists` in the owner's output cone;
+  pointer results like `retval` drop out) become the residual's argument. In the
+  synthetic VC they are *root inputs* and `fc` is not in `funccalls`, so the call
+  itself is **not** re-emitted — only the continuation is synthesized.
+
+The residual is the continuation of the **whole function**, so it runs to the
+function *result*, not just the local segment. When the call sits inside the loop
+body (owner is a loop-step `entail`, whose output is the next *carrier* `a'`), the
+local continuation only computes `a'`; the residual then **resumes the loop** from
+`a'` and applies the post-loop tail — `re <- {func}_M_loop_aux a';;
+{func}_M_loop_end re` — yielding the function result. A straight-line call (owner
+is a `return`, e.g. `list_tail` in `list_append_raw`) already returns the result,
+so it is kept as-is.
+
+`copy`'s loop-body call `dst = list_append_raw(dst, copy)`:
+
+```coq
+Definition residual_prog_in_glibc_slist_clean_copy_M_call_2 (x : Z) (l0 : list Z) (l1 : list Z)
+    : list Z -> MONAD (list Z * list Z) :=
+  fun r0 =>
+    re <- glibc_slist_clean_copy_M_loop_aux (l1 ++ (x :: nil), l0, r0);;
+    glibc_slist_clean_copy_M_loop_end re.
+```
+
+`x` (head), `l0` (tail), `l1` (prefix) are the frame's unfolded pieces, captured
+verbatim as parameters — no `any + assume`; `r0` is the append result (the new
+`dst` list); the next carrier `(l1 ++ [x], l0, r0)` is fed back into the loop
+(`M_loop_aux`) and the post-loop tail (`M_loop_end`) produces the result.
+`malloc_list_node` yields no logical list result, so it produces no residual.
+
+The faithful parameters `x`, `l0` are loop-`Inv` unfold pieces, so they must be
+(re)introduced at the C call site before they can be named in `cont =
+residual(…)`. `frame_sep.translate_frame_sep` generates that call-site frame
+assertion from the proof block's `Frame:` — an `exists x_frame y_frame l0_frame
+l1_frame, store(&(node->data), int, x_frame) * sll(y_frame, l0_frame) *
+store(&(node->next), struct list*, y_frame) * sllseg(src@pre, node, l1_frame)`
+block — which `inject_residual_annotations` emits just before the call (followed
+by `/*@ Given x_frame l0_frame l1_frame */` and the `cont`), so the injected
+`_rel.c` reproduces the hand-written
+`bench-gen/glibc_slist/relc/glibc_slist_copy_rel_try.c`.
+
+The translation keeps heap predicates (`sll`/`sllseg`/…) and *field* stores
+(`store(&(ptr->field), …)`) and drops local-variable cells (`store(<var>_addr,
+…)`), `has_permission`, `undef_data_at`; it renames symexec vars (`_value` → the
+C var, `_pre` → `var@pre`, both in scope; `_free`/bare `_<id>` → the logical name),
+rewrites a field store to `store(addr, type, value)` (stripping a leading `signed`,
+so `signed int` → `int`), and binds the existential vars first-appearance ordered.
+A frame var that is a genuine `With` precondition (`_free` + base in `With`, e.g.
+`l2_381_free`) is left in scope, not re-bound — the same precondition test the
+`Given` rule uses. The frame block is emitted only for a residual with
+`given_params` (loop-scoped params to introduce); a residual over only in-scope
+`With` vars needs no frame block or `Given`. Type-map coverage is `signed X → X`
+plus passthrough (extend as new scalar C types appear).
+
+**Distinct `_frame` names (function-scope safety).** A `/*@ Given v */` puts `v`
+in the *ambient (function-wide)* proof context, so two frame-carrying calls in one
+function would clash if both introduced, say, `l2`. `inject_residual_annotations`
+therefore renames each call site's frame existentials to a distinct series: `v` →
+`v_frame`, or `v_<n>_frame` for its n-th (n≥2) occurrence within the **caller
+function** (`_frame_rename_maps`, counted in call-index order). The `_frame`
+suffix also keeps frame vars clear of the function's own `l1`/`l2`/`l3`
+(`With`/`Inv`/`Ensure`). The rename covers the trio — `/*@ exists … */`,
+`/*@ Given … */`, and the `cont(…)` args — consistently; ambient `With` params
+(never frame existentials) keep their bare names, and the residual `Definition`'s
+params (connected to `cont` positionally) stay clean.
+
+**Limitation — single loop.** The loop-resumption tail uses the bare
+`{func}_M_loop_aux` / `{func}_M_loop_end` names, so an in-loop call inside a loop
+*forest* (where the scaffolding is per-loop `_M_loop{k}_aux`) is not yet handled;
+the current benchmark calls all sit in single-loop or loop-free callers.
+
 **Recursion** (`iter_back`: `sum = iter_back(x->next); …`). A whole-function `_M`
 hole whose VCs call the function itself becomes a `Fixpoint`. The arms already
 synthesize the right body — a base arm (`l1 = nil`) and a step arm that calls
@@ -176,6 +274,89 @@ Fixpoint glibc_slist_clean_iter_back_M (l1 : list Z) : MONAD (list Z) :=
   | x :: l1' => r <- glibc_slist_clean_iter_back_M l1';; return (x :: r)
   end.
 ```
+
+#### TODO — the recursion procedure is not yet general
+
+The current path (`__init__.py` → `_is_recursive` → `synth_recursive` →
+`_recursive_definition`) is hard-wired to **one shape**: a no-loop whole-function
+`_M` hole, a single `list Z` recursion argument, structurally decreasing on the
+immediate cons tail, with one direct self-call. The assumptions, each its own
+gap to close (roughly easiest/highest-value first):
+
+- [ ] **C — verify structural decrease instead of assuming it.** Nothing checks
+  that the self-call's argument is actually the matched pattern's subterm; we
+  emit the `Fixpoint` and let Coq reject it downstream. Verify the funccall arg's
+  logical image *is* the matched tail, and on mismatch fall back / diagnose
+  locally rather than shipping a doomed `Fixpoint`. Small change, removes a silent
+  failure mode.
+- [ ] **A — multiple recursion arguments.** `synth_recursive`/`_recursive_definition`
+  hardcode `input_group[0]` and emit a single `Fixpoint f (arg : T)` binder, so a
+  helper with an accumulator or two lists is mistyped (extra args dropped) and can
+  only discriminate the first. Emit all binders, pick the decreasing one
+  (annotation or heuristic), and mark it `{struct arg}`.
+- [ ] **B — discriminator generality.** `_match_branch` only recovers a pattern
+  from a literal `assume!! (l1 = a :: l1');;`. A predicate discriminator
+  (`assume!! (l1 <> nil)`) yields no constructor pattern → wildcard `_` → the
+  self-call is non-structural. Derive the cons-split from `<> nil` when no explicit
+  cons-equality is present.
+- [ ] **D — recursion interleaved with loops.** Detection only fires for
+  `hole.role == "M"`; a function that both loops and recurses has `_M_loop_*`
+  holes, so `_is_recursive` is never consulted. Recursion detection must move out
+  of the no-loop branch into the segment router. Architectural.
+- [ ] **E — mutual and multi-call recursion.** `_is_recursive` matches only
+  `call_target == func` and the arm machinery threads one self-call. Mutual
+  recursion (`f`↔`g`) is invisible (dangling forward refs); tree-style double
+  recursion (`l <- f left;; r <- f right`) needs several self-calls each proven
+  structural. Needs `Fixpoint … with …` / a measure and a reworked arm chain.
+  Architectural.
+
+D and E are genuine re-cuts of the routing in `fill_template` and should wait
+until a benchmark actually demands them; A/B/C are targeted patches to
+`synth_recursive` / `_recursive_definition` / `_match_branch`.
+
+#### TODO — the residual loop-resumption tail assumes a single loop
+
+`residual.build_residual` resumes an in-loop call's continuation with the bare
+`{func}_M_loop_aux` / `{func}_M_loop_end` names. That is correct only for a
+single-loop caller. In a loop *forest* the scaffolding is per-loop
+(`{func}_M_loop{k}_aux` / there is no single `M_loop_end` — each loop has its own
+exit and the outer body resumes via `after_inner`), so the bare names do not
+exist.
+
+- [ ] **Forest-aware resumption.** Identify *which* loop `k` the call's owner VC
+  belongs to (the `fill_forest` `loop_of` routing already does this), and resume
+  via that loop's `_M_loop{k}_aux`, then thread the remaining outer continuation
+  (`after_inner` → outer `_M_loop_aux` → … → result) the way the assembled
+  forest `M` composes them. A minimal driver would be a forest caller with a real
+  function call inside one of its loop bodies; none exists in the current bench
+  family, so this is deferred until one does.
+
+Until then `build_residual` only emits a correct tail for single-loop and
+loop-free callers (it still produces the right *local* continuation and captured
+frame params regardless of nesting — only the post-call loop tail is gated).
+
+#### `Given` decision — every param except a genuine `With` precondition var
+
+A residual param needs a call-site `/*@ Given … */` iff it was bound by an
+**intermediate annotation** (the loop `Inv`, or the loop-body unfold it drives)
+rather than the function precondition (`With`/`Require`): precondition vars are
+universally in scope, everything else must be (re)introduced before it can be
+named in `cont = residual(…)`.
+
+Because the faithful params are the SE fresh vars themselves, the rule is now a
+direct provenance test: a param is a **precondition** var iff it is spelled
+`<withvar>_<id>_free` (symexec's `_free` suffix) *and* its base name is a `With`
+var. Everything else — a bare loop-`Inv` carrier instance (`l1_424`) **and** an
+unfold/cons-split piece (`x_427_free`, `l0_429_free`, which are `_free` yet have a
+base name *not* in `With`) — needs `Given`. So for `copy` all three of `x, l0, l1`
+are `Given`; for `list_append_raw`'s `list_tail` residual the sole param `l2`
+(`l2_381_free`, base `l2` ∈ `With l1 l2`) needs none. This tightens the earlier
+`_free`-only convention, which misclassified the unfold `_free` pieces (it only
+worked before because they were first resolved to their non-`_free` carrier
+parent). It still leans on the `_free` spelling; the fully principled test would
+attribute each var to the annotation that binds it via the call's VC
+pre-existential context (also covering existentials introduced by an *inserted*
+loop-body assertion), likely sharing machinery with the recursive/forest routing.
 
 ## How a segment is synthesized
 
@@ -302,6 +483,14 @@ states the pointer fact `x != (Ez_val 0)` gains `l1 != nil(Z)` directly, so its
 list discriminator no longer has to be inferred as the complement of the paired
 early return. Rules live in `facts.RULES` (currently `sll`; extensible).
 
+> **Status — disabled.** The `facts.augment(blocks)` call in `fill_template` is
+> **commented out**. Without it, an `early_result` hole's **Continue** arm is
+> emitted without its `assume!! (l <> nil)` guard (the complement of the paired
+> early return is not re-derived elsewhere) — e.g. the forest `fbefore` hole
+> `glibc_slist_clean_iter_back_2_M_loop1_before`. This is not unsound: `choice`
+> is relational, so an unguarded Continue arm only makes the abstract program
+> more permissive. Re-enable the call to restore the guard.
+
 ### Data witnesses & pointer existentials (the abstract state's shape)
 
 A loop `Inv exists …` (or `Ensure exists …`) binds more than the abstract
@@ -402,6 +591,9 @@ hardcoded in `terms.py`.
 - `witness.py` — resolve a function's `Inv`/`Ensure` existentials into the
   abstract state's logical components (lists + scalar data witnesses), dropping
   pointer existentials and ordering to the template tuple (see below).
+- `frame_sep.py` — `translate_frame_sep`: turn a `funccall_wit` `Frame:` into the
+  call-site `/*@ exists …, … */` assertion that (re)introduces a residual's
+  loop-scoped params (see the residual section above).
 - `synth.py` — `referenced_funccalls` (the funccall blocks a VC depends on,
   transitively over list dataflow; usually empty), `synth_parts`/`synth_entail`
   (synthesize one segment from its VC + those precomputed dependencies), and

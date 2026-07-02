@@ -82,6 +82,13 @@ def _build_sibling_function_table(
                     text = f.read()
             except OSError:
                 continue
+            # Strip C comments before scanning: a prose comment that writes a
+            # call like `list_append_raw(a, b)` with no trailing `;` lets the
+            # greedy `_FUNC_DEF_RE` span from inside the comment all the way to
+            # the file's real function `{`, mis-capturing the *commented* name as
+            # this file's defined function (e.g. glibc_slist_two_call_reuse.c's
+            # doc comment made `list_append_raw` resolve to that file).
+            text = _strip_c_comments(text)
             for m in _FUNC_DEF_RE.finditer(text):
                 name = m.group(1)
                 if name in _C_KEYWORDS_AND_BUILTINS:
@@ -758,6 +765,7 @@ def generate_forest_func_block(
     loop_templates: List[Dict],
     mretty_name: str = "MretTy",
     declare_mretty: bool = False,
+    has_pre_loop_early_return: bool = False,
 ) -> str:
     """Generate a multi-loop scaffold for one function (task #20).
 
@@ -1068,12 +1076,26 @@ def generate_forest_func_block(
         lines.append("")
 
     req_curried = _curried_args(require_var_types) if require_var_types else ""
-    # Top-level `before` and `end` Parameters.
+    # Top-level `before` and `end` Parameters.  When the function has a
+    # pre-loop early return (an ``if (...) return ...;`` before the first
+    # top-level loop), the *first* before's payload is wrapped in
+    # ``early_result`` so it can shortcut straight to the function return —
+    # mirroring the single-loop case at line ~471.  Subsequent top-level
+    # ``before`` Parameters never see the early return (it precedes loop 1
+    # by construction), so they stay plain.
     for i, t in enumerate(top_levels):
         k = t["loop_index"] + 1
         Sk_arg = _type_arg(t["state_type"])
         if i == 0:
-            lines.append(f"Parameter {fn}_M_loop{k}_before : {req_curried}MONAD {Sk_arg}.")
+            if has_pre_loop_early_return:
+                before_payload = (
+                    f"({_early_result_type(t['state_type'], return_type)})"
+                )
+                lines.append(
+                    f"Parameter {fn}_M_loop{k}_before : {req_curried}MONAD {before_payload}."
+                )
+            else:
+                lines.append(f"Parameter {fn}_M_loop{k}_before : {req_curried}MONAD {Sk_arg}.")
         else:
             prev_res = res_ty_for[top_levels[i - 1]["loop_index"]]
             lines.append(f"Parameter {fn}_M_loop{k}_before : {prev_res} -> MONAD {Sk_arg}.")
@@ -1278,28 +1300,75 @@ def generate_forest_func_block(
         first_before_args = ""
     indent = "    " if m > 0 else "  "
 
-    if any_tainted:
+    # Pre-loop early return makes the first ``before`` emit an
+    # ``early_result`` payload — match on it so a ``ReturnNow`` skips the
+    # entire loop chain and resolves to the function return directly.
+    def _emit_first_before_bind(target_var: str, body_indent: str) -> None:
         first_k = top_levels[0]["loop_index"] + 1
         lines.append(
-            f"{indent}s1 <- {fn}_M_loop{first_k}_before{first_before_args};;"
+            f"{body_indent}{target_var} <- {fn}_M_loop{first_k}_before{first_before_args};;"
         )
-        lines.append(f"{indent}r1 <- {fn}_M_loop{first_k}_aux s1;;")
-        lines.append(f"{indent}{fn}_M_loop{first_k}_tail r1.")
+
+    if any_tainted:
+        first_k = top_levels[0]["loop_index"] + 1
+        if has_pre_loop_early_return:
+            lines.append(
+                f"{indent}e <- {fn}_M_loop{first_k}_before{first_before_args};;"
+            )
+            lines.append(f"{indent}match e with")
+            lines.append(f"{indent}| ReturnNow r => return r")
+            lines.append(f"{indent}| Continue s1 =>")
+            inner = indent + "    "
+            lines.append(f"{inner}r1 <- {fn}_M_loop{first_k}_aux s1;;")
+            lines.append(f"{inner}{fn}_M_loop{first_k}_tail r1")
+            lines.append(f"{indent}end.")
+        else:
+            lines.append(
+                f"{indent}s1 <- {fn}_M_loop{first_k}_before{first_before_args};;"
+            )
+            lines.append(f"{indent}r1 <- {fn}_M_loop{first_k}_aux s1;;")
+            lines.append(f"{indent}{fn}_M_loop{first_k}_tail r1.")
     else:
-        for i, t in enumerate(top_levels):
-            k = t["loop_index"] + 1
-            if i == 0:
-                lines.append(
-                    f"{indent}s{i+1} <- {fn}_M_loop{k}_before{first_before_args};;"
-                )
-            else:
-                prev_k = top_levels[i - 1]["loop_index"] + 1
-                lines.append(f"{indent}s{i+1} <- {fn}_M_loop{k}_before t{prev_k};;")
-            lines.append(f"{indent}r{i+1} <- {fn}_M_loop{k}_aux s{i+1};;")
-            if i == len(top_levels) - 1:
-                lines.append(f"{indent}{fn}_M_loop{k}_end r{i+1}.")
-            else:
-                lines.append(f"{indent}t{k} <- {fn}_M_loop{k}_end r{i+1};;")
+        if has_pre_loop_early_return:
+            first_k = top_levels[0]["loop_index"] + 1
+            lines.append(
+                f"{indent}e <- {fn}_M_loop{first_k}_before{first_before_args};;"
+            )
+            lines.append(f"{indent}match e with")
+            lines.append(f"{indent}| ReturnNow r => return r")
+            lines.append(f"{indent}| Continue s1 =>")
+            inner = indent + "    "
+            chain_indent = inner
+            for i, t in enumerate(top_levels):
+                k = t["loop_index"] + 1
+                if i == 0:
+                    lines.append(f"{chain_indent}r{i+1} <- {fn}_M_loop{k}_aux s1;;")
+                else:
+                    prev_k = top_levels[i - 1]["loop_index"] + 1
+                    lines.append(
+                        f"{chain_indent}s{i+1} <- {fn}_M_loop{k}_before t{prev_k};;"
+                    )
+                    lines.append(f"{chain_indent}r{i+1} <- {fn}_M_loop{k}_aux s{i+1};;")
+                if i == len(top_levels) - 1:
+                    lines.append(f"{chain_indent}{fn}_M_loop{k}_end r{i+1}")
+                else:
+                    lines.append(f"{chain_indent}t{k} <- {fn}_M_loop{k}_end r{i+1};;")
+            lines.append(f"{indent}end.")
+        else:
+            for i, t in enumerate(top_levels):
+                k = t["loop_index"] + 1
+                if i == 0:
+                    lines.append(
+                        f"{indent}s{i+1} <- {fn}_M_loop{k}_before{first_before_args};;"
+                    )
+                else:
+                    prev_k = top_levels[i - 1]["loop_index"] + 1
+                    lines.append(f"{indent}s{i+1} <- {fn}_M_loop{k}_before t{prev_k};;")
+                lines.append(f"{indent}r{i+1} <- {fn}_M_loop{k}_aux s{i+1};;")
+                if i == len(top_levels) - 1:
+                    lines.append(f"{indent}{fn}_M_loop{k}_end r{i+1}.")
+                else:
+                    lines.append(f"{indent}t{k} <- {fn}_M_loop{k}_end r{i+1};;")
     lines.append("")
 
     return "\n".join(lines)
@@ -1551,6 +1620,9 @@ def generate_rel_lib(
                     loop_templates,
                     mretty_name=mretty_name,
                     declare_mretty=scope_mretty_per_function,
+                    has_pre_loop_early_return=info.get(
+                        'has_pre_loop_early_return', False
+                    ),
                 ))
             else:
                 parts.append(generate_func_block(

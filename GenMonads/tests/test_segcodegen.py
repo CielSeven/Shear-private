@@ -312,6 +312,103 @@ Parameter glibc_slist_clean_app_M : list Z -> list Z -> MONAD (list Z).
 '''
 
 
+# A borrowing multi-result callee `dup` whose two list results carry *distinct*
+# values (a preserved input `lp` and a fresh result `lq`).  The autovc lists the
+# "Postcondition existentials introduced" in a DIFFERENT order (q before p) than
+# the "Postcondition contributed by call" SEP, which reproduces the callee's
+# Ensure order `sll(x@pre, lp) * sll(__return, lq)` == its result-tuple order.
+# The `'(a, b)` destructure binds `fst`/`snd` positionally, so the projection
+# must follow the SEP order, NOT the post_exists list order — otherwise every
+# component is bound to the wrong logical value.
+DUP_AUTOVC = '''#include "glibc_slist_clean_data.h"
+
+struct list *dup_reuse(struct list *x)
+/*@
+    With l1
+    Require sll(x, l1)
+    Ensure exists lp lq, sll(x@pre, lp) * sll(__return, lq)
+ */
+{
+    return dup(x);
+/* !!!
+VC: dup_reuse_funccall_wit_1   (call to dup)
+Callee With-variable instantiation:
+  a_30_free -> l1_10_free
+Frame:
+SEP[
+ store(x_1_addr , x_1_pre , struct list*) ]
+Postcondition existentials introduced:
+  q_20
+  p_21
+  retval_22
+Postcondition contributed by call (SEP, new existentials in place):
+SEP[
+ sll(x_1_pre, p_21);
+ sll(retval_22, q_20) ]
+Residual side-condition (partial solve) exist_mapping:
+(empty)
+!!! */
+/* !!!
+VC: dup_reuse_return_wit_1
+Precondition existentials (in context for this VC):
+  p_21
+  q_20
+NestedSolver first solve exist_mapping:
+lp_8 -> p_21
+lq_9 -> q_20
+Leftover left Props after solve:
+(empty)
+!!! */
+}
+'''
+
+DUP_TEMPLATE = "Parameter dup_reuse_M : list Z -> MONAD (list Z * list Z).\n"
+
+
+def test_multi_result_projection_follows_post_sep_order():
+    out = fill_template(DUP_TEMPLATE, DUP_AUTOVC)
+    n = _norm(out)
+    # p_21 is the SEP-first value (callee tuple slot 0 = `fst`), q_20 is slot 1.
+    # The destructure binds `r=fst`, `r0=snd`, so the returned tuple must be
+    # (r, r0): x@pre-preserved (lp=p_21=r) then __return (lq=q_20=r0).  With the
+    # buggy post_exists ordering this would come out reversed as `(r0, r)`.
+    assert _norm("'(r, r0) <- dup_M l1;; return (r, r0).") in n
+    assert "return (r0, r)" not in n
+
+
+def test_post_sep_parsed_and_orders_results():
+    blocks = parse_blocks(DUP_AUTOVC)
+    fc = next(b for b in blocks if b.kind == "funccall")
+    # the introduced-existentials list is q,p (reversed) ...
+    assert fc.post_exists[:2] == ["q_20", "p_21"]
+    # ... but the contributed SEP puts p before q (the real tuple order).
+    assert fc.post_sep == ["sll(x_1_pre, p_21)", "sll(retval_22, q_20)"]
+    from GenMonads.absprog.segcodegen.synth import _post_sep_order
+    rank = _post_sep_order(fc)
+    assert rank["p_21"] < rank["q_20"]
+
+
+def test_post_sep_order_appends_scalar_witness_last():
+    # A callee like `list_tail` returns (prefix : list Z, last : Z).  Its
+    # postcondition SEP lists the scalar `data == v` conjunct BEFORE the list
+    # `sllseg(..., l2)`, yet `addabstract` appends the scalar data-witness LAST in
+    # the result tuple `(l2, v)`.  So the faithful order is list-first even though
+    # the scalar appears first in the SEP text.
+    from GenMonads.absprog.segcodegen.vcparse import VCBlock
+    from GenMonads.absprog.segcodegen.synth import _post_sep_order, _scalar_result_vars
+    fb = VCBlock(name="f_funccall_wit_1", kind="funccall", call_target="pop")
+    fb.post_exists = ["l2_20", "v_21", "retval_22"]
+    fb.post_sep = [
+        "store(&(retval_22->data) , v_21 , signed int)",
+        "sllseg(x_1_pre, retval_22, l2_20)",
+    ]
+    # `v_21` is a scalar (non-pointer field store); the list `l2_20` is not.
+    assert _scalar_result_vars(fb.post_sep) == {"v_21"}
+    rank = _post_sep_order(fb)
+    # list ranked before scalar, despite the scalar appearing first in the SEP.
+    assert rank["l2_20"] < rank["v_21"]
+
+
 def test_fill_app_no_loop():
     out = fill_template(APP_TEMPLATE, APP_AUTOVC)
     n = _norm(out)
@@ -1188,3 +1285,215 @@ def test_recursion_emits_structural_fixpoint():
     assert "r <- rf_M l1'" in n
     assert "return (x :: r)" in n
     assert "fst r" not in n and "snd r" not in n
+
+
+# ---------------------------------------------------------------------------
+# Frame-based function-call residual (continuation) generation.
+# The inner-loop tail is the degenerate empty-frame case of this same splice;
+# a real function call differs only by carrying a non-empty, mandatory frame.
+
+_APPEND_AVC = "bench-gen/glibc_slist/datac/autovc/list_append_raw_data_autovc.c"
+_COPY_AVC = "bench-gen/glibc_slist/datac/autovc/glibc_slist_copy_data_autovc.c"
+
+
+@pytest.mark.skipif(not _os.path.exists(_APPEND_AVC),
+                    reason="list_append_raw autovc not present")
+def test_residual_list_tail_threads_frame_list():
+    from GenMonads.absprog.segcodegen.residual import build_all_residuals
+    rds = build_all_residuals(open(_APPEND_AVC).read())
+    assert len(rds) == 1
+    rd = rds[0]
+    # the callee `list_tail` returns (prefix, last); the frame carries `l2` (the
+    # appended list, the With-var) untouched, so the residual closes over `l2`.
+    assert rd.callee == "list_tail"
+    assert rd.params == ["l2"]
+    assert ": (list Z * Z) -> MONAD (list Z) :=" in rd.definition
+    body = _norm(rd.definition)
+    # result tuple destructured, frame `l2` re-appended after the popped element
+    assert "fun '(r0, v) =>" in body
+    assert "return (r0 ++ (v :: l2))" in body
+
+
+@pytest.mark.skipif(not _os.path.exists(_COPY_AVC),
+                    reason="glibc_slist_copy autovc not present")
+def test_residual_copy_loop_body_call():
+    from GenMonads.absprog.segcodegen.residual import build_all_residuals
+    rds = build_all_residuals(open(_COPY_AVC).read())
+    # malloc has no logical (list) result -> no residual; only the
+    # list_append_raw call produces a continuation.
+    assert [rd.callee for rd in rds] == ["list_append_raw"]
+    rd = rds[0]
+    # FAITHFUL residual: the parameters are the SE fresh variables the loop body
+    # already unfolded at the call site (the frame `store(&node->data, x) *
+    # sll(y, l0) * sllseg(.., l1)`), captured verbatim — the head/tail (x, l0) are
+    # NOT re-derived inside via any+assume, and the whole list `l2` is NOT a param.
+    assert rd.params == ["x", "l0", "l1"]
+    assert "l2" not in rd.params
+    body = _norm(rd.definition)
+    assert "fun r0 =>" in body
+    assert "any" not in body                       # nothing re-derived
+    assert "assume" not in body
+    # all three params are loop-scoped (Inv carrier / unfold pieces), so each needs
+    # a call-site `/*@ Given … */`; none is a `With` precondition var.
+    assert rd.given_params == ["x", "l0", "l1"]
+    # the residual is the continuation of the *whole function*: after computing
+    # the next carrier (l1 ++ [x], l0, dst') it resumes the loop and applies the
+    # post-loop tail, so it yields the function result `MONAD (list Z * list Z)`.
+    assert ": list Z -> MONAD (list Z * list Z) :=" in rd.definition
+    assert "re <- glibc_slist_clean_copy_M_loop_aux (l1 ++ (x :: nil), l0, r0);;" in body
+    assert "glibc_slist_clean_copy_M_loop_end re" in body
+
+
+@pytest.mark.skipif(not _os.path.exists(_COPY_AVC),
+                    reason="glibc_slist_copy autovc not present")
+def test_fill_template_appends_residual_to_rel_lib():
+    # a frame-enriched funccall block makes fill_template append the residual
+    # Definition after the filled holes (self-recursion / frameless calls do not).
+    tmpl = (
+        "Parameter MretTy : Type.\n"
+        "Parameter glibc_slist_clean_copy_M_loop_before : list Z -> MONAD MretTy.\n"
+        "Parameter glibc_slist_clean_copy_M_loop_M1 : MretTy -> MONAD MretTy.\n"
+        "Parameter glibc_slist_clean_copy_M_loop_M2 : (list Z * list Z * list Z) -> MONAD MretTy.\n"
+        "Parameter glibc_slist_clean_copy_M_loop_end : (list Z * list Z * list Z) -> MONAD (list Z * list Z).\n"
+    )
+    out = fill_template(tmpl, open(_COPY_AVC).read())
+    n = _norm(out)
+    # the holes are still filled as before (call inlined in the loop body) ...
+    assert "Definition glibc_slist_clean_copy_M_loop_M2" in n
+    assert "r <- list_append_raw_M l3 (x :: nil);;" in n
+    # ... and the residual continuation is appended as its own Definition that
+    # resumes the loop and runs to the function result (M_loop_end appears).
+    assert ("Definition residual_prog_in_glibc_slist_clean_copy_M_call_2 "
+            "(x : Z) (l0 : list Z) (l1 : list Z)") in n
+    assert "re <- glibc_slist_clean_copy_M_loop_aux (l1 ++ (x :: nil), l0, r0);;" in n
+    assert "glibc_slist_clean_copy_M_loop_end re" in n
+
+
+# ---- frame_sep: proof-block frame -> `/*@ exists …, … */` C assertion ---------
+
+def test_translate_frame_sep_copy_reference():
+    # exactly the hand-written assertion in glibc_slist_copy_rel_try.c: field
+    # stores + heap preds kept, local-var cells dropped, vars renamed, store args
+    # reordered to (addr, type, value), `signed int` -> `int`, existentials bound.
+    from GenMonads.absprog.segcodegen.frame_sep import translate_frame_sep
+    frame = [
+        "store(&(node_423_value->data) , x_427_free , signed int)",
+        "sll(y_428_free, l0_429_free)",
+        "store(&(node_423_value->next) , y_428_free , struct list*)",
+        "store(src_383_addr , src_382_pre , struct list*)",
+        "store(copy_400_addr , retval_435 , struct list*)",
+        "store(node_397_addr , node_423_value , struct list*)",
+        "sllseg(src_382_pre, node_423_value, l1_424)",
+        "store(dst_394_addr , dst_420_value , struct list*)",
+    ]
+    assert translate_frame_sep(frame) == (
+        "/*@ exists x y l0 l1,\n"
+        "    store(&(node->data), int, x) *\n"
+        "    sll(y, l0) *\n"
+        "    store(&(node->next), struct list*, y) *\n"
+        "    sllseg(src@pre, node, l1) */"
+    )
+
+
+def test_translate_frame_sep_drops_noise_and_renames():
+    from GenMonads.absprog.segcodegen.frame_sep import translate_frame_sep
+    frame = [
+        "has_permission( copy_400_addr , struct list*)",   # dropped
+        "undef_data_at(&copy, struct list*)",              # dropped
+        "store(x_372_addr , x_371_pre , struct list*)",    # dropped: local cell
+        "sll(y_368_pre, l2_381_free)",                     # kept: `_pre` in scope
+    ]
+    # `y_368_pre` is a program pre-value (in scope) -> not bound; only `l2` is.
+    assert translate_frame_sep(frame) == "/*@ exists l2,\n    sll(y@pre, l2) */"
+
+
+def test_translate_frame_sep_strips_only_leading_signed():
+    from GenMonads.absprog.segcodegen.frame_sep import translate_frame_sep
+    out = translate_frame_sep([
+        "store(&(p_1_value->c), a_2_free, signed char)",
+        "store(&(p_1_value->n), b_3_free, unsigned int)",
+    ])
+    assert "store(&(p->c), char, a)" in out       # signed char -> char
+    assert "store(&(p->n), unsigned int, b)" in out  # unsigned int untouched
+
+
+def test_translate_frame_sep_empty_when_nothing_kept():
+    from GenMonads.absprog.segcodegen.frame_sep import translate_frame_sep
+    assert translate_frame_sep([
+        "store(a_1_addr , b_2_pre , struct list*)",
+        "has_permission( c_3_addr , int)",
+    ]) == ""
+
+
+def test_translate_frame_sep_with_vars_not_rebound():
+    # a `With` precondition var in the frame (`l2_381_free`, base `l2` in With) is
+    # already in scope -> rendered but NOT existentially re-bound.
+    from GenMonads.absprog.segcodegen.frame_sep import translate_frame_sep
+    frame = ["sll(y_368_pre, l2_381_free)"]
+    assert translate_frame_sep(frame, with_vars=["l1", "l2"]) == "/*@ sll(y@pre, l2) */"
+    # but a bare `_<id>` carrier (l1_424) whose base also names a With var IS bound
+    frame2 = ["sllseg(src_382_pre, node_423_value, l1_424)"]
+    assert translate_frame_sep(frame2, with_vars=["l1"]) == \
+        "/*@ exists l1,\n    sllseg(src@pre, node, l1) */"
+
+
+@pytest.mark.skipif(not _os.path.exists(_COPY_AVC),
+                    reason="glibc_slist_copy autovc not present")
+def test_residual_copy_carries_frame_sep():
+    from GenMonads.absprog.segcodegen.residual import build_all_residuals
+    rd = build_all_residuals(open(_COPY_AVC).read())[0]
+    assert rd.frame_sep == (
+        "/*@ exists x y l0 l1,\n"
+        "    store(&(node->data), int, x) *\n"
+        "    sll(y, l0) *\n"
+        "    store(&(node->next), struct list*, y) *\n"
+        "    sllseg(src@pre, node, l1) */"
+    )
+
+
+@pytest.mark.skipif(not _os.path.exists(_COPY_AVC),
+                    reason="glibc_slist_copy autovc not present")
+def test_inject_emits_frame_block_then_given_then_cont():
+    from GenMonads.absprog.segcodegen.residual import inject_residual_annotations
+    relc = (
+        '/*@ Import Coq Require Import glibc_slist_copy_rel_lib */\n'
+        '/*@ Extern Coq (maketuple: {A} {B} -> A -> B -> (A * B)) */\n'
+        '    while (node != 0) {\n'
+        '        copy = malloc_list_node(node->data);\n'
+        '        dst = list_append_raw(dst, copy) '
+        '/*@ where(low_level_spec_aux) X = X; B = (list Z * list Z) */;\n'
+        '        node = node->next;\n'
+        '    }\n'
+    )
+    out = inject_residual_annotations(relc, open(_COPY_AVC).read())
+    # frame existentials get the distinct `_frame` spelling (so a function-scoped
+    # `Given` can't clash across calls); ambient vars/program vars are untouched.
+    # The frame assertion precedes the Given, which precedes the call+cont.
+    assert "/*@ Extern Coq (residual_prog_in_glibc_slist_clean_copy_M_call_2:" in out
+    assert "        /*@ exists x_frame y_frame l0_frame l1_frame,\n" in out
+    assert "            store(&(node->data), int, x_frame) *\n" in out
+    assert "            sllseg(src@pre, node, l1_frame) */\n" in out       # program var `node`/`src@pre` untouched
+    assert "        /*@ Given x_frame l0_frame l1_frame */\n" in out
+    assert "cont = residual_prog_in_glibc_slist_clean_copy_M_call_2(x_frame, l0_frame, l1_frame);" in out
+    # ordering: exists block -> Given -> call
+    assert out.index("exists x_frame") < out.index("/*@ Given x_frame") \
+        < out.index("cont = residual_prog_in_glibc_slist_clean_copy_M_call_2")
+
+
+def test_frame_rename_maps_disambiguates_per_caller():
+    # two calls in one caller both frame-introduce `l2` -> first `l2_frame`, second
+    # `l2_2_frame`, so the function-scoped `Given`s don't collide.  A different
+    # caller restarts the counter.
+    from GenMonads.absprog.segcodegen.residual import _frame_rename_maps, ResidualDef
+
+    def mk(caller, idx):
+        return ResidualDef(
+            name=f"residual_prog_in_{caller}_call_{idx}", definition="", params=["l2"],
+            result_binder="r", callee="c", call_index=idx, given_params=["l2"],
+            frame_sep="/*@ exists l2,\n    sll(x@pre, l2) */")
+
+    r2, r3, other = mk("f_M", 2), mk("f_M", 3), mk("g_M", 1)
+    maps = _frame_rename_maps([r2, r3, other])
+    assert maps[id(r2)] == {"l2": "l2_frame"}
+    assert maps[id(r3)] == {"l2": "l2_2_frame"}      # second use in same caller
+    assert maps[id(other)] == {"l2": "l2_frame"}     # different caller -> counter resets

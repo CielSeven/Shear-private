@@ -11,6 +11,52 @@ This module provides functions to:
 import re
 from typing import List, Optional, Tuple
 
+try:
+    from GenMonads.transshape.c_types import coq_type_of
+except Exception:  # pragma: no cover - allow package fallback for tooling
+    from ..transshape.c_types import coq_type_of  # type: ignore
+
+
+_RETURN_EQ_RE = re.compile(r'__return\s*==\s*([A-Za-z_][A-Za-z0-9_]*)')
+
+
+def extract_return_value_witnesses(
+    funcspec: dict, return_type: str
+) -> List[Tuple[str, str]]:
+    """Vars bound by the source Ensure's leading ``exists`` that the spec
+    equates with ``__return``.  When the C function returns a non-pointer
+    scalar, these get lifted into the abstract program's return tuple
+    (e.g. ``Ensure exists v, __return == v && ...`` → ``v : Z``).
+
+    Returns an ordered list of ``(var, coq_type)``.  Pointer / void
+    returns yield ``[]`` — pointer payloads aren't carried through the
+    abstract program today.
+    """
+    if not funcspec or not funcspec.get('ensure'):
+        return []
+    coq_t = coq_type_of(return_type or '')
+    if not coq_t:
+        return []
+    ensure = funcspec['ensure']
+    original = ensure.get('original') or ''
+    translated = ensure.get('translated') or ''
+    if not original or not translated:
+        return []
+    m = re.match(r'^\s*exists\s+(.*?),', original, re.DOTALL)
+    if not m:
+        return []
+    bound = m.group(1).split()
+    if not bound:
+        return []
+    matches = set(_RETURN_EQ_RE.findall(translated))
+    seen = set()
+    result: List[Tuple[str, str]] = []
+    for v in bound:
+        if v in matches and v not in seen:
+            seen.add(v)
+            result.append((v, coq_t))
+    return result
+
 
 def add_safeexec_predicate(
     translated_inv: str,
@@ -155,7 +201,7 @@ def extract_variables_from_assertion(assertion: str) -> List[str]:
     return result
 
 
-def canonical_funcspec(funcspec: dict) -> dict:
+def canonical_funcspec(funcspec: dict, return_type: str = '') -> dict:
     """One-stop shape→data decomposition shared by ``--data-only`` and rel.c
     paths.  Computes everything both layers need without doing any safeExec
     work — that's strictly a post-processing concern on top of this canonical
@@ -170,13 +216,20 @@ def canonical_funcspec(funcspec: dict) -> dict:
     - ``ensure_only_vars``: Ensure-generated vars not also in Require —
         bound by the outer ``exists`` in the data form, and by the safeExec
         wrapper's ``exists`` in the rel form.
-    - ``ensure_body``: Ensure body with ``?`` stripped (leading source
-        ``exists`` clauses are preserved verbatim; the rel layer may strip
-        them when it lifts data-witnesses out).
+    - ``ensure_body``: Ensure body with ``?`` stripped *and* with any
+        leading source ``exists`` peeled off — callers re-wrap with their
+        own merged outer ``exists`` so we never emit nested ``exists``.
+    - ``ensure_leftover_source_vars``: source-``exists``-bound vars that
+        aren't lifted as data or return witnesses.  Callers fold these into
+        the outer ``exists`` alongside generated/lifted vars.
     - ``ensure_data_witnesses``: pre-existing existentials bound by source
         ``exists`` that name data-field witnesses (e.g. ``d`` in
         ``exists d, __return -> data == d``).  Carried through so the rel
         layer can lift them into the abstract return value.
+    - ``ensure_return_witnesses``: pre-existing existentials equated with
+        ``__return`` (e.g. ``v`` in ``exists v, __return == v && ...``)
+        when the C return type is a non-pointer scalar.  Lifted into the
+        abstract return tuple as Z-typed payload.
     """
     source_with = ""
     with_clause = funcspec.get('with')
@@ -202,6 +255,8 @@ def canonical_funcspec(funcspec: dict) -> dict:
     ensure_only_vars: List[str] = []
     ensure_body = ""
     ensure_data_witnesses: List[str] = []
+    ensure_return_witnesses: List[str] = []
+    ensure_leftover_source_vars: List[str] = []
     if funcspec.get('ensure') and funcspec['ensure'].get('translated'):
         translated = funcspec['ensure']['translated']
         ensure_vars = extract_variables_from_assertion(translated)
@@ -213,10 +268,26 @@ def canonical_funcspec(funcspec: dict) -> dict:
         for v in ensure_vars:
             if v.startswith('?'):
                 body = body.replace(v, v[1:])
-        ensure_body = body
         ensure_data_witnesses = list(
             funcspec['ensure'].get('data_witnesses', []) or []
         )
+        ensure_return_witnesses = [
+            v for v, _t in extract_return_value_witnesses(funcspec, return_type)
+        ]
+
+        # Peel off the leading source ``exists`` and split its binders into
+        # lifted (data/return witnesses) vs. leftover.  ``ensure_body`` is
+        # always returned stripped so callers don't have to redo this dance
+        # and accidentally emit nested ``exists`` clauses.
+        leading = re.match(r'^\s*exists\s+(.+?),\s*(.+)$', body, re.DOTALL)
+        if leading:
+            inner_vars = leading.group(1).split()
+            inner_body = leading.group(2)
+            lifted = set(ensure_data_witnesses) | set(ensure_return_witnesses)
+            ensure_leftover_source_vars = [v for v in inner_vars if v not in lifted]
+            ensure_body = inner_body
+        else:
+            ensure_body = body
 
     return {
         'source_with': source_with,
@@ -226,6 +297,8 @@ def canonical_funcspec(funcspec: dict) -> dict:
         'ensure_only_vars': ensure_only_vars,
         'ensure_body': ensure_body,
         'ensure_data_witnesses': ensure_data_witnesses,
+        'ensure_return_witnesses': ensure_return_witnesses,
+        'ensure_leftover_source_vars': ensure_leftover_source_vars,
     }
 
 
@@ -275,7 +348,7 @@ def process_funcspec_with_safeexec(
              'require': {'with_safeexec': 'safeExec(ATrue, sll_copy_M(l1), X) && sll(x, l1)', ...},
              'ensure': {'with_safeexec': 'exists l2 l3, safeExec(ATrue, return(l2, l3), X) && ...', ...}}
     """
-    canon = canonical_funcspec(funcspec)
+    canon = canonical_funcspec(funcspec, return_type=return_type)
 
     with_parts: List[str] = []
     if canon['source_with']:
@@ -316,29 +389,24 @@ def process_funcspec_with_safeexec(
     if canon['ensure_body']:
         body = canon['ensure_body']
         data_witnesses = canon['ensure_data_witnesses']
-
-        # Strip the leading source ``exists ...,`` (if any) and lift data
-        # witnesses out of it.  Non-witness binders (e.g. pointer
-        # existentials we don't track) stay inside as a leftover ``exists``.
-        leading_exists = re.match(r'^exists\s+(.+?),\s*(.+)$', body, re.DOTALL)
-        if leading_exists:
-            inner_vars = leading_exists.group(1).split()
-            inner_body = leading_exists.group(2)
-            leftover = [v for v in inner_vars if v not in data_witnesses]
-            if leftover:
-                body = f"exists {' '.join(leftover)}, {inner_body}"
-            else:
-                body = inner_body
+        return_witnesses = canon['ensure_return_witnesses']
+        leftover_source_vars = canon['ensure_leftover_source_vars']
 
         ensure_translated_raw = (funcspec.get('ensure') or {}).get('translated', '') or ''
+        # Only synthesize an ``r`` witness when the C function returns a
+        # value that the source spec didn't already bind via
+        # ``__return == <var>`` — those explicit binders flow through
+        # ``return_witnesses`` already.
         need_witness = (
             not _is_void_return_type(return_type)
             and "__return" not in ensure_translated_raw
+            and not return_witnesses
         )
         witness = "r" if need_witness else None
         return_vars = (
             list(canon['ensure_only_vars'])
             + list(data_witnesses)
+            + list(return_witnesses)
             + ([witness] if witness else [])
         )
 
@@ -355,8 +423,18 @@ def process_funcspec_with_safeexec(
             body = f"__return == {witness} && {body}"
 
         rel_ensure_body = f"{safeexec} && {body}"
-        if return_vars:
-            rel_ensure_body = f"exists {' '.join(return_vars)}, {rel_ensure_body}"
+        # Outer ``exists`` merges leftover source binders, lifted witnesses
+        # and generated list vars into a single clause — never nested.
+        # Source binders come first to match the order users wrote them in.
+        outer_exists = (
+            list(leftover_source_vars)
+            + list(data_witnesses)
+            + list(return_witnesses)
+            + list(canon['ensure_only_vars'])
+            + ([witness] if witness else [])
+        )
+        if outer_exists:
+            rel_ensure_body = f"exists {' '.join(outer_exists)}, {rel_ensure_body}"
 
         ensure = (funcspec.get('ensure') or {}).copy()
         ensure['with_safeexec'] = rel_ensure_body

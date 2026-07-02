@@ -86,7 +86,9 @@ class VCBlock:
     leftover_props: List[str] = field(default_factory=list)
     sep_state: List[str] = field(default_factory=list)               # antecedent SEP predicates
     with_instantiation: Dict[str, str] = field(default_factory=dict)  # funccall
+    frame: List[str] = field(default_factory=list)                    # funccall: untouched SEP
     post_exists: List[str] = field(default_factory=list)              # funccall
+    post_sep: List[str] = field(default_factory=list)                 # funccall: postcondition SEP contributed by the call
 
     def kind_of(self) -> str:
         return self.kind
@@ -153,6 +155,12 @@ def _parse_one(body: str) -> VCBlock:
         if line.startswith("Callee With-variable instantiation"):
             section = "with"
             continue
+        if line.startswith("Frame"):
+            section = "frame"
+            continue
+        if line.startswith("Postcondition contributed"):
+            section = "post_sep"
+            continue
         if line.startswith("Postcondition existentials"):
             section = "post"
             continue
@@ -196,6 +204,18 @@ def _parse_one(body: str) -> VCBlock:
             mm = re.match(r"(.+?)\s*->\s*(.+)", line)
             if mm:
                 vc.with_instantiation[mm.group(1).strip()] = mm.group(2).strip()
+        elif section == "frame":
+            if line in ("(empty)", "SEP["):
+                continue
+            cleaned = line.rstrip(";").rstrip("]").strip().rstrip(";")
+            if cleaned and cleaned != "]":
+                vc.frame.append(cleaned)
+        elif section == "post_sep":
+            if line in ("(empty)", "SEP["):
+                continue
+            cleaned = line.rstrip(";").rstrip("]").strip().rstrip(";")
+            if cleaned and cleaned != "]":
+                vc.post_sep.append(cleaned)
         elif section == "post":
             vc.post_exists.append(line)
 

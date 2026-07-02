@@ -210,7 +210,8 @@ def _child_index(name: str) -> Optional[int]:
 
 
 def fill_forest(tmpl: Template, blocks: List[VCBlock], spec: Spec,
-                invs: List[List[str]], scalar_bases: set) -> Dict[str, str]:
+                invs: List[List[str]], scalar_bases: set,
+                collect: Optional[list] = None) -> Dict[str, str]:
     """Fill a loop-forest template's holes from the (now complete) per-loop VCs.
 
     The synthesizer is untouched: every hole still becomes ``synth_branched(arms,
@@ -228,9 +229,9 @@ def fill_forest(tmpl: Template, blocks: List[VCBlock], spec: Spec,
 
     A loop is identified by its *distinguishing list variables* (its `Inv`'s list
     components, which differ per loop); the shared scalar witness does not
-    disambiguate.  ``after_inner`` is the one curried hole — synthesized from the
-    inner result (its VC's roots) with the unused outer-carrier argument prepended,
-    so the binder shape the template demands is produced without touching synth."""
+    disambiguate.  ``after_inner`` consumes the child loop's MretTy as its single
+    argument (matching gen_rel_lib's Parameter and both call sites) — synthesized
+    directly from the resume entailment's inner-carrier roots, no extra binder."""
     holes = tmpl.holes
     loop_ct: Dict[int, str] = {}
     for h in holes:                                  # carrier type from each loop's M1 arg
@@ -279,30 +280,57 @@ def fill_forest(tmpl: Template, blocks: List[VCBlock], spec: Spec,
         elif b.kind == "return":
             return_by.setdefault(src(b), []).append(b)
 
-    def arms(vcs, out_group):
-        return [(vc, referenced_funccalls(vc, fblocks), out_group, None) for vc in vcs]
+    def arms(vcs, out_group, wrap=None):
+        return [(vc, referenced_funccalls(vc, fblocks), out_group, wrap) for vc in vcs]
+
+    def _collect(h, input_group, arm_list):
+        if collect is not None:
+            collect.append((h, input_group, arm_list))
 
     repl: Dict[str, str] = {}
     for h in holes:
         k = _loop_index(h.name)
+        # A hole whose declared type is `early_result A B` sits at a program point
+        # that either continues (`Continue`, into its own carrier) or early-returns
+        # (`ReturnNow`, into the function result).  Its entail arms must inject via
+        # `Continue` and its early-return arms via `ReturnNow` — otherwise the body
+        # returns a bare carrier and the lib does not type-check (the forest path
+        # previously passed `wrap=None` for *every* hole, so any early_result hole
+        # was malformed).  Non-early holes keep `wrap=None`.
+        early = "early_result" in h.type_str
+        cont = "Continue" if early else None
+        rnow = "ReturnNow" if early else None
         if h.role == "loop_mretty":
             repl[h.name] = f"Definition {h.name} : Type := {loop_ct[k]}."
         elif h.role == "fM1":                        # break branch (fixed)
             repl[h.name] = _definition(h, "fun r => return r.")
         elif h.role == "fM2":                        # loop k body iteration
-            repl[h.name] = _definition(
-                h, synth_branched(arms(entail_by.get((k, k), []), loop_vars[k]), loop_vars[k]))
+            # NOTE: a forest loop body with its *own* in-loop early return would be
+            # early_result here and would additionally need its guard-true return
+            # VCs routed as ReturnNow arms; no benchmark exercises that yet, so only
+            # the Continue injection is wired (keeps an early_result body well-typed).
+            al = arms(entail_by.get((k, k), []), loop_vars[k], cont)
+            _collect(h, loop_vars[k], al)
+            repl[h.name] = _definition(h, synth_branched(al, loop_vars[k]))
         elif h.role == "fbefore":                    # precond -> loop k
+            entry = arms(entail_by.get(("precond", k), []), loop_vars[k], cont)
+            # before-region early returns (`if (x==0) return ...`): their context is
+            # all-`_free` (src == "precond"), so they are disjoint from any loop's
+            # exit return and inject the result via ReturnNow.
+            if early:
+                entry += arms(return_by.get("precond", []), ensure_vars, rnow)
+            _collect(h, spec.with_vars, entry)
             repl[h.name] = _definition(
-                h, synth_branched(arms(entail_by.get(("precond", k), []), loop_vars[k]),
-                                  spec.with_vars, curried=h.curried))
+                h, synth_branched(entry, spec.with_vars, curried=h.curried))
         elif h.role == "fend":                       # loop k -> result
-            repl[h.name] = _definition(
-                h, synth_branched(arms(return_by.get(k, []), ensure_vars), loop_vars[k]))
+            al = arms(return_by.get(k, []), ensure_vars)
+            _collect(h, loop_vars[k], al)
+            repl[h.name] = _definition(h, synth_branched(al, loop_vars[k]))
         elif h.role == "to_inner":                   # loop k -> child loop c
             c = _child_index(h.name)
-            repl[h.name] = _definition(
-                h, synth_branched(arms(entail_by.get((k, c), []), loop_vars[c]), loop_vars[k]))
+            al = arms(entail_by.get((k, c), []), loop_vars[c], cont)
+            _collect(h, loop_vars[k], al)
+            repl[h.name] = _definition(h, synth_branched(al, loop_vars[k]))
         elif h.role == "after_inner":                # child loop c -> loop k
             c = _child_index(h.name)
             resume_vcs = entail_by.get((c, k), [])
@@ -313,11 +341,15 @@ def fill_forest(tmpl: Template, blocks: List[VCBlock], spec: Spec,
                 # entailment trivially and emitted no proof block.  The resume is
                 # then the identity — pass the inner loop's result through as the
                 # new outer carrier.
-                repl[h.name] = _definition(h, "fun a r => return r.")
+                repl[h.name] = _definition(h, "fun r => return r.")
             else:
-                body = synth_branched(arms(resume_vcs, loop_vars[k]), loop_vars[c])
-                body = body.replace("fun ", "fun a ", 1)  # prepend the unused outer-carrier arg
-                repl[h.name] = _definition(h, body)
+                # `after_inner` consumes ONLY the child's MretTy (a single
+                # argument — see gen_rel_lib's Parameter and both call sites);
+                # synthesize it straight from the resume entailment's inner-carrier
+                # roots, no extra outer-carrier binder.
+                al = arms(resume_vcs, loop_vars[k], cont)
+                _collect(h, loop_vars[c], al)
+                repl[h.name] = _definition(h, synth_branched(al, loop_vars[c]))
     return repl
 
 
@@ -348,6 +380,29 @@ def _strip_ezval(v: str) -> str:
     return m.group(1) if m else v
 
 
+def _strip_ezval_deep(s: str) -> str:
+    """Remove every (flat) `(Ez_val e)` coercion in a term, leaving `e`.  The
+    abstract program is over `Z`, so the memory-value wrapper never belongs in a
+    synthesized output: `(Ez_val 0)` -> `0`, `cons(Z, (Ez_val 0), l)` ->
+    `cons(Z, 0, l)`.  Pointer `(Ez_val 0)` markers live in `leftover_props`/SEP,
+    which this does not touch — `facts.augment` still sees them there."""
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r"\(\s*Ez_val\s+([^()]+?)\s*\)", r"\1", s)
+    return s
+
+
+def _normalize_mappings(blocks: List[VCBlock]) -> None:
+    """Strip val-coercions from every `exist_mapping` RHS (the synthesized output
+    terms).  EliminateLocal-lifted witnesses are stripped on insertion
+    (`_merge_witness_substitutions`); this also covers values arriving *directly*
+    in `exist_mapping`, e.g. an early-return VC's `v_386 -> (Ez_val 0)`."""
+    for b in blocks:
+        for m in b.exist_mapping:
+            m.rhs = _strip_ezval_deep(m.rhs)
+
+
 def _merge_witness_substitutions(blocks: List[VCBlock], logical_bases: set) -> None:
     """A scalar data witness's value lives in a VC's `EliminateLocal` section
     (`s_406 -> (s_410 + x_413_free)`), not its `exist_mapping`.  Lift each such
@@ -363,13 +418,21 @@ def _merge_witness_substitutions(blocks: List[VCBlock], logical_bases: set) -> N
                 present.add(base)
 
 
-def fill_template(template_text: str, autovc_text: str) -> str:
+def fill_template(template_text: str, autovc_text: str,
+                  collect: Optional[list] = None) -> str:
+    """Fill the template's holes.  When *collect* is a list, every VC-driven hole
+    additionally appends ``(hole, input_group, arms)`` to it — the exact inputs
+    and arms used to build that hole's Definition — so the segment-lemma emitter
+    can state one refinement lemma per arm from the same data (see
+    :mod:`.seg_lemmas`).  Purely additive: with ``collect=None`` the output is
+    byte-for-byte unchanged."""
     tmpl = parse_template(template_text)
     spec = parse_spec(autovc_text)
     blocks = parse_blocks(autovc_text)
     # surface scalar data-witness substitutions (EliminateLocal) as mappings
     _merge_witness_substitutions(blocks, set(spec.carrier_vars + spec.ensure_vars))
-    facts.augment(blocks)   # derive list facts from SEP + pointer props (e.g. l != nil)
+    _normalize_mappings(blocks)   # (Ez_val e) -> e in every exist_mapping RHS
+    # facts.augment(blocks)   # derive list facts from SEP + pointer props (e.g. l != nil)
 
     # Resolve the abstract carrier / result to their *logical* components: drop
     # pointer existentials, keep lists + data witnesses, ordered to the template
@@ -382,7 +445,8 @@ def fill_template(template_text: str, autovc_text: str) -> str:
                             "after_inner", "loop_mretty") for h in tmpl.holes)
     forest_repl: Dict[str, str] = {}
     if forest:
-        forest_repl = fill_forest(tmpl, blocks, spec, parse_all_invs(autovc_text), scalar_bases)
+        forest_repl = fill_forest(tmpl, blocks, spec, parse_all_invs(autovc_text),
+                                  scalar_bases, collect=collect)
     # No-loop early-return shape (`M_before`/`M_normal`): there is no `Inv`, so the
     # abstract carrier is the threaded inputs — the `With` vars — and `MretTy` is
     # their tuple type (the template declares it abstract: `Parameter MretTy`).
@@ -414,16 +478,29 @@ def fill_template(template_text: str, autovc_text: str) -> str:
             # self-recursive function: a `Fixpoint` over a `match` on the
             # recursion argument (the arms' destructuring becomes the patterns).
             input_group, arms = _segment_arms(hole, blocks, spec, guard)
+            if collect is not None:               # its self-call makes every arm
+                collect.append((hole, input_group, arms))   # call-bearing -> deferred
             body = synth_recursive(arms, input_group[0])
             replacement = _recursive_definition(hole, input_group[0], body)
         elif hole.role in ("before", "M2", "end", "M",
                            "before_noloop", "normal", "fbefore"):
             input_group, arms = _segment_arms(hole, blocks, spec, guard)  # VC-driven: one uniform path
+            if collect is not None:
+                collect.append((hole, input_group, arms))
             body = synth_branched(arms, input_group, curried=hole.curried)
             replacement = _definition(hole, body)
         else:
             continue
         out = out.replace(hole.raw, replacement, 1)
+
+    # Append frame-based function-call residuals (the continuation after each
+    # call).  Only funccall blocks the autovc enriched with a `Frame:` emit one;
+    # self-recursive calls are handled by the `Fixpoint` path above, not here.
+    from .residual import build_all_residuals
+    residuals = build_all_residuals(autovc_text)
+    if residuals:
+        out = (out.rstrip() + "\n\n"
+               + "\n\n".join(rd.definition for rd in residuals) + "\n")
     return out
 
 

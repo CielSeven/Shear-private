@@ -280,10 +280,6 @@ for f in "${FILES[@]}"; do
     # --user-info=2
   )
 
-  # --basic-assertion is incompatible with --Auto-VC-Checking; omit it then.
-  # if [ "$AUTO_VC" != "1" ]; then
-  #   symexec_cmd+=(--basic-assertion)
-  # fi
 
   [ -z "$FILE_ARG" ] && echo ">>> Processing $f"
   {
