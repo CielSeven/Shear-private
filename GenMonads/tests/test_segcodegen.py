@@ -1314,6 +1314,88 @@ def test_residual_list_tail_threads_frame_list():
     assert "return (r0 ++ (v :: l2))" in body
 
 
+# A CHAINED list_tail residual where the scalar `v` (the popped element) is used
+# only inside a DOWNSTREAM call's argument (`list_append_raw(prefix ++ (v::y), z)`),
+# never in the owner's own output.  So `_type_map` (owner output only) can't type
+# `v`, and `scalar_witness_bases` (simple `&name` stores only) misses the field
+# store `store(&(_->data), v, int)`.  Without pulling the scalar from the call's
+# post_sep the residual mistypes `v` as `list Z` and `v :: l2` is ill-typed.
+TAIL_CHAIN_AVC = '''#include "glibc_slist_clean_data.h"
+
+struct list *tail_chain(struct list *x, struct list *y, struct list *z)
+/*@ With l1 l2 l3
+    Require x != 0 && sll(x, l1) * sll(y, l2) * sll(z, l3)
+    Ensure exists l4, sll(__return, l4)
+ */
+{
+    tail = list_tail(x);
+/* !!!
+VC: tail_chain_funccall_wit_1   (call to list_tail)
+Callee With-variable instantiation:
+  l1_417_free -> l1_403_free
+Frame:
+SEP[
+ sll(y_396_pre, l2_402_free);
+ sll(z_393_pre, l3_401_free) ]
+Postcondition existentials introduced:
+  l2_422
+  v_423
+  retval_next_424
+  retval_425
+Postcondition contributed by call (SEP, new existentials in place):
+SEP[
+ store(&(retval_425->next) , retval_next_424 , struct list*);
+ store(&(retval_425->data) , v_423 , signed int);
+ sllseg(x_399_pre, retval_425, l2_422) ]
+Residual side-condition (partial solve) exist_mapping:
+(empty)
+!!! */
+    r = list_append_raw(x, z);
+/* !!!
+VC: tail_chain_funccall_wit_2   (call to list_append_raw)
+Callee With-variable instantiation:
+  l1_428_free -> app(Z, l2_422, cons(Z, v_423, l2_402_free))
+  l2_429_free -> l3_401_free
+Frame:
+SEP[
+ store(x_400_addr , x_399_pre , struct list*) ]
+Postcondition existentials introduced:
+  l3_436
+  retval_437
+Postcondition contributed by call (SEP, new existentials in place):
+SEP[
+ sll(retval_437, l3_436) ]
+Residual side-condition (partial solve) exist_mapping:
+(empty)
+!!! */
+    return r;
+/* !!!
+VC: tail_chain_return_wit_1
+Precondition existentials (in context for this VC):
+  l3_436
+NestedSolver first solve exist_mapping:
+l4_404 -> l3_436
+    [l3_436: from call to list_append_raw]
+Leftover left Props after solve:
+(empty)
+!!! */
+}
+'''
+
+
+def test_residual_chained_list_tail_scalar_typed_Z():
+    from GenMonads.absprog.segcodegen.residual import build_all_residuals
+    rds = build_all_residuals(TAIL_CHAIN_AVC)
+    rd = next(r for r in rds if r.callee == "list_tail")
+    # the popped element `v` is a scalar (field store, int) -> the callee-result
+    # tuple must be (list Z * Z), NOT (list Z * list Z); and the downstream append
+    # is re-emitted with `v :: l2` (needs `v : Z`).
+    assert ": (list Z * Z) -> MONAD (list Z) :=" in rd.definition
+    body = _norm(rd.definition)
+    assert "fun '(r0, v) =>" in body
+    assert "(r0 ++ (v :: l2))" in body
+
+
 @pytest.mark.skipif(not _os.path.exists(_COPY_AVC),
                     reason="glibc_slist_copy autovc not present")
 def test_residual_copy_loop_body_call():

@@ -31,7 +31,7 @@ from typing import Dict, List, Optional, Tuple
 from . import terms
 from .frame_sep import translate_frame_sep
 from .synth import (base_name, referenced_funccalls, synth_parts,
-                    _post_sep_order)
+                    _post_sep_order, _scalar_result_vars)
 from .vcparse import (Mapping, Spec, VCBlock, parse_blocks, parse_spec,
                       scalar_witness_bases)
 
@@ -265,6 +265,17 @@ def build_residual(
     results = _used_results(fc, owner, downstream)
     if not results:
         return None
+
+    # A call may return a *scalar* (Z) component — a field-store data value like
+    # `store(&(node->data), v, int)` in its postcondition SEP (e.g. `list_tail`'s
+    # popped element).  `scalar_witness_bases` only sees simple `&name` stores, so
+    # augment the scalar set from the call's (and any re-emitted downstream call's)
+    # post_sep; otherwise the callee-result tuple mistypes the scalar as `list Z`
+    # and the residual is ill-typed (`v :: l` needs `v : Z`).
+    call_scalars = set(_scalar_result_vars(fc.post_sep))
+    for c in downstream:
+        call_scalars |= set(_scalar_result_vars(c.post_sep))
+    scalar_bases = set(scalar_bases) | {base_name(v) for v in call_scalars}
 
     out_group = carrier_vars if owner.kind == "entail" else ensure_vars
 
