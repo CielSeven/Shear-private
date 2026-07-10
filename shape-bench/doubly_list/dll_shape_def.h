@@ -27,3 +27,10 @@ void free_dlist(struct list *x)
     Ensure emp
 */
     ;
+
+struct list *merge(struct list *x, struct list *y)
+    /*@ With x_prev
+    Require dlistrep_shape(x, x_prev) * dlistrep_shape(y, 0)
+    Ensure  dlistrep_shape(__return, x_prev)
+ */
+    ;
