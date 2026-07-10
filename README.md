@@ -1,43 +1,93 @@
 # LLM4PV
 
-Translating C programs with shape assertions to data predicates and abstract programs for formal verification in Rocq (Coq).
+Translating C programs with shape assertions to data predicates, replaying their
+verification proofs, and generating relational C programs plus Rocq (Coq)
+refinement lemmas.
 
 ## Quick Start
 
-Requires [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/) and a working QCP `symexec`
+configuration in [`CONFIGURE`](CONFIGURE). Run all commands from the repository
+root.
+
+The current workflow uses the verified shape program as the proof source. It
+first translates that program to a data-predicate version, asks `symexec` to
+record the successful data proof, and then deterministically replays that proof
+to generate the relational program, abstract code, and refinement lemmas.
+
+### 0. Check the shape-program baseline
+
+Run `symexec` on a shape-annotated C file or directory:
 
 ```bash
-# End-to-end pipeline (default): translate -> rel_lib template -> synthesis.
-# Stage 3 uses backend=command with `codex exec - --output-last-message {response_file}`
-# by default; --max-retries defaults to 2; --patch-rel-c is on by default.
-uv run llm4pv \
-  shape_invdataset/sll/sll_copy.c \
-  output/shape/rel/sll/sll_copy_rel.c \
-  --synth-output-dir output/gen/synth/sll_copy
+scripts/symexec.sh --C_DIR=shape-bench/glibc_slist/
+```
 
-# Translate-only (skip rel_lib + synth)
-uv run llm4pv shape_invdataset/sll/sll_copy.c output/shape/rel/sll/sll_copy_rel.c \
-  --no-rel-lib --no-synth
+Before continuing, inspect the generated `*_proof_manual.v` files under the
+configured `OUTPUT_PATH`. They must be empty or contain **only**
+`*_safety_wit_*` goals. Any remaining `*_entail_wit_*` or `*_return_wit_*`
+means the shape proof is not fully automatic and is not yet a suitable replay
+source.
 
-# Translate + rel_lib template, skip synthesis
-uv run llm4pv shape_invdataset/sll/sll_copy.c output/shape/rel/sll/sll_copy_rel.c --no-synth
+For the default `OUTPUT_PATH=./output/shape/vcs`, this check should print no
+matches:
 
-# Directory mode (same flags apply per file).
-# Files are topologically ordered so callees are translated, scaffolded, and
-# synthesized before their callers — required because each caller's rel_lib
-# does `Require Import <callee>_rel_lib.` on sibling .c files.
-uv run llm4pv shape_invdataset/sll output/shape/rel/sll \
-  --synth-output-dir output/gen/synth/sll
+```bash
+rg -n '_(entail|return)_wit_' output/shape/vcs/*_proof_manual.v
+```
 
-# Stage-isolated entry points (still available)
-uv run llm4pv-rellib shape_invdataset/sll                  # rel_lib templates only
-uv run llm4pv-context shape_invdataset/sll/sll_copy.c \
-  ./output/gen/context/sll_copy.auto.json                  # synthesis contexts
-uv run llm4pv-synth shape_invdataset/sll/sll_copy.c \
-  ./output/gen/synth/sll_copy                              # synthesis only
-uv run llm4pv-guard "sll(p, l1) * sll(y, l2)" "p != null"  # one-off Rocq guard
+### 1. Generate the data version and record its proof
 
-# Run tests
+Translate all shape predicates and sibling headers to their data forms:
+
+```bash
+uv run llm4pv shape-bench/glibc_slist \
+  bench-gen/glibc_slist/datac \
+  --data-only --translate-header
+```
+
+This emits `*_data.c` files. Run `symexec` with automatic VC recording enabled:
+
+```bash
+scripts/symexec.sh \
+  --C_DIR=bench-gen/glibc_slist/datac \
+  --AUTO_VC \
+  --AUTOVC_DIR=bench-gen/glibc_slist/datac/autovc \
+  --OUTPUT_PATH=bench-gen/glibc_slist/datac/vcs/ \
+  --LOGDIR=bench-gen/glibc_slist/logs/datac/
+```
+
+The important replay artifacts are
+`bench-gen/glibc_slist/datac/autovc/*_data_autovc.c`.
+
+### 2. Replay the proof to generate code and lemmas
+
+```bash
+uv run llm4pv shape-bench/glibc_slist \
+  bench-gen/glibc_slist/relc \
+  --autovc-dir=bench-gen/glibc_slist/datac/autovc \
+  --coq-lib-dir=bench-gen/glibc_slist/libs \
+  --translate-header --monad=staterr --seg-lemmas
+```
+
+`segcodegen` is the default backend. It consumes the recorded data VCs without
+an LLM synthesis call and produces:
+
+- `bench-gen/glibc_slist/relc/*_rel.c` — relational C programs;
+- `bench-gen/glibc_slist/libs/*_rel_lib.v` — filled abstract programs; and
+- `bench-gen/glibc_slist/libs/*_seg_lemmas.v` — per-arm, branch-selection, and
+  fused refinement lemmas, all closed with `Qed`.
+
+Use `--seg-lemmas-check` instead of `--seg-lemmas` to additionally compile each
+generated lemma file with `coqc`.
+
+The same workflow accepts a single C file: use `--FILE=<path>` with
+`scripts/symexec.sh`, and pass explicit `*_data.c` / `*_rel.c` output paths to
+`llm4pv`. Sibling-header translation is a directory-mode feature.
+
+Run the Python test suite with:
+
+```bash
 uv run --with pytest pytest
 ```
 
@@ -48,11 +98,17 @@ The end-to-end command exposes per-stage opt-outs and synthesis passthrough flag
 | Flag | Default | Notes |
 |---|---|---|
 | `--no-rel-lib` | off | Skip stage 2. Incompatible with default synth — pair with `--no-synth`. |
-| `--coq-lib-dir DIR` | `COQ_LIB_DIR` from env/CONFIGURE | Where `_rel_lib.v` templates land. |
+| `--coq-lib-dir DIR` | `COQ_LIB_DIR` from env/CONFIGURE | Where filled `_rel_lib.v` files and segment lemmas land. |
 | `--no-synth` | off | Skip stage 3. |
-| `--synth-output-dir DIR` | — | Required unless `--no-synth`. |
-| `--backend` | `command` | `gold-example`, `response-file`, or `command`. |
-| `--command` | `codex exec - --output-last-message {response_file}` | Shell command for the `command` backend. |
+| `--synth-output-dir DIR` | — | Required by `command`/`response-file`; unused by `segcodegen`. |
+| `--backend` | `segcodegen` | `segcodegen`, `response-file`, or `command`. |
+| `--autovc-dir DIR` | — | Directory containing the recorded `*_data_autovc.c` proofs required by `segcodegen`. |
+| `--data-only` | off | Emit only raw `*_data.c`; implies `--no-rel-lib --no-synth`. |
+| `--translate-header` | off | In directory mode, translate sibling headers as well as C files. |
+| `--monad` | `staterel` | Generate `staterel` or error-aware `staterr` abstract programs. |
+| `--seg-lemmas` | off | Generate proved segment refinement lemmas after replay. |
+| `--seg-lemmas-check` | off | Generate segment lemmas and compile them with `coqc`. |
+| `--command` | empty | Deprecated compatibility flag; workdir-mode owns the Codex invocation. |
 | `--few-shot` | — | Repeatable few-shot JSON. |
 | `--max-retries` | `2` | Repair attempts after the first try. |
 | `--no-patch-rel-c` | off | Skip post-synth patching of the generated `_rel.c`. |
@@ -111,10 +167,16 @@ Note: the data witness `v` (bound by `t -> data == v` in the original invariant)
 ### CLI
 
 ```bash
-uv run --from /path/to/LLM4PV llm4pv input.c output_rel.c
+# Shape -> data only (the first Python step in the replay workflow)
+uv run --from /path/to/LLM4PV llm4pv input_dir data_dir \
+  --data-only --translate-header
+
+# Plain shape -> relational translation without lib generation or replay
+uv run --from /path/to/LLM4PV llm4pv input.c output_rel.c \
+  --no-rel-lib --no-synth
+
 uv run --from /path/to/LLM4PV llm4pv-guard "sll(p, l1)" "p"
 uv run --from /path/to/LLM4PV llm4pv-context input.c output.auto.json
-uv run --from /path/to/LLM4PV llm4pv-synth input.c output_dir
 uv run --from /path/to/LLM4PV llm4pv-rellib input.c output_lib_dir
 ```
 
@@ -134,18 +196,33 @@ guard = gen_coq_guard("sll(p, l1) * sll(y, l2)", "p != null")
 
 ## Pipeline Stages
 
-1. **TransShape** (`GenMonads/transshape/`) — Extract `/*@ ... */` annotations and translate shape predicates to data predicates (`listrep` -> `sll`, `lseg` -> `sllseg`), adding list variables (`?l1`, `?l2`, ...). Supports multiple functions per file and variable prefixing for multi-loop disambiguation. Field-equality clauses like `t -> data == w` are desugared into typed `store(&(t->data), int, w)` predicates (field types resolved from `struct` declarations in the source / locally-includable headers); scalar-typed `store` witnesses are promoted into the abstract loop state, pointer-typed ones are spliced verbatim but not carried.
-2. **GuardGen** (`GenMonads/guardgen/`) — Generate Rocq guard functions from loop conditions: null checks, pointer equality, bare `p`/`!p` sugar, and field dereferences. `<root>-><field>` comparisons resolve through a per-predicate field-deref handler (e.g. `x->next != 0` with `sll(x, l)` ⇒ `tl l <> []`). Also resolves pointer aliases from pure equalities in invariants (e.g., `u->next == w`).
-3. **AddAbstract** (`GenMonads/addabstract/`) — Wrap loop invariants with `safeExec(ATrue, bind(...), X)` and `exists`. Require existentials are lifted into the `With` clause; Ensure keeps the `exists` quantifier. When the function has a non-void return type and the Ensure has no `__return` predicate, a witness `r` is synthesized and the abstract program's return type widens accordingly. Functions whose abstract return type is `unit` emit `return(tt)` rather than a bare `return`.
-4. **C File Translation** (`GenMonads/translate_c_file.py`) — Orchestrate stages 1-3, replace annotations in the original C file, translate header includes. Handles multi-function files and annotations placed before or after function headers. Auto-inserts `#include "safeexec_def.h"` and generates `Import Coq` / `Extern Coq` declaration blocks.
-5. **Abstract Program Skeleton** (`GenMonads/absprog/`) — Generate `{basename}_rel_lib.v` with concrete monadic scaffolding (`M_loop_body`, `M_loop_aux`, `M_loop`, `M`) plus the LLM-provided `Parameter`s (`MretTy`, `M_loop_before`, `M_loop_M1`, `M_loop_M2`, `M_loop_end`).
-6. **Synthesis** (`GenMonads/absprog/synthesize.py`) — Run the LLM synthesis loop to replace the template `Parameter`s with `Definition`s, optionally patch the `_rel.c` to drop opaque `MretTy` and append residual program signatures.
+1. **Shape baseline** (`scripts/symexec.sh`) — Verify that the source shape
+   proof leaves no manual entailment or return witnesses.
+2. **Data translation** (`--data-only`) — Extract `/*@ ... */` annotations and
+   translate shape predicates to data predicates (`listrep` -> `sll`, `lseg`
+   -> `sllseg`) without adding `safeExec`. With `--translate-header`, sibling
+   headers and their specifications are translated too.
+3. **Proof recording** (`scripts/symexec.sh --AUTO_VC`) — Verify each
+   `*_data.c` and record the successful `WitnessTrySolve` trace in
+   `*_data_autovc.c`.
+4. **Relational translation** (`GenMonads/transshape/`, `guardgen/`, and
+   `addabstract/`) — Generate guards, lift data witnesses into monadic state,
+   wrap specifications in `safeExec`, and emit `*_rel.c`.
+5. **Abstract code generation** (`GenMonads/absprog/segcodegen/`) — Build the
+   `{basename}_rel_lib.v` skeleton and deterministically fill its abstract
+   program definitions from the recorded data proof. The generated `_rel.c` is
+   patched to use the concrete return type and any required residual programs.
+6. **Refinement lemma generation** (`--seg-lemmas`) — Emit proved per-arm,
+   loop branch-selection, and fused segment lemmas in
+   `{basename}_seg_lemmas.v`.
 
-`uv run llm4pv` runs stages 1–4 (translate to `_rel.c`), then 5 (rel_lib template), then 6 (synthesis) in one pass. Pass `--no-rel-lib`/`--no-synth` to stop earlier; use `llm4pv-rellib`/`llm4pv-synth` for stage-isolated runs.
+Because `symexec` is external to the Python process, the replay workflow uses
+the three commands in Quick Start rather than one monolithic command. For an
+already-recorded proof, `uv run llm4pv` performs stages 4–6 in one pass.
 
 ### Cross-file callees and directory ordering
 
-When a function in `a.c` calls a function defined in sibling `b.c`, the caller's `a_rel_lib.v` emits `Require Import b_rel_lib.` instead of an opaque `Parameter b_M`. For Rocq to compile the merged libs, `b_rel_lib.v` must be filled in (stage 6) before `a` is synthesized.
+When a function in `a.c` calls a function defined in sibling `b.c`, the caller's `a_rel_lib.v` emits `Require Import b_rel_lib.` instead of an opaque `Parameter b_M`. For Rocq to compile the merged libs, `b_rel_lib.v` must be filled before `a` is generated.
 
 In directory mode, `llm4pv` builds a dependency graph from sibling `.c` calls and processes files in topological order — callees first. The chosen order is printed as `Processing order (callees first): ...`. A cyclic dependency triggers a warning and falls back to alphabetical order; you'll need to break the cycle manually (e.g., synthesize one side once with `--no-synth`, then come back).
 
@@ -198,24 +275,34 @@ uv run llm4pv-context --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=./out
 
 If the output path ends with `.json`, a single context file is written. Otherwise, the command writes one `*.auto.json` file per discovered synthesis context.
 
-## Abstract Program Synthesis
+## Abstract Program Generation Backends
 
-Run the abstract-program synthesis pipeline on a C file, a context JSON file, or a whole directory:
+The default `segcodegen` backend fills abstract programs deterministically from
+the proof recorded by `symexec --AUTO_VC`. It can also be run through the
+stage-isolated CLI:
 
 ```bash
-uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy
-uv run llm4pv-synth few-shot-examples/absprog/sll_reverse.auto.json ./output/gen/synth/sll_reverse
-uv run llm4pv-synth shape_invdataset/sll ./output/gen/synth/sll --jobs=2
-uv run llm4pv-synth --FILE=shape_invdataset/sll/sll_copy.c --OUTPUT_PATH=./output/gen/synth/sll_copy
+uv run llm4pv-synth shape-bench/glibc_slist \
+  --backend=segcodegen \
+  --autovc-dir=bench-gen/glibc_slist/datac/autovc \
+  --coq-lib-dir=bench-gen/glibc_slist/libs \
+  --monad=staterr
+```
+
+The `command` and `response-file` backends remain available for experimental
+LLM-driven generation and require an artifact output directory:
+
+```bash
 uv run llm4pv-synth shape_invdataset/sll/sll_copy.c ./output/gen/synth/sll_copy \
-  --backend=command \
-  --command 'codex exec - --output-last-message {response_file}'
+  --backend=command
 ```
 
 Useful options:
 
 - `--func-name` selects a target function in multi-function C files. If omitted on a multi-function file, every target function is synthesized into its own subdirectory under the output directory, and the accepted per-function libs are merged into a single `{basename}_rel_lib.v` in `COQ_LIB_DIR`.
-- `--backend` chooses the generation backend: `gold-example`, `response-file`, or `command`.
+- `--backend` chooses `segcodegen`, `response-file`, or `command`.
+- `--autovc-dir` points `segcodegen` to the recorded data-proof directory.
+- `--coq-lib-dir` is the output directory for filled libraries.
 - `--few-shot` adds repeatable few-shot example JSON files to the prompt.
 - `--no-check` skips the Rocq syntax check step.
 - `--max-retries` retries repair after the initial generation attempt.
@@ -239,9 +326,12 @@ For generating Rocq verification conditions with the external `symexec` tool:
 ```bash
 scripts/symexec.sh                              # use defaults from CONFIGURE
 scripts/symexec.sh --FULL_AUTO=true             # add --full-auto when invoking symexec
+scripts/symexec.sh --C_DIR=./data --AUTO_VC     # record replayable proofs in ./data/autovc
 scripts/symexec.sh --C_DIR=./output/gen/rel/sll --OUTPUT_PATH=./output/gen/vcs/ --LOGDIR=./output/gen/logs/
 scripts/symexec.sh --clean --C_DIR=./shape_invdataset/sll --OUTPUT_PATH=./output/shape/vcs/ --LOGDIR=./output/shape/logs/
 ```
+
+Pass `--AUTOVC_DIR=<dir>` to choose the proof-recording directory explicitly.
 
 For cleaning generated `_rel.c` translation output files:
 
