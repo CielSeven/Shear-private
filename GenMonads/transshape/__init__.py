@@ -12,9 +12,13 @@ from .parser import (
     BinOp,
     FieldAccess,
     Deref,
+    CallExpr,
+    SpatialPred,
     Predicate,
     SepConj,
     AndConj,
+    Implies,
+    RawFormula,
     Exists,
 )
 
@@ -44,9 +48,13 @@ __all__ = [
     'BinOp',
     'FieldAccess',
     'Deref',
+    'CallExpr',
+    'SpatialPred',
     'Predicate',
     'SepConj',
     'AndConj',
+    'Implies',
+    'RawFormula',
     'Exists',
     # Translator
     'ShapeTranslator',

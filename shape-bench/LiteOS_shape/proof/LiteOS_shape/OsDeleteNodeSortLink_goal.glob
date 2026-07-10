@@ -1,0 +1,936 @@
+DIGEST 612efb37a9d281b70d0017fcf079912a
+FSimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal
+R15:31 Coq.ZArith.ZArith <> <> lib
+R49:61 Coq.Bool.Bool <> <> lib
+R79:96 Coq.Strings.String <> <> lib
+R114:130 Coq.Strings.Ascii <> <> lib
+R148:161 Coq.Lists.List <> <> lib
+R179:205 Coq.Classes.RelationClasses <> <> lib
+R223:243 Coq.Classes.Morphisms <> <> lib
+R261:279 Coq.micromega.Psatz <> <> lib
+R297:319 Coq.Sorting.Permutation <> <> lib
+R349:356 AUXLib.int_auto <> <> lib
+R358:363 AUXLib.Axioms <> <> lib
+R365:367 AUXLib.Feq <> <> lib
+R369:374 AUXLib.Idents <> <> lib
+R376:382 AUXLib.ListLib <> <> lib
+R384:387 AUXLib.VMap <> <> lib
+R405:423 SetsClass.SetsClass <> <> lib
+R433:444 SetsClass.SetsClass_AxiomFree SetsNotation <> mod
+R478:480 SimpleC.SL.Mem <> <> lib
+R482:496 SimpleC.SL.SeparationLogic <> <> lib
+R514:551 Logic.LogicGenerator.demo932.Interface <> <> lib
+R664:676 SimpleC.SL.SeparationLogic naive_C_Rules <> mod
+R694:758 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> <> lib
+R776:842 SimpleC.EE.Applications_human.LiteOS_shape.lib.Los_Verify_State_def <> <> lib
+R860:914 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> <> lib
+R932:981 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> <> lib
+R999:1056 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> <> lib
+R1131:1162 SimpleC.EE.Applications_human.los_sortlink_shape_strategy_goal <> <> lib
+R1215:1247 SimpleC.EE.Applications_human.los_sortlink_shape_strategy_proof <> <> lib
+def 1309:1341 <> OsDeleteNodeSortLink_safety_wit_1
+binder 1355:1355 <> A:1
+R1379:1379 Coq.Numbers.BinNums <> Z ind
+binder 1365:1376 <> sortList_pre:2
+R1389:1392 Coq.Init.Datatypes <> list ind
+R1396:1402 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R1406:1419 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R1421:1421 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:1 var
+binder 1383:1384 <> l2:3
+R1434:1437 Coq.Init.Datatypes <> list ind
+R1441:1447 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R1451:1464 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R1466:1466 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:1 var
+binder 1428:1429 <> l1:4
+R1476:1476 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:1 var
+binder 1473:1473 <> a:5
+R1490:1494 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1509:1509 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1489:1489 Coq.Numbers.BinNums <> Z ind
+R1496:1499 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R1495:1495 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:1 var
+R1500:1508 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 1480:1485 <> storeA:6
+R1517:1517 Coq.Numbers.BinNums <> Z ind
+binder 1514:1514 <> t:7
+R1524:1524 Coq.Numbers.BinNums <> Z ind
+binder 1521:1521 <> x:8
+R1549:1549 Coq.Numbers.BinNums <> Z ind
+binder 1528:1546 <> node_callee_pstNext:9
+R1574:1574 Coq.Numbers.BinNums <> Z ind
+binder 1553:1571 <> node_callee_pstPrev:10
+R1606:1608 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R1587:1605 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:10 var
+binder 1578:1582 <> PreH1:11
+R1642:1644 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R1623:1641 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:9 var
+binder 1614:1618 <> PreH2:12
+R2178:2184 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R2124:2131 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2177:2177 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R1992:1999 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2122:2123 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R1872:1879 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R1990:1991 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R1653:1653 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R1758:1766 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R1871:1871 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R1654:1654 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R1726:1738 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R1655:1656 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R1725:1725 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R1710:1715 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R1689:1695 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R1671:1674 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R1657:1657 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R1670:1670 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R1658:1669 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:2 var
+R1739:1757 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:10 var
+R1767:1767 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R1839:1851 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R1768:1769 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R1838:1838 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R1823:1828 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R1802:1808 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R1784:1787 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R1770:1770 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R1783:1783 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R1771:1782 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:2 var
+R1852:1870 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:9 var
+R1880:1898 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R1965:1980 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R1987:1987 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:7 var
+R1983:1983 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:5 var
+R1907:1908 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R1962:1962 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R1941:1947 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R1923:1926 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R1909:1909 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R1922:1922 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R1910:1921 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:2 var
+R1900:1905 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:6 var
+R2000:2008 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R2044:2046 Coq.Init.Datatypes <> app def
+R2087:2089 Coq.Lists.List <> map def
+R2116:2117 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:3 var
+R2092:2112 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R2050:2052 Coq.Lists.List <> map def
+R2079:2080 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:4 var
+R2055:2075 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R2041:2041 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:8 var
+R2011:2029 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R2032:2037 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:6 var
+R2132:2134 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R2150:2164 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R2135:2137 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2148:2149 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2165:2176 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:2 var
+R2185:2189 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R2204:2208 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R2191:2195 Coq.Init.Logic <> ::type_scope:x_'<>'_x not
+R2203:2203 Coq.Init.Logic <> ::type_scope:x_'<>'_x not
+R2196:2202 SimpleC.SL.IntLib <> :::'INT_MIN' not
+def 2224:2256 <> OsDeleteNodeSortLink_safety_wit_2
+binder 2270:2270 <> A:13
+R2294:2294 Coq.Numbers.BinNums <> Z ind
+binder 2280:2291 <> sortList_pre:14
+R2304:2307 Coq.Init.Datatypes <> list ind
+R2311:2317 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R2321:2334 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R2336:2336 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:13 var
+binder 2298:2299 <> l2:15
+R2349:2352 Coq.Init.Datatypes <> list ind
+R2356:2362 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R2366:2379 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R2381:2381 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:13 var
+binder 2343:2344 <> l1:16
+R2391:2391 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:13 var
+binder 2388:2388 <> a:17
+R2405:2409 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2424:2424 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2404:2404 Coq.Numbers.BinNums <> Z ind
+R2411:2414 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R2410:2410 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:13 var
+R2415:2423 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 2395:2400 <> storeA:18
+R2432:2432 Coq.Numbers.BinNums <> Z ind
+binder 2429:2429 <> t:19
+R2439:2439 Coq.Numbers.BinNums <> Z ind
+binder 2436:2436 <> x:20
+R2464:2464 Coq.Numbers.BinNums <> Z ind
+binder 2443:2461 <> node_callee_pstNext:21
+R2489:2489 Coq.Numbers.BinNums <> Z ind
+binder 2468:2486 <> node_callee_pstPrev:22
+R2521:2523 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R2502:2520 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:22 var
+binder 2493:2497 <> PreH1:23
+R2557:2559 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R2538:2556 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:21 var
+binder 2529:2533 <> PreH2:24
+R3093:3099 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R3039:3046 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3092:3092 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2907:2914 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3037:3038 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2787:2794 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2905:2906 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2568:2568 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2673:2681 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2786:2786 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R2569:2569 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R2641:2653 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R2570:2571 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2640:2640 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2625:2630 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R2604:2610 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R2586:2589 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R2572:2572 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R2585:2585 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R2573:2584 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:14 var
+R2654:2672 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:22 var
+R2682:2682 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R2754:2766 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R2683:2684 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2753:2753 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2738:2743 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R2717:2723 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R2699:2702 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R2685:2685 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R2698:2698 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R2686:2697 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:14 var
+R2767:2785 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:21 var
+R2795:2813 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R2880:2895 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R2902:2902 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:19 var
+R2898:2898 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:17 var
+R2822:2823 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2877:2877 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R2856:2862 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R2838:2841 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R2824:2824 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R2837:2837 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R2825:2836 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:14 var
+R2815:2820 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:18 var
+R2915:2923 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R2959:2961 Coq.Init.Datatypes <> app def
+R3002:3004 Coq.Lists.List <> map def
+R3031:3032 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:15 var
+R3007:3027 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R2965:2967 Coq.Lists.List <> map def
+R2994:2995 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:16 var
+R2970:2990 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R2956:2956 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:20 var
+R2926:2944 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R2947:2952 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:18 var
+R3047:3049 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R3065:3079 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R3050:3052 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3063:3064 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3080:3091 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:14 var
+R3122:3129 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'&&'_x not
+R3100:3104 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R3117:3121 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R3106:3109 Coq.ZArith.BinInt <> ::Z_scope:x_'<='_x not
+R3110:3116 SimpleC.SL.IntLib <> :::'INT_MAX' not
+R3130:3134 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R3149:3153 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R3135:3135 Coq.ZArith.BinInt <> ::Z_scope:x_'<='_x not
+R3143:3147 Coq.ZArith.BinInt <> ::Z_scope:x_'<='_x not
+R3136:3142 SimpleC.SL.IntLib <> :::'INT_MIN' not
+def 3169:3201 <> OsDeleteNodeSortLink_return_wit_1
+binder 3215:3215 <> A:25
+R3239:3239 Coq.Numbers.BinNums <> Z ind
+binder 3225:3236 <> sortList_pre:26
+R3249:3252 Coq.Init.Datatypes <> list ind
+R3256:3262 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R3266:3279 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R3281:3281 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:25 var
+binder 3243:3244 <> l2:27
+R3294:3297 Coq.Init.Datatypes <> list ind
+R3301:3307 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R3311:3324 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R3326:3326 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:25 var
+binder 3288:3289 <> l1:28
+R3336:3336 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:25 var
+binder 3333:3333 <> a:29
+R3350:3354 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3369:3369 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3349:3349 Coq.Numbers.BinNums <> Z ind
+R3356:3359 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R3355:3355 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:25 var
+R3360:3368 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 3340:3345 <> storeA:30
+R3377:3377 Coq.Numbers.BinNums <> Z ind
+binder 3374:3374 <> x:31
+R3402:3402 Coq.Numbers.BinNums <> Z ind
+binder 3381:3399 <> node_callee_pstNext:32
+R3427:3427 Coq.Numbers.BinNums <> Z ind
+binder 3406:3424 <> node_callee_pstPrev:33
+R3459:3461 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R3440:3458 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:33 var
+binder 3431:3435 <> PreH1:34
+R3495:3497 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R3476:3494 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:32 var
+binder 3467:3471 <> PreH2:35
+R4047:4053 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R3915:3922 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4045:4046 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3802:3809 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3914:3914 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3689:3696 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3801:3801 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3506:3506 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3613:3621 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3687:3688 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3507:3507 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->'_x not
+R3564:3580 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->'_x not
+R3612:3612 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->'_x not
+R3508:3509 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3563:3563 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3542:3548 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3524:3527 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3510:3510 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3523:3523 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3511:3522 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:26 var
+R3581:3599 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R3622:3627 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:30 var
+R3686:3686 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:29 var
+R3629:3630 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3684:3684 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3663:3669 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3645:3648 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3631:3631 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3644:3644 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3632:3643 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:26 var
+R3697:3697 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R3769:3781 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R3698:3699 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3768:3768 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3753:3758 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R3732:3738 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3714:3717 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3700:3700 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3713:3713 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3701:3712 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:26 var
+R3782:3800 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:33 var
+R3810:3810 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R3882:3894 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R3811:3812 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3881:3881 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3866:3871 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R3845:3851 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3827:3830 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3813:3813 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3826:3826 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R3814:3825 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:26 var
+R3895:3913 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:32 var
+R3923:3931 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R3967:3969 Coq.Init.Datatypes <> app def
+R4010:4012 Coq.Lists.List <> map def
+R4039:4040 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:27 var
+R4015:4035 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R3973:3975 Coq.Lists.List <> map def
+R4002:4003 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:28 var
+R3978:3998 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R3964:3964 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:31 var
+R3934:3952 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R3955:3960 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:30 var
+R4054:4057 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'EX'_x_'..'_x_','_x not
+R4072:4077 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'EX'_x_'..'_x_','_x not
+R4063:4063 Coq.Numbers.BinNums <> Z ind
+binder 4058:4060 <> v_2:36
+R4071:4071 Coq.Numbers.BinNums <> Z ind
+binder 4068:4068 <> v:37
+R4118:4124 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'&&'_x not
+R4093:4100 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'&&'_x not
+R4078:4082 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R4088:4092 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R4084:4086 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R4083:4083 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> v:37 var
+R4101:4105 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R4113:4117 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R4109:4111 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R4106:4108 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> v_2:36 var
+R4462:4469 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4592:4593 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4310:4317 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4460:4461 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4125:4125 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4212:4220 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4309:4309 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4126:4126 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R4198:4210 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R4127:4128 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4197:4197 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4182:4187 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R4161:4167 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4143:4146 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4129:4129 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R4142:4142 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R4130:4141 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:26 var
+R4211:4211 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> v:37 var
+R4221:4221 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R4293:4305 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R4222:4223 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4292:4292 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4277:4282 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R4256:4262 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4238:4241 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4224:4224 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R4237:4237 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R4225:4236 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:26 var
+R4306:4308 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> v_2:36 var
+R4318:4336 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R4403:4418 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R4426:4444 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R4421:4421 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:29 var
+R4345:4346 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4400:4400 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4379:4385 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4361:4364 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4347:4347 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R4360:4360 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R4348:4359 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:26 var
+R4338:4343 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:30 var
+R4470:4478 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R4514:4516 Coq.Init.Datatypes <> app def
+R4557:4559 Coq.Lists.List <> map def
+R4586:4587 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:27 var
+R4562:4582 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R4520:4522 Coq.Lists.List <> map def
+R4549:4550 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:28 var
+R4525:4545 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R4511:4511 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:31 var
+R4481:4499 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R4502:4507 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:30 var
+def 4609:4653 <> OsDeleteNodeSortLink_partial_solve_wit_1_pure
+R4659:4660 Coq.Init.Logic <> ::type_scope:x_'\/'_x not
+R5344:5351 Coq.Init.Logic <> ::type_scope:x_'\/'_x not
+R6082:6083 Coq.Init.Logic <> ::type_scope:x_'\/'_x not
+binder 4669:4669 <> A:38
+R4693:4693 Coq.Numbers.BinNums <> Z ind
+binder 4679:4690 <> sortList_pre:39
+R4703:4706 Coq.Init.Datatypes <> list ind
+R4710:4716 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R4720:4733 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R4735:4735 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:38 var
+binder 4697:4698 <> l2:40
+R4748:4751 Coq.Init.Datatypes <> list ind
+R4755:4761 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R4765:4778 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R4780:4780 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:38 var
+binder 4742:4743 <> l1:41
+R4790:4790 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:38 var
+binder 4787:4787 <> a:42
+R4804:4808 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4823:4823 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4803:4803 Coq.Numbers.BinNums <> Z ind
+R4810:4813 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R4809:4809 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:38 var
+R4814:4822 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 4794:4799 <> storeA:43
+R4831:4831 Coq.Numbers.BinNums <> Z ind
+binder 4828:4828 <> t:44
+R4838:4838 Coq.Numbers.BinNums <> Z ind
+binder 4835:4835 <> x:45
+R5014:5020 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R4845:4845 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4891:4899 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5012:5013 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4846:4848 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R4864:4878 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R4849:4851 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4862:4863 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4879:4890 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:39 var
+R4900:4915 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> store_sorted_dll def
+R4927:4929 Coq.Init.Datatypes <> app def
+R4938:4941 Coq.Init.Datatypes <> cons constr
+R5006:5007 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:40 var
+R4945:4957 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R4989:5000 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:39 var
+R4961:4976 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R4983:4983 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:44 var
+R4979:4979 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:42 var
+R4932:4933 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:41 var
+R4924:4924 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:45 var
+R4917:4922 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:43 var
+R5021:5025 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R5339:5343 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R5026:5026 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5141:5145 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5338:5338 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5027:5051 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMappingList def
+R5055:5057 Coq.Init.Datatypes <> app def
+R5066:5069 Coq.Init.Datatypes <> cons constr
+R5134:5135 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:40 var
+R5073:5085 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R5117:5128 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:39 var
+R5089:5104 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R5111:5111 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:44 var
+R5107:5107 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:42 var
+R5060:5061 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:41 var
+R5146:5148 Coq.Init.Datatypes <> app def
+R5189:5192 Coq.Init.Datatypes <> cons constr
+R5302:5304 Coq.Lists.List <> map def
+R5331:5332 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:40 var
+R5307:5327 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R5196:5208 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R5240:5241 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5295:5295 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5274:5280 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R5256:5259 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R5242:5242 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R5255:5255 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R5243:5254 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:39 var
+R5212:5227 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R5234:5234 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:44 var
+R5230:5230 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:42 var
+R5152:5154 Coq.Lists.List <> map def
+R5181:5182 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:41 var
+R5157:5177 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+binder 5360:5360 <> A:46
+R5384:5384 Coq.Numbers.BinNums <> Z ind
+binder 5370:5381 <> sortList_pre:47
+R5394:5397 Coq.Init.Datatypes <> list ind
+R5401:5407 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R5411:5424 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R5426:5426 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:46 var
+binder 5388:5389 <> l2:48
+R5439:5442 Coq.Init.Datatypes <> list ind
+R5446:5452 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R5456:5469 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R5471:5471 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:46 var
+binder 5433:5434 <> l1:49
+R5481:5481 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:46 var
+binder 5478:5478 <> a:50
+R5495:5499 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R5514:5514 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R5494:5494 Coq.Numbers.BinNums <> Z ind
+R5501:5504 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R5500:5500 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:46 var
+R5505:5513 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 5485:5490 <> storeA:51
+R5522:5522 Coq.Numbers.BinNums <> Z ind
+binder 5519:5519 <> t:52
+R5529:5529 Coq.Numbers.BinNums <> Z ind
+binder 5526:5526 <> x:53
+R5752:5758 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R5536:5536 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5696:5705 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5751:5751 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5537:5545 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R5581:5605 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMappingList def
+R5609:5611 Coq.Init.Datatypes <> app def
+R5620:5623 Coq.Init.Datatypes <> cons constr
+R5688:5689 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:48 var
+R5627:5639 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R5671:5682 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:47 var
+R5643:5658 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R5665:5665 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:52 var
+R5661:5661 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:50 var
+R5614:5615 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:49 var
+R5578:5578 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:53 var
+R5548:5566 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R5569:5574 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:51 var
+R5706:5708 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R5724:5738 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R5709:5711 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5722:5723 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5739:5750 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:47 var
+R5759:5763 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R6077:6081 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R5764:5764 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5879:5883 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R6076:6076 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R5765:5789 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMappingList def
+R5793:5795 Coq.Init.Datatypes <> app def
+R5804:5807 Coq.Init.Datatypes <> cons constr
+R5872:5873 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:48 var
+R5811:5823 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R5855:5866 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:47 var
+R5827:5842 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R5849:5849 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:52 var
+R5845:5845 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:50 var
+R5798:5799 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:49 var
+R5884:5886 Coq.Init.Datatypes <> app def
+R5927:5930 Coq.Init.Datatypes <> cons constr
+R6040:6042 Coq.Lists.List <> map def
+R6069:6070 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:48 var
+R6045:6065 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R5934:5946 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R5978:5979 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6033:6033 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6012:6018 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R5994:5997 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R5980:5980 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R5993:5993 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R5981:5992 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:47 var
+R5950:5965 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R5972:5972 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:52 var
+R5968:5968 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:50 var
+R5890:5892 Coq.Lists.List <> map def
+R5919:5920 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:49 var
+R5895:5915 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+def 6098:6155 <> OsDeleteNodeSortLink_partial_solve_wit_1_pure_split_goal_1
+binder 6169:6169 <> A:54
+R6193:6193 Coq.Numbers.BinNums <> Z ind
+binder 6179:6190 <> sortList_pre:55
+R6203:6206 Coq.Init.Datatypes <> list ind
+R6210:6216 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R6220:6233 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R6235:6235 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:54 var
+binder 6197:6198 <> l2:56
+R6248:6251 Coq.Init.Datatypes <> list ind
+R6255:6261 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R6265:6278 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R6280:6280 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:54 var
+binder 6242:6243 <> l1:57
+R6290:6290 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:54 var
+binder 6287:6287 <> a:58
+R6304:6308 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R6323:6323 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R6303:6303 Coq.Numbers.BinNums <> Z ind
+R6310:6313 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R6309:6309 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:54 var
+R6314:6322 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 6294:6299 <> storeA:59
+R6331:6331 Coq.Numbers.BinNums <> Z ind
+binder 6328:6328 <> t:60
+R6338:6338 Coq.Numbers.BinNums <> Z ind
+binder 6335:6335 <> x:61
+R6561:6567 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R6345:6345 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6505:6514 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6560:6560 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6346:6354 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R6390:6414 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMappingList def
+R6418:6420 Coq.Init.Datatypes <> app def
+R6429:6432 Coq.Init.Datatypes <> cons constr
+R6497:6498 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:56 var
+R6436:6448 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R6480:6491 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:55 var
+R6452:6467 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R6474:6474 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:60 var
+R6470:6470 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:58 var
+R6423:6424 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:57 var
+R6387:6387 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:61 var
+R6357:6375 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R6378:6383 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:59 var
+R6515:6517 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R6533:6547 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R6518:6520 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6531:6532 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6548:6559 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:55 var
+R6568:6572 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R6886:6890 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R6573:6573 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R6688:6692 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R6885:6885 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R6574:6598 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMappingList def
+R6602:6604 Coq.Init.Datatypes <> app def
+R6613:6616 Coq.Init.Datatypes <> cons constr
+R6681:6682 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:56 var
+R6620:6632 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R6664:6675 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:55 var
+R6636:6651 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R6658:6658 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:60 var
+R6654:6654 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:58 var
+R6607:6608 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:57 var
+R6693:6695 Coq.Init.Datatypes <> app def
+R6736:6739 Coq.Init.Datatypes <> cons constr
+R6849:6851 Coq.Lists.List <> map def
+R6878:6879 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:56 var
+R6854:6874 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R6743:6755 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R6787:6788 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6842:6842 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6821:6827 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R6803:6806 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R6789:6789 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R6802:6802 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R6790:6801 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:55 var
+R6759:6774 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R6781:6781 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:60 var
+R6777:6777 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:58 var
+R6699:6701 Coq.Lists.List <> map def
+R6728:6729 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:57 var
+R6704:6724 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+def 6906:6949 <> OsDeleteNodeSortLink_partial_solve_wit_1_aux
+binder 6963:6963 <> A:62
+R6987:6987 Coq.Numbers.BinNums <> Z ind
+binder 6973:6984 <> sortList_pre:63
+R6997:7000 Coq.Init.Datatypes <> list ind
+R7004:7010 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R7014:7027 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R7029:7029 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:62 var
+binder 6991:6992 <> l2:64
+R7042:7045 Coq.Init.Datatypes <> list ind
+R7049:7055 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R7059:7072 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R7074:7074 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:62 var
+binder 7036:7037 <> l1:65
+R7084:7084 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:62 var
+binder 7081:7081 <> a:66
+R7098:7102 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7117:7117 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7097:7097 Coq.Numbers.BinNums <> Z ind
+R7104:7107 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7103:7103 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:62 var
+R7108:7116 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 7088:7093 <> storeA:67
+R7125:7125 Coq.Numbers.BinNums <> Z ind
+binder 7122:7122 <> t:68
+R7132:7132 Coq.Numbers.BinNums <> Z ind
+binder 7129:7129 <> x:69
+R7139:7139 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R7252:7260 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R7140:7155 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> store_sorted_dll def
+R7167:7169 Coq.Init.Datatypes <> app def
+R7178:7181 Coq.Init.Datatypes <> cons constr
+R7246:7247 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:64 var
+R7185:7197 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R7229:7240 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:63 var
+R7201:7216 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R7223:7223 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:68 var
+R7219:7219 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:66 var
+R7172:7173 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:65 var
+R7164:7164 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:69 var
+R7157:7162 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:67 var
+R7584:7591 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'&&'_x not
+R7829:7830 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'&&'_x not
+R7261:7265 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R7579:7583 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R7266:7266 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R7381:7385 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R7578:7578 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R7267:7291 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMappingList def
+R7295:7297 Coq.Init.Datatypes <> app def
+R7306:7309 Coq.Init.Datatypes <> cons constr
+R7374:7375 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:64 var
+R7313:7325 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R7357:7368 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:63 var
+R7329:7344 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R7351:7351 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:68 var
+R7347:7347 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:66 var
+R7300:7301 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:65 var
+R7386:7388 Coq.Init.Datatypes <> app def
+R7429:7432 Coq.Init.Datatypes <> cons constr
+R7542:7544 Coq.Lists.List <> map def
+R7571:7572 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:64 var
+R7547:7567 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R7436:7448 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R7480:7481 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7535:7535 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7514:7520 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R7496:7499 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R7482:7482 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R7495:7495 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R7483:7494 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:63 var
+R7452:7467 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R7474:7474 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:68 var
+R7470:7470 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:66 var
+R7392:7394 Coq.Lists.List <> map def
+R7421:7422 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:65 var
+R7397:7417 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R7592:7600 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R7636:7638 Coq.Init.Datatypes <> app def
+R7679:7682 Coq.Init.Datatypes <> cons constr
+R7792:7794 Coq.Lists.List <> map def
+R7821:7822 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:64 var
+R7797:7817 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R7686:7698 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R7730:7731 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7785:7785 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7764:7770 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R7746:7749 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R7732:7732 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R7745:7745 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R7733:7744 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:63 var
+R7702:7717 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R7724:7724 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:68 var
+R7720:7720 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:66 var
+R7642:7644 Coq.Lists.List <> map def
+R7671:7672 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:65 var
+R7647:7667 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R7633:7633 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:69 var
+R7603:7621 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R7624:7629 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:67 var
+def 7846:7885 <> OsDeleteNodeSortLink_partial_solve_wit_1
+R7935:7938 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R7890:7934 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_partial_solve_wit_1_pure def
+R7939:7982 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_partial_solve_wit_1_aux def
+def 7997:8036 <> OsDeleteNodeSortLink_partial_solve_wit_2
+binder 8050:8050 <> A:70
+R8074:8074 Coq.Numbers.BinNums <> Z ind
+binder 8060:8071 <> sortList_pre:71
+R8084:8087 Coq.Init.Datatypes <> list ind
+R8091:8097 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R8101:8114 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R8116:8116 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:70 var
+binder 8078:8079 <> l2:72
+R8129:8132 Coq.Init.Datatypes <> list ind
+R8136:8142 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL DL_Node rec
+R8146:8159 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sortedLinkNode rec
+R8161:8161 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:70 var
+binder 8123:8124 <> l1:73
+R8171:8171 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:70 var
+binder 8168:8168 <> a:74
+R8185:8189 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R8204:8204 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R8184:8184 Coq.Numbers.BinNums <> Z ind
+R8191:8194 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R8190:8190 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> A:70 var
+R8195:8203 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+binder 8175:8180 <> storeA:75
+R8212:8212 Coq.Numbers.BinNums <> Z ind
+binder 8209:8209 <> t:76
+R8219:8219 Coq.Numbers.BinNums <> Z ind
+binder 8216:8216 <> x:77
+R8244:8244 Coq.Numbers.BinNums <> Z ind
+binder 8223:8241 <> node_callee_pstNext:78
+R8269:8269 Coq.Numbers.BinNums <> Z ind
+binder 8248:8266 <> node_callee_pstPrev:79
+R8301:8303 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R8282:8300 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:79 var
+binder 8273:8277 <> PreH1:80
+R8337:8339 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R8318:8336 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:78 var
+binder 8309:8313 <> PreH2:81
+R8819:8825 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'|--'_x not
+R8687:8694 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8817:8818 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8567:8574 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8685:8686 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8348:8348 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8453:8461 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8566:8566 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8349:8349 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R8421:8433 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R8350:8351 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8420:8420 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8405:8410 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R8384:8390 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R8366:8369 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R8352:8352 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8365:8365 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8353:8364 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:71 var
+R8434:8452 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:79 var
+R8462:8462 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R8534:8546 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R8463:8464 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8533:8533 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8518:8523 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R8497:8503 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R8479:8482 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R8465:8465 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8478:8478 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8466:8477 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:71 var
+R8547:8565 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:78 var
+R8575:8593 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R8660:8675 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R8682:8682 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> t:76 var
+R8678:8678 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:74 var
+R8602:8603 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8657:8657 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8636:8642 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R8618:8621 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R8604:8604 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8617:8617 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8605:8616 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:71 var
+R8595:8600 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:75 var
+R8695:8703 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R8739:8741 Coq.Init.Datatypes <> app def
+R8782:8784 Coq.Lists.List <> map def
+R8811:8812 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:72 var
+R8787:8807 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R8745:8747 Coq.Lists.List <> map def
+R8774:8775 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:73 var
+R8750:8770 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R8736:8736 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:77 var
+R8706:8724 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R8727:8732 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:75 var
+R8900:8906 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'&&'_x not
+R8859:8866 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'&&'_x not
+R8826:8830 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R8854:8858 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R8850:8852 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R8831:8849 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:79 var
+R8867:8871 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R8895:8899 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:'“'_x_'”' not
+R8891:8893 Coq.Init.Logic <> ::type_scope:x_'='_x not
+R8872:8890 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:78 var
+R9283:9290 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R9413:9414 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R9170:9177 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R9282:9282 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R9057:9064 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R9169:9169 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8907:8907 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8981:8989 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R9055:9056 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R8908:8908 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->_' not
+R8965:8980 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->_' not
+R8909:8910 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8964:8964 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R8943:8949 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R8925:8928 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R8911:8911 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8924:8924 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R8912:8923 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:71 var
+R8990:8995 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:75 var
+R9054:9054 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> a:74 var
+R8997:8998 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R9052:9052 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R9031:9037 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R9013:9016 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R8999:8999 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R9012:9012 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R9000:9011 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:71 var
+R9065:9065 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R9137:9149 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R9066:9067 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R9136:9136 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R9121:9126 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R9100:9106 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R9082:9085 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R9068:9068 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R9081:9081 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R9069:9080 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:71 var
+R9150:9168 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstPrev:79 var
+R9178:9178 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R9250:9262 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R9179:9180 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R9249:9249 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R9234:9239 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'.ₛ'_x not
+R9213:9219 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R9195:9198 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R9181:9181 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R9194:9194 SimpleC.SL.CNotation <> :lvalue_expr_entry::'('_x_')' not
+R9182:9193 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> sortList_pre:71 var
+R9263:9281 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> node_callee_pstNext:78 var
+R9291:9299 SimpleC.EE.Applications_human.LiteOS_shape.lib.dll <> store_dll def
+R9335:9337 Coq.Init.Datatypes <> app def
+R9378:9380 Coq.Lists.List <> map def
+R9407:9408 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l2:72 var
+R9383:9403 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R9341:9343 Coq.Lists.List <> map def
+R9370:9371 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> l1:73 var
+R9346:9366 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> sortedLinkNodeMapping def
+R9332:9332 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> x:77 var
+R9302:9320 SimpleC.EE.Applications_human.LiteOS_shape.lib.sortlink <> storesortedLinkNode def
+R9323:9328 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> storeA:75 var
+modtype 9431:9440 <> VC_Correct
+R9452:9486 SimpleC.EE.Applications_human.los_sortlink_shape_strategy_goal los_sortlink_shape_Strategy_Correct <> mod
+ax 9496:9537 VC_Correct proof_of_OsDeleteNodeSortLink_safety_wit_1
+R9541:9573 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_safety_wit_1 def
+ax 9582:9623 VC_Correct proof_of_OsDeleteNodeSortLink_safety_wit_2
+R9627:9659 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_safety_wit_2 def
+ax 9668:9709 VC_Correct proof_of_OsDeleteNodeSortLink_return_wit_1
+R9713:9745 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_return_wit_1 def
+ax 9754:9807 VC_Correct proof_of_OsDeleteNodeSortLink_partial_solve_wit_1_pure
+R9811:9855 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_partial_solve_wit_1_pure def
+ax 9864:9912 VC_Correct proof_of_OsDeleteNodeSortLink_partial_solve_wit_1
+R9916:9955 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_partial_solve_wit_1 def
+ax 9964:10012 VC_Correct proof_of_OsDeleteNodeSortLink_partial_solve_wit_2
+R10016:10055 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal <> OsDeleteNodeSortLink_partial_solve_wit_2 def
+R10063:10072 SimpleC.EE.Applications_human.LiteOS_shape.OsDeleteNodeSortLink_goal VC_Correct <> modtype

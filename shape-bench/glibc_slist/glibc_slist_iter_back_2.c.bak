@@ -1,0 +1,57 @@
+/* UNPROVABLE with these shape predicates: the loop guards (`x != stop`,
+ * `node->next != stop`) are pointer-relational against `stop`, a moving
+ * boundary the data carrier (lifted from listrep/lseg) cannot denote.  The
+ * shape proof closes (symexec passes, no non-safety goals), but the abstract
+ * `guardP` Parameters have no image on the carrier, so the refinement guard
+ * is unrecoverable from this annotation alone.  See backups (*.bak). */
+#include "glibc_slist_clean.h"
+
+long glibc_slist_clean_iter_back_2(struct list *x)
+/*@ Require listrep(x)
+    Ensure  exists v, __return == v && listrep(x@pre)
+ */
+{
+    struct list *stop;
+    struct list *prev;
+    struct list *node;
+    long sum;
+
+    stop = 0;
+    sum = 0;
+    if (x == 0) {
+        return sum;
+    }
+    /*@ Inv exists st s,
+            x == x@pre &&
+            x != 0 &&
+            store(&stop, struct list*, st) *
+            store(&sum, long, s) *
+            undef_data_at(&prev, struct list*) *
+            undef_data_at(&node, struct list*) *
+            listrep(x)
+     */
+    while (x != stop) {
+        prev = 0;
+        node = x;
+        /*@ Inv exists p st s,
+                x == x@pre &&
+                x != 0 &&
+                node != 0 &&
+                store(&prev, struct list*, p) *
+                store(&stop, struct list*, st) *
+                store(&sum, long, s) *
+                lseg(x, node) *
+                listrep(node)
+         */
+        while (node->next != stop && node->next != 0) {
+            prev = node;
+            node = node->next;
+        }
+        sum += node->data;
+        stop = node;
+        if (prev == 0) {
+            break;
+        }
+    }
+    return sum;
+}

@@ -187,16 +187,38 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
         return root_atom.spec.to_coq_root_null(root_atom.payload, is_eq=is_eq)
 
     def _render_seg_eq(x: str, y: str, is_eq: bool) -> str:
-        hit = None
-        reversed_match = False
         nx, ny = _resolve_ptr(x), _resolve_ptr(y)
+        atoms_by_kind = {"segment": segs, "root": list(roots_by_ptr.values())}
+
+        # Segment-emptiness guard.  ``start = end  <=>  l = []`` holds ONLY for a
+        # segment terminated by a root (``sllseg(s,e,l) * sll(e,_)``): the trailing
+        # root is the acyclicity witness that rules out a lasso (a cycle from
+        # ``start`` back to ``end`` with ``l <> []`` is otherwise satisfiable, so
+        # coinciding endpoints would NOT force emptiness).  Both that shape AND the
+        # soundness gate are DATA — the JSON ``_composition_rules.segment_eq`` rules
+        # (forward + reversed endpoint order), the mirror of ``seg_then_root_concat``
+        # on the null-check path.  Nothing is decided here beyond dispatch; no
+        # emptiness is emitted unless the engine matches a segment *and* its root.
+        for rule in COMPOSITION_RULES.get("segment_eq", []):
+            bindings = _match_rule(
+                rule, atoms_by_kind,
+                initial_bindings={"x": nx, "y": ny},
+                normalize_ptr=_normalize_ptr,
+            )
+            if bindings is not None:
+                return render_composition_emit(rule, bindings, is_eq=is_eq)
+
+        # No rooted segment matched.  Scalar equality ``i {==,!=} j`` between
+        # store-bound scalars / numeric literals is the other legitimate reading.
+        sx, sy = _resolve_scalar(x), _resolve_scalar(y)
+        if sx is not None and sy is not None:
+            return f"{sx} = {sy}" if is_eq else f"{sx} <> {sy}"
+
+        # Neither: distinguish a bare (unrooted) segment over these endpoints — a
+        # potential lasso, hence refused — from "no segment at all", for a useful
+        # diagnostic.  (Endpoint fields per kind come from the central
+        # ``_KIND_POINTER_FIELDS`` declaration, listed ``(start, end)``.)
         for seg in segs:
-            # Pull the two endpoint payload-fields for this segment's
-            # kind from the central declaration — ``("start", "end")``
-            # for the built-in segment kind, but a future segment-like
-            # kind can name its endpoints anything as long as the entry
-            # in ``_KIND_POINTER_FIELDS`` lists them in
-            # *(first, second)* order.
             fields = _pointer_payload_fields(seg.spec.kind)
             if len(fields) < 2:
                 continue
@@ -204,20 +226,15 @@ def gen_coq_from_bool(ast: BoolNode, atoms: list[ShAtom],
             ed = seg.payload.get(fields[1])
             nst = _normalize_ptr(st) if isinstance(st, str) else st
             ned = _normalize_ptr(ed) if isinstance(ed, str) else ed
-            if nst == nx and ned == ny:
-                hit = seg; reversed_match = False; break
-            if nst == ny and ned == nx:
-                hit = seg; reversed_match = True; break
-        if hit is None:
-            # Scalar fallback: ``i == j`` / ``i != j`` between store-bound
-            # scalars (or numeric literals), not a list segment.
-            sx, sy = _resolve_scalar(x), _resolve_scalar(y)
-            if sx is not None and sy is not None:
-                return f"{sx} = {sy}" if is_eq else f"{sx} <> {sy}"
-            raise ValueError(f"No segment predicate for ({x},{y}) found in invariant")
-        if hit.spec.to_coq_segment_eq is None:
-            raise ValueError(f"Predicate '{hit.spec.name}' lacks segment-eq handler")
-        return hit.spec.to_coq_segment_eq(hit.payload, is_eq=is_eq, reversed_match=reversed_match)
+            if {nst, ned} == {nx, ny}:
+                raise ValueError(
+                    f"Segment-emptiness guard for '{x}' vs '{y}' is unsound: the "
+                    f"segment '{seg.spec.name}' ends at '{ed}', but the invariant has "
+                    f"no trailing root 'sll({ed}, _)' to rule out a cycle (lasso). "
+                    f"Add a root predicate at the segment's end so the "
+                    f"'_composition_rules.segment_eq' rule can fire."
+                )
+        raise ValueError(f"No segment predicate for ({x},{y}) found in invariant")
 
     def go(node: BoolNode) -> str:
         if node.kind == "atom":

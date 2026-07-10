@@ -51,13 +51,28 @@ class Deref:
 
 
 @dataclass
-class Predicate:
-    """Shape predicate (e.g., listrep(x), lseg(x,y))."""
+class CallExpr:
+    """Pure function-call expression (e.g., ``Zlength(s)``, ``app(x, y)``)."""
     name: str
     args: List['Expr']
 
     def __repr__(self):
-        return f"Predicate({self.name}, {self.args})"
+        return f"CallExpr({self.name}, {self.args})"
+
+
+@dataclass
+class SpatialPred:
+    """Separation-logic predicate (e.g., ``listrep(x)``, ``lseg(x,y)``)."""
+    name: str
+    args: List['Expr']
+
+    def __repr__(self):
+        return f"SpatialPred({self.name}, {self.args})"
+
+
+# Backward-compatible import name for older callers. New code should use
+# SpatialPred for formulas and CallExpr for expression-position function calls.
+Predicate = SpatialPred
 
 
 @dataclass
@@ -79,6 +94,25 @@ class AndConj:
 
 
 @dataclass
+class Implies:
+    """Pure implication (e.g., ``x == 0 => y == 0``)."""
+    left: 'Formula'
+    right: 'Formula'
+
+    def __repr__(self):
+        return f"Implies({self.left}, {self.right})"
+
+
+@dataclass
+class RawFormula:
+    """Opaque pure formula preserved verbatim."""
+    text: str
+
+    def __repr__(self):
+        return f"RawFormula({self.text!r})"
+
+
+@dataclass
 class Exists:
     """Existential quantifier."""
     vars: List[str]
@@ -89,8 +123,8 @@ class Exists:
 
 
 # Type aliases for clarity
-Expr = Union[Var, BinOp, FieldAccess, Deref, int]
-Formula = Union[BinOp, Predicate, SepConj, AndConj, Exists]
+Expr = Union[Var, BinOp, FieldAccess, Deref, CallExpr, int]
+Formula = Union[BinOp, SpatialPred, SepConj, AndConj, Implies, RawFormula, Exists]
 
 
 class AssertionParser:
@@ -171,6 +205,50 @@ class AssertionParser:
             return num
         return None
 
+    def _is_known_spatial_predicate_name(self, name: str) -> bool:
+        """Return True for registered/mapped spatial predicate names."""
+        try:
+            from GenMonads.predicate_mapping import get_predicate_mappings
+            mappings = get_predicate_mappings()
+        except Exception:
+            mappings = {}
+        spatial_names = set(mappings.keys())
+        spatial_names.update(m.data_name for m in mappings.values())
+        try:
+            from GenMonads.parser_symbols import get_parser_symbols
+            spatial_names.update(get_parser_symbols().get('spatial_predicates', []))
+        except Exception:
+            spatial_names.add('emp')
+        return name in spatial_names
+
+    def _is_known_pure_call_name(self, name: str) -> bool:
+        """Return True for registered expression-position function calls."""
+        try:
+            from GenMonads.parser_symbols import get_parser_symbols
+            pure_call_names = set(get_parser_symbols().get('pure_call_exprs', []))
+        except Exception:
+            pure_call_names = {'Zlength', 'app', 'cons', 'string_length'}
+        return name in pure_call_names
+
+    def peek_call_name(self) -> Optional[str]:
+        """Return the qualified name ahead if it is followed by ``(``."""
+        temp_pos = self.pos
+        while temp_pos < len(self.text) and self.text[temp_pos].isspace():
+            temp_pos += 1
+        match = re.match(
+            r'[a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*',
+            self.text[temp_pos:],
+        )
+        if not match:
+            return None
+        name = match.group(0)
+        temp_pos += len(name)
+        while temp_pos < len(self.text) and self.text[temp_pos].isspace():
+            temp_pos += 1
+        if temp_pos < len(self.text) and self.text[temp_pos] == '(':
+            return name
+        return None
+
     def parse_expr(self) -> Expr:
         """Parse an expression (variable, number, or field access)."""
         self.skip_whitespace()
@@ -213,13 +291,14 @@ class AssertionParser:
         if self.consume('@pre'):
             ident = f"{ident}@pre"
 
-        # Function-call expression: ``app(out, cons(0, nil))``.  Used in
-        # the data arguments of qualified array predicates (e.g.
-        # ``CharArray::full(p, n, app(out, cons(0, nil)))``).  We reuse
-        # the ``Predicate`` AST node — the translator treats Predicates
-        # in expression position via ``translate_expr`` which already
-        # deep-copies them.
+        # Function-call expression: ``app(out, cons(0, nil))``.  Known
+        # spatial predicate names are not expressions; leave them to the
+        # formula parser so ``v * listrep(y)`` is separating conjunction.
         if self.consume('('):
+            if self._is_known_spatial_predicate_name(ident) or not self._is_known_pure_call_name(ident):
+                raise ValueError(
+                    f"{ident} is not registered as an expression-position pure call"
+                )
             args: List[Expr] = []
             while True:
                 self.skip_whitespace()
@@ -234,7 +313,7 @@ class AssertionParser:
                 raise ValueError(
                     f"Expected ',' or ')' in argument list at position {self.pos}"
                 )
-            return Predicate(ident, args)
+            return CallExpr(ident, args)
 
         expr = Var(ident)
 
@@ -265,35 +344,71 @@ class AssertionParser:
                 return BinOp(op, left, right)
         raise ValueError(f"Expected comparison operator at position {self.pos}")
 
-    def parse_arith_expr(self) -> 'Expr':
-        """Parse a left-associative arithmetic chain of ``+``/``-`` terms.
+    def parse_mul_expr(self) -> 'Expr':
+        """Parse a left-associative arithmetic chain of ``*``/``/`` terms.
 
-        Each term is an :meth:`parse_expr` result.  This is the layer
-        between :meth:`parse_comparison` (which wants whole arithmetic
-        operands) and :meth:`parse_expr` (which handles a single term).
-        Multiplication/division aren't supported because ``*`` is also
-        the separating-conjunction operator at the formula level — and
-        no shape predicate's argument list has needed it yet.
+        Formula-level ``*`` is separating conjunction.  When the token after
+        an arithmetic ``*`` parses as a bare predicate call, leave the star for
+        :meth:`parse_sep_formulas` instead of swallowing a spatial conjunct as
+        multiplication.
         """
         left = self.parse_expr()
         self.skip_whitespace()
         while True:
+            saved_pos = self.pos
+            if self.consume('*'):
+                call_name = self.peek_call_name()
+                if call_name is not None and not self._is_known_pure_call_name(call_name):
+                    self.pos = saved_pos
+                    break
+                try:
+                    right = self.parse_expr()
+                except ValueError:
+                    self.pos = saved_pos
+                    break
+                left = BinOp('*', left, right)
+            elif self.consume('/'):
+                call_name = self.peek_call_name()
+                if call_name is not None and not self._is_known_pure_call_name(call_name):
+                    self.pos = saved_pos
+                    break
+                try:
+                    right = self.parse_expr()
+                except ValueError:
+                    self.pos = saved_pos
+                    break
+                left = BinOp('/', left, right)
+            else:
+                break
+            self.skip_whitespace()
+        return left
+
+    def parse_arith_expr(self) -> 'Expr':
+        """Parse a left-associative arithmetic chain of ``+``/``-`` terms.
+
+        Each term is a :meth:`parse_mul_expr` result.  This is the layer
+        between :meth:`parse_comparison` (which wants whole arithmetic
+        operands) and :meth:`parse_expr` (which handles a single term).
+        """
+        left = self.parse_mul_expr()
+        self.skip_whitespace()
+        while True:
             if self.consume('+'):
-                right = self.parse_expr()
+                right = self.parse_mul_expr()
                 left = BinOp('+', left, right)
             elif self.consume('-'):
                 # ``-`` is also the leading char of ``->`` field access;
                 # field access is handled inside parse_expr, so by the
                 # time we reach here a bare ``-`` is arithmetic.
-                right = self.parse_expr()
+                right = self.parse_mul_expr()
                 left = BinOp('-', left, right)
             else:
                 break
             self.skip_whitespace()
         return left
 
-    def parse_predicate(self) -> Predicate:
-        """Parse a shape predicate (e.g., ``listrep(x)``, ``lseg(x,y)``,
+    def parse_spatial_predicate(self) -> SpatialPred:
+        """Parse a spatial predicate (e.g., ``listrep(x)``, ``lseg(x,y)``,
         or namespaced ``IntArray::full_shape(p, n)``)."""
         name = self.parse_qualified_identifier()
         if name is None:
@@ -321,54 +436,82 @@ class AssertionParser:
                     raise ValueError(f"Expected ',' or ')' at position {self.pos}")
                 break
 
-        return Predicate(name, args)
+        return SpatialPred(name, args)
+
+    def parse_balanced_parenthesized_text(self) -> str:
+        """Consume and return one balanced parenthesized text chunk."""
+        self.skip_whitespace()
+        if self.current_char() != '(':
+            raise ValueError(f"Expected '(' at position {self.pos}")
+        start = self.pos
+        depth = 0
+        while self.pos < len(self.text):
+            ch = self.text[self.pos]
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0:
+                    self.pos += 1
+                    return self.text[start:self.pos]
+            self.pos += 1
+        raise ValueError(f"Unterminated parenthesized formula at position {start}")
 
     def parse_atomic(self) -> Formula:
         """Parse an atomic formula (comparison or predicate)."""
         self.skip_whitespace()
 
+        if self.current_char() == '(':
+            saved_pos = self.pos
+            self.pos += 1
+            self.skip_whitespace()
+            is_forall = (
+                self.text[self.pos:].startswith('forall')
+                and (
+                    self.pos + len('forall') >= len(self.text)
+                    or not self.text[self.pos + len('forall')].isalnum()
+                )
+            )
+            self.pos = saved_pos
+            if is_forall:
+                return RawFormula(self.parse_balanced_parenthesized_text())
+
+        if self.consume('('):
+            formula = self.parse_implication()
+            if not self.consume(')'):
+                raise ValueError(f"Expected ')' at position {self.pos}")
+            return formula
+
         # Check for 'emp' (empty heap predicate)
         if self.text[self.pos:].startswith('emp') and \
            (self.pos + 3 >= len(self.text) or not self.text[self.pos + 3].isalnum()):
             self.pos += 3
-            return Predicate('emp', [])
+            return SpatialPred('emp', [])
 
-        # Save position for backtracking
+        # Try comparison first so function-call expressions such as
+        # ``Zlength(str) == n`` parse as comparisons, not as a predicate with
+        # ignored trailing text.  If there is no comparison operator, backtrack
+        # and parse the same syntax as a bare predicate.
         saved_pos = self.pos
-
-        # Look ahead to determine if this is a predicate or comparison
-        # A predicate has the form: identifier(...)
-        # A comparison has the form: expr op expr
-
-        # Peek ahead to find '(' without consuming
-        temp_pos = self.pos
         try:
-            # Skip whitespace and find identifier
+            return self.parse_comparison()
+        except ValueError:
+            self.pos = saved_pos
+
+        temp_pos = self.pos
+        while temp_pos < len(self.text) and self.text[temp_pos].isspace():
+            temp_pos += 1
+        match = re.match(
+            r'[a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*',
+            self.text[temp_pos:],
+        )
+        if match:
+            temp_pos += len(match.group(0))
             while temp_pos < len(self.text) and self.text[temp_pos].isspace():
                 temp_pos += 1
+            if temp_pos < len(self.text) and self.text[temp_pos] == '(':
+                return self.parse_spatial_predicate()
 
-            # Read identifier (possibly namespace-qualified for shape
-            # predicates like ``IntArray::full_shape``).  Must match
-            # :meth:`parse_qualified_identifier`'s regex so the peek and
-            # the actual parse agree on what's an identifier.
-            match = re.match(
-                r'[a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z_][a-zA-Z0-9_]*)*',
-                self.text[temp_pos:],
-            )
-            if match:
-                temp_pos += len(match.group(0))
-                # Skip whitespace after identifier
-                while temp_pos < len(self.text) and self.text[temp_pos].isspace():
-                    temp_pos += 1
-
-                # Check if next char is '('
-                if temp_pos < len(self.text) and self.text[temp_pos] == '(':
-                    # It's a predicate
-                    return self.parse_predicate()
-        except:
-            pass
-
-        # Otherwise parse as comparison
         return self.parse_comparison()
 
     def parse_and_formulas(self) -> Formula:
@@ -406,10 +549,24 @@ class AssertionParser:
             return formulas[0]
         return SepConj(formulas)
 
+    def parse_implication(self) -> Formula:
+        """Parse right-associative pure implications.
+
+        Implication has the lowest precedence among the formula operators we
+        support here, so ``a && b => c`` parses as ``(a && b) => c``.
+        Parentheses can be used to embed an implication as one conjunct.
+        """
+        left = self.parse_sep_formulas()
+        self.skip_whitespace()
+        if self.consume('=>'):
+            right = self.parse_implication()
+            return Implies(left, right)
+        return left
+
     def parse_exists(self) -> Formula:
         """Parse existential quantifier."""
         if not self.consume('exists'):
-            return self.parse_sep_formulas()
+            return self.parse_implication()
 
         # Parse variable list
         # Syntax: exists x, y, z, <body>
@@ -557,7 +714,7 @@ class AssertionParser:
                 break
 
         # Parse body
-        body = self.parse_sep_formulas()
+        body = self.parse_implication()
 
         return Exists(vars, body)
 
@@ -566,6 +723,8 @@ class AssertionParser:
         self.skip_whitespace()
         formula = self.parse_exists()
         self.skip_whitespace()
+        if self.pos != len(self.text):
+            raise ValueError(f"Unexpected trailing text at position {self.pos}: {self.text[self.pos:]!r}")
         return formula
 
 
@@ -609,10 +768,10 @@ def recover_expr(expr: Expr) -> str:
         left_str = recover_expr(expr.left)
         right_str = recover_expr(expr.right)
         return f"{left_str} {expr.op} {right_str}"
-    elif isinstance(expr, Predicate):
+    elif isinstance(expr, CallExpr):
         # Function-call expression used as a predicate argument, e.g.
         # ``CharArray::full(p, n, app(out, cons(0, nil)))`` — the parser
-        # stores nested calls as ``Predicate`` nodes.
+        # stores nested calls as ``CallExpr`` nodes.
         args_str = ", ".join(recover_expr(arg) for arg in expr.args)
         return f"{expr.name}({args_str})"
     else:
@@ -631,7 +790,7 @@ def recover_formula(formula: Formula, indent: int = 0) -> str:
     """
     if isinstance(formula, BinOp):
         return recover_expr(formula)
-    elif isinstance(formula, Predicate):
+    elif isinstance(formula, SpatialPred):
         if formula.name == 'emp' and len(formula.args) == 0:
             return 'emp'
         args_str = ", ".join(recover_expr(arg) for arg in formula.args)
@@ -642,6 +801,12 @@ def recover_formula(formula: Formula, indent: int = 0) -> str:
     elif isinstance(formula, SepConj):
         parts = [recover_formula(f, indent) for f in formula.formulas]
         return " * ".join(parts)
+    elif isinstance(formula, Implies):
+        left_str = recover_formula(formula.left, indent)
+        right_str = recover_formula(formula.right, indent)
+        return f"(({left_str}) => ({right_str}))"
+    elif isinstance(formula, RawFormula):
+        return formula.text
     elif isinstance(formula, Exists):
         vars_str = " ".join(formula.vars)  # Use space instead of comma
         body_str = recover_formula(formula.body, indent)

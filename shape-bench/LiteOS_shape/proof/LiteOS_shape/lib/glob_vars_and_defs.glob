@@ -1,0 +1,175 @@
+DIGEST fe29e1d1047a5587585084100f96b0b3
+FSimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs
+R15:31 Coq.ZArith.ZArith <> <> lib
+R49:61 Coq.Bool.Bool <> <> lib
+R79:96 Coq.Strings.String <> <> lib
+R114:127 Coq.Lists.List <> <> lib
+R145:171 Coq.Classes.RelationClasses <> <> lib
+R189:209 Coq.Classes.Morphisms <> <> lib
+R227:245 Coq.micromega.Psatz <> <> lib
+R263:285 Coq.Sorting.Permutation <> <> lib
+R315:322 AUXLib.int_auto <> <> lib
+R324:329 AUXLib.Axioms <> <> lib
+R331:333 AUXLib.Feq <> <> lib
+R335:340 AUXLib.Idents <> <> lib
+R342:348 AUXLib.ListLib <> <> lib
+R350:353 AUXLib.VMap <> <> lib
+R371:389 SetsClass.SetsClass <> <> lib
+R399:410 SetsClass.SetsClass_AxiomFree SetsNotation <> mod
+R444:446 SimpleC.SL.Mem <> <> lib
+R448:462 SimpleC.SL.SeparationLogic <> <> lib
+R480:517 Logic.LogicGenerator.demo932.Interface <> <> lib
+rec 625:638 <> StableGlobVars
+proj 653:665 <> g_taskCBArray
+proj 676:689 <> g_swtmrCBArray
+proj 700:714 <> g_swtmrFreeList
+proj 725:739 <> g_swtmrSortLink
+proj 750:763 <> g_taskSortLink
+proj 774:781 <> g_allSem
+proj 792:801 <> g_allQueue
+proj 812:819 <> g_allMux
+proj 830:843 <> g_priQueueList
+proj 855:868 <> g_sysTickTimer
+proj 879:885 <> SysTick
+proj 893:907 <> g_cyclesPerTick
+proj 915:924 <> g_sysClock
+proj 932:947 <> g_sysTimerIsInit
+proj 955:964 <> idleTaskID
+proj 973:983 <> swtmrTaskID
+R668:671 SimpleC.SL.CNotation <> addr def
+R692:695 SimpleC.SL.CNotation <> addr def
+R717:720 SimpleC.SL.CNotation <> addr def
+R742:745 SimpleC.SL.CNotation <> addr def
+R766:769 SimpleC.SL.CNotation <> addr def
+R784:787 SimpleC.SL.CNotation <> addr def
+R804:807 SimpleC.SL.CNotation <> addr def
+R822:825 SimpleC.SL.CNotation <> addr def
+R847:850 SimpleC.SL.CNotation <> addr def
+R871:874 SimpleC.SL.CNotation <> addr def
+R888:888 Coq.Numbers.BinNums <> Z ind
+R910:910 Coq.Numbers.BinNums <> Z ind
+R927:927 Coq.Numbers.BinNums <> Z ind
+R950:950 Coq.Numbers.BinNums <> Z ind
+R968:968 Coq.Numbers.BinNums <> Z ind
+R987:987 Coq.Numbers.BinNums <> Z ind
+R1238:1250 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_taskCBArray proj
+not 1211:1211 <> :::x_'.(g_taskCBArray)'
+R1306:1319 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_swtmrCBArray proj
+not 1278:1278 <> :::x_'.(g_swtmrCBArray)'
+R1369:1376 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_allSem proj
+not 1347:1347 <> :::x_'.(g_allSem)'
+R1428:1437 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_allQueue proj
+not 1404:1404 <> :::x_'.(g_allQueue)'
+R1493:1506 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_priQueueList proj
+not 1465:1465 <> :::x_'.(g_priQueueList)'
+R1562:1575 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysTickTimer proj
+not 1534:1534 <> :::x_'.(g_sysTickTimer)'
+R1632:1646 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_cyclesPerTick proj
+not 1603:1603 <> :::x_'.(g_cyclesPerTick)'
+R1698:1707 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysClock proj
+not 1674:1674 <> :::x_'.(g_sysClock)'
+R1765:1780 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysTimerIsInit proj
+not 1735:1735 <> :::x_'.(g_sysTimerIsInit)'
+R1829:1835 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> SysTick proj
+not 1808:1808 <> :::x_'.(SysTick)'
+R1887:1896 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> idleTaskID proj
+not 1863:1863 <> :::x_'.(idleTaskID)'
+R1949:1959 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> swtmrTaskID proj
+not 1924:1924 <> :::x_'.(swtmrTaskID)'
+R2015:2027 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_taskCBArray proj
+not 1988:1988 <> :lvalue_expr_entry::x_'.(g_taskCBArray)'
+R2113:2126 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_swtmrCBArray proj
+not 2085:2085 <> :lvalue_expr_entry::x_'.(g_swtmrCBArray)'
+R2206:2213 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_allSem proj
+not 2184:2184 <> :lvalue_expr_entry::x_'.(g_allSem)'
+R2295:2304 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_allQueue proj
+not 2271:2271 <> :lvalue_expr_entry::x_'.(g_allQueue)'
+R2390:2403 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_priQueueList proj
+not 2362:2362 <> :lvalue_expr_entry::x_'.(g_priQueueList)'
+R2489:2502 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysTickTimer proj
+not 2461:2461 <> :lvalue_expr_entry::x_'.(g_sysTickTimer)'
+R2589:2603 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_cyclesPerTick proj
+not 2560:2560 <> :lvalue_expr_entry::x_'.(g_cyclesPerTick)'
+R2685:2694 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysClock proj
+not 2661:2661 <> :lvalue_expr_entry::x_'.(g_sysClock)'
+R2782:2797 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysTimerIsInit proj
+not 2752:2752 <> :lvalue_expr_entry::x_'.(g_sysTimerIsInit)'
+R2876:2882 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> SysTick proj
+not 2855:2855 <> :lvalue_expr_entry::x_'.(SysTick)'
+R2964:2973 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> idleTaskID proj
+not 2940:2940 <> :lvalue_expr_entry::x_'.(idleTaskID)'
+R3056:3066 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> swtmrTaskID proj
+not 3031:3031 <> :lvalue_expr_entry::x_'.(swtmrTaskID)'
+R3152:3164 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_taskCBArray proj
+not 3125:3125 <> :rvalue_expr_entry::x_'.(g_taskCBArray)'
+R3250:3263 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_swtmrCBArray proj
+not 3222:3222 <> :rvalue_expr_entry::x_'.(g_swtmrCBArray)'
+R3343:3350 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_allSem proj
+not 3321:3321 <> :rvalue_expr_entry::x_'.(g_allSem)'
+R3432:3441 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_allQueue proj
+not 3408:3408 <> :rvalue_expr_entry::x_'.(g_allQueue)'
+R3527:3540 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_priQueueList proj
+not 3499:3499 <> :rvalue_expr_entry::x_'.(g_priQueueList)'
+R3626:3639 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysTickTimer proj
+not 3598:3598 <> :rvalue_expr_entry::x_'.(g_sysTickTimer)'
+R3726:3740 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_cyclesPerTick proj
+not 3697:3697 <> :rvalue_expr_entry::x_'.(g_cyclesPerTick)'
+R3822:3831 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysClock proj
+not 3798:3798 <> :rvalue_expr_entry::x_'.(g_sysClock)'
+R3919:3934 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> g_sysTimerIsInit proj
+not 3889:3889 <> :rvalue_expr_entry::x_'.(g_sysTimerIsInit)'
+R4013:4019 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> SysTick proj
+not 3992:3992 <> :rvalue_expr_entry::x_'.(SysTick)'
+R4101:4110 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> idleTaskID proj
+not 4077:4077 <> :rvalue_expr_entry::x_'.(idleTaskID)'
+R4193:4203 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> swtmrTaskID proj
+not 4168:4168 <> :rvalue_expr_entry::x_'.(swtmrTaskID)'
+def 4264:4269 <> TaskID
+R4274:4274 Coq.Numbers.BinNums <> Z ind
+def 4304:4310 <> SwtmrID
+R4321:4321 Coq.Numbers.BinNums <> Z ind
+mod 4427:4429 <> DLL
+rec 4440:4446 DLL DL_Node
+proj 4489:4492 DLL data
+proj 4502:4504 DLL ptr
+binder 4449:4449 <> A:18
+R4495:4495 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> A:18 var
+R4507:4510 SimpleC.SL.CNotation <> addr def
+R4529:4532 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL data proj
+R4529:4532 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL data proj
+R4551:4553 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL ptr proj
+R4551:4553 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL ptr proj
+R4572:4584 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R4572:4584 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL Build_DL_Node constr
+R4600:4602 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL <> mod
+R4613:4615 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs DLL <> mod
+R4649:4656 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> data proj
+not 4627:4627 <> :::x_'.(dll_data)'
+R4701:4707 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> ptr proj
+not 4684:4684 <> :::x_'.(ptr)'
+def 4738:4749 <> ResponseTime
+R4754:4754 Coq.Numbers.BinNums <> Z ind
+mod 4765:4768 <> SDLL
+rec 4779:4792 SDLL sortedLinkNode
+proj 4837:4843 SDLL sl_data
+proj 4854:4865 SDLL responseTime
+binder 4795:4795 <> A:22
+R4847:4847 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> A:22 var
+R4869:4880 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> ResponseTime def
+R4897:4908 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL responseTime proj
+R4897:4908 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL responseTime proj
+R4927:4933 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sl_data proj
+R4927:4933 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL sl_data proj
+R4952:4967 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R4952:4967 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL mksortedLinkNode constr
+R4983:4986 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL <> mod
+R4996:4999 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs SDLL <> mod
+R5039:5046 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> data proj
+R5049:5065 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> responseTime proj
+not 5012:5012 <> :::x_'.(response_time)'
+R5117:5124 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> data proj
+R5127:5138 SimpleC.EE.Applications_human.LiteOS_shape.lib.glob_vars_and_defs <> sl_data proj
+not 5094:5094 <> :::x_'.(sdll_data)'
+R5190:5192 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R5187:5187 Coq.ZArith.BinInt <> ::Z_scope:x_'^'_x not
+not 5167:5167 <> :::'ULLONG_MAX'

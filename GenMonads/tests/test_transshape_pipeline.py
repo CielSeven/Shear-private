@@ -9,6 +9,7 @@ Tests:
 """
 
 import json
+import re
 import pytest
 
 import GenMonads.predicate_mapping as predicate_mapping
@@ -174,6 +175,27 @@ class TestPreprocessor:
         )
         assert "store(&copy, struct list*, p)" in translated
         assert "sll(x" in translated
+
+    def test_pure_implication_does_not_block_shape_translation(self):
+        """The glibc_slist_iter_back_2 inner Inv has a pure implication
+        between field facts and spatial predicates.  The implication should
+        survive as a pure fact while lseg/listrep still become sllseg/sll."""
+        translator = ShapeTranslator()
+        translated, vars = translator.translate_assertion_with_exists(
+            "exists p s nxt v, "
+            "x == x@pre && x != 0 && node != 0 && "
+            "((nxt == 0) => (stop == 0)) && "
+            "node -> next == nxt && node -> data == v && "
+            "store(&prev, struct list*, p) * store(&sum, long, s) * "
+            "lseg(x, node) * lseg(nxt, stop) * listrep(stop)"
+        )
+        assert "=> (stop == 0)" in translated
+        assert "sllseg(x, node" in translated
+        assert "sllseg(nxt, stop" in translated
+        assert "sll(stop" in translated
+        assert re.search(r"\blseg\s*\(", translated) is None
+        assert re.search(r"\blistrep\s*\(", translated) is None
+        assert vars == ["l1", "l2", "l3"]
 
     def test_exists_accepts_space_separated_variables(self):
         """Coq-style `exists x y z, body` must parse the same as comma form."""

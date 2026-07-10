@@ -24,9 +24,11 @@ class PredicateSpec:
 PREDICATES: dict[str, PredicateSpec] = {}
 
 # Trigger names used by ``translate.py`` to look up composition rules.
-# Currently only ``root_null`` is consumed; adding more (``segment_eq``,
-# ``field_deref_null``, ...) is a translator-side wiring change.
-CompositionTrigger = Literal["root_null"]
+# ``root_null`` gates ``ptr {==,!=} null`` on a segment+root concat; ``segment_eq``
+# gates ``ptr {==,!=} ptr`` (segment emptiness) on the trailing-root acyclicity
+# witness.  Adding another (``field_deref_null``, ...) is a translator-side
+# wiring change plus a ``_composition_rules`` entry in ``guard_predicates.json``.
+CompositionTrigger = Literal["root_null", "segment_eq"]
 
 
 @dataclass
@@ -56,6 +58,7 @@ class CompositionRule:
 
 COMPOSITION_RULES: Dict[CompositionTrigger, List[CompositionRule]] = {
     "root_null": [],
+    "segment_eq": [],
 }
 
 

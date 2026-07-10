@@ -457,6 +457,31 @@ def _process_funcspec_data_only(funcspec: Dict, return_type: str = "") -> Dict:
     return result
 
 
+def _translation_errors(result: Dict) -> List[str]:
+    """Collect per-clause translation errors from a processed file result."""
+    errors: List[str] = []
+
+    def _check_func(func_data: Dict) -> None:
+        func_name = func_data.get('function') or result.get('function') or '<unknown>'
+        funcspec = func_data.get('funcspec') or {}
+        for clause_name in ('require', 'ensure'):
+            clause = funcspec.get(clause_name) or {}
+            if clause.get('error'):
+                errors.append(f"{func_name} {clause_name}: {clause['error']}")
+        for i, assertion in enumerate(func_data.get('inner_assertions') or [], start=1):
+            if assertion.get('error'):
+                kind = assertion.get('type', 'assertion')
+                errors.append(f"{func_name} {kind} #{i}: {assertion['error']}")
+
+    funcs = result.get('functions') or []
+    if funcs:
+        for func_data in funcs:
+            _check_func(func_data)
+    else:
+        _check_func(result)
+    return errors
+
+
 def _build_data_only_funcspec_parts(processed: Dict) -> List[str]:
     parts: List[str] = []
     if processed.get('with'):
@@ -1081,6 +1106,12 @@ def translate_c_file(
     if 'error' in result:
         print(f"Error in result: {result['error']}")
         return False
+    errors = _translation_errors(result)
+    if errors:
+        print("Translation errors:")
+        for error in errors:
+            print(f"  - {error}")
+        return False
 
     # Collect extern info for Coq blocks
     func_infos = []
@@ -1576,6 +1607,12 @@ def translate_c_file_data_only(input_path: str, output_path: str) -> bool:
     if 'error' in result:
         print(f"Error in result: {result['error']}")
         return False
+    errors = _translation_errors(result)
+    if errors:
+        print("Translation errors:")
+        for error in errors:
+            print(f"  - {error}")
+        return False
 
     if 'functions' in result and result['functions']:
         for func_data in result['functions']:
@@ -1754,6 +1791,25 @@ def _build_main_parser():
         ),
     )
     parser.add_argument(
+        '--seg-lemmas', action='store_true', default=False,
+        help=(
+            "Stage 4: after synthesis, emit ``{base}_seg_lemmas.v`` into "
+            "--coq-lib-dir — the per-arm safeExec refinement lemmas plus the "
+            "loop-body branch-selection (layer 1) and fused (layer 2) lemmas, "
+            "each proved to Qed.  Requires --autovc-dir and the filled "
+            "``{base}_rel_lib.v`` (so run with synthesis, not --no-synth)."
+        ),
+    )
+    parser.add_argument(
+        '--seg-lemmas-check', action='store_true', default=False,
+        help=(
+            "Compile each generated ``{base}_seg_lemmas.v`` with ``coqc`` "
+            "(using the nearest ``_CoqProject`` flags) and report PASS/COQ_FAIL "
+            "per file; a compile failure makes the run exit non-zero.  Implies "
+            "--seg-lemmas."
+        ),
+    )
+    parser.add_argument(
         '--use-block-renderer', action='store_true', default=False,
         help=(
             "Phase 2 feature flag.  When set, callee-only straight-line "
@@ -1765,6 +1821,115 @@ def _build_main_parser():
         ),
     )
     return parser
+
+
+def _find_coqproject(lib_dir):
+    """Return ``(cp_path, cp_dir)`` for the nearest ``_CoqProject`` at or above
+    *lib_dir*, or ``(None, None)``."""
+    d = os.path.abspath(lib_dir)
+    for _ in range(8):
+        cp = os.path.join(d, "_CoqProject")
+        if os.path.isfile(cp):
+            return cp, d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None, None
+
+
+def _coq_module_prefix(lib_dir):
+    """The dotted logical prefix bound to *lib_dir* by a ``_CoqProject`` ``-R``/
+    ``-Q`` line, e.g. ``LLM4PV.benchgen.glibc_slist.libs``.  ``None`` if not found
+    — the seg-lemma import then falls back to the bare ``{base}_rel_lib`` name."""
+    absdir = os.path.abspath(lib_dir)
+    cp, cp_dir = _find_coqproject(lib_dir)
+    if not cp:
+        return None
+    try:
+        for ln in open(cp, encoding="utf-8"):
+            parts = ln.split()
+            if len(parts) >= 3 and parts[0] in ("-R", "-Q"):
+                cand = parts[1] if os.path.isabs(parts[1]) else os.path.join(cp_dir, parts[1])
+                if os.path.abspath(cand) == absdir:
+                    return parts[2]
+    except OSError:
+        pass
+    return None
+
+
+def _coqproject_flags(lib_dir):
+    """All ``-Q``/``-R <path> <logical>`` flags from the nearest ``_CoqProject``,
+    ready to splat into a ``coqc`` invocation.  Empty if none found."""
+    cp, _ = _find_coqproject(lib_dir)
+    if not cp:
+        return []
+    flags = []
+    try:
+        for ln in open(cp, encoding="utf-8"):
+            ln = ln.strip()
+            if ln.startswith(("-Q", "-R")):
+                flags += ln.split()
+    except OSError:
+        pass
+    return flags
+
+
+def _run_stage4_seg_lemmas(files, args, lib_dir):
+    """Generate ``{base}_seg_lemmas.v`` per file into *lib_dir* (Stage 4).  With
+    ``--seg-lemmas-check`` each file is also compiled with ``coqc`` (using the
+    nearest ``_CoqProject`` flags) and its Qed/fail reported."""
+    import subprocess
+    from GenMonads.absprog.assemble import generate_rel_lib_skeleton_for_file
+    from GenMonads.absprog.segcodegen.seg_lemmas import build_seg_lemmas
+    from GenMonads.absprog.synthesize import _basename_from_c_file, _resolve_autovc_path
+
+    if not getattr(args, "autovc_dir", None):
+        print("--seg-lemmas requires --autovc-dir", file=sys.stderr)
+        sys.exit(2)
+    check = getattr(args, "seg_lemmas_check", False)
+    prefix = _coq_module_prefix(lib_dir)
+    flags = _coqproject_flags(lib_dir) if check else []
+    failures, check_failures = [], []
+    for src, _ in files:
+        base = _basename_from_c_file(src)
+        avc = _resolve_autovc_path(src, base, args.autovc_dir)
+        if not avc or not os.path.isfile(avc):
+            print(f"seg-lemmas skipped (no autovc): {src}", file=sys.stderr)
+            continue
+        try:
+            skel = generate_rel_lib_skeleton_for_file(src, monad=args.monad, coq_lib_dir=lib_dir)
+            with open(avc, encoding="utf-8") as f:
+                avc_text = f.read()
+            lib_module = f"{prefix}.{base}_rel_lib" if prefix else f"{base}_rel_lib"
+            text, stats = build_seg_lemmas(skel, avc_text, lib_module,
+                                           monad=args.monad, libs_dir=lib_dir)
+        except Exception as exc:
+            print(f"seg-lemmas generation failed for {src}: {exc}", file=sys.stderr)
+            failures.append(src)
+            continue
+        out = os.path.join(lib_dir, base + "_seg_lemmas.v")
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(text)
+        summary = (f"arm={stats['emitted'] + stats['emitted_call']} "
+                   f"select={stats['select']} fused={stats['fused']}")
+        if not check:
+            print(f"seg_lemmas generated: {out} ({summary})")
+            continue
+        proc = subprocess.run(["coqc", *flags, os.path.abspath(out)],
+                              text=True, capture_output=True)
+        if proc.returncode == 0:
+            nq = text.count("Qed.")
+            print(f"seg_lemmas PASS: {out} ({summary}, Qed={nq})")
+        else:
+            check_failures.append(base)
+            err = (proc.stderr or proc.stdout or "").strip()
+            print(f"seg_lemmas COQ_FAIL: {out} ({summary})\n"
+                  f"{err[-1200:]}", file=sys.stderr)
+    if check_failures:
+        print(f"seg-lemmas coqc failed: {', '.join(check_failures)}", file=sys.stderr)
+    if failures or check_failures:
+        sys.exit(2)
 
 
 def _topo_sort_c_files(c_files):
@@ -1961,7 +2126,8 @@ def main():
     if run_synth and args.backend != "segcodegen" and not args.synth_output_dir:
         parser.error("--synth-output-dir is required when synthesis is enabled (default).")
 
-    lib_dir = _resolve_lib_dir(args, parser) if run_lib else None
+    lib_dir = (_resolve_lib_dir(args, parser)
+               if (run_lib or args.seg_lemmas or args.seg_lemmas_check) else None)
 
     # ---- Stage 1 ----
     if os.path.isdir(input_path):
@@ -2086,6 +2252,10 @@ def main():
                 synth_failures.append(src)
         if synth_failures:
             sys.exit(1)
+
+    # ---- Stage 4: segment refinement lemmas ----
+    if getattr(args, "seg_lemmas", False) or getattr(args, "seg_lemmas_check", False):
+        _run_stage4_seg_lemmas(synthesizable, args, lib_dir)
 
     if directory_mode:
         print(

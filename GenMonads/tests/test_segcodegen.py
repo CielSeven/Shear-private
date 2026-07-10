@@ -1178,32 +1178,36 @@ def test_loop_and_child_index():
 # is not present) — the per-loop VC routing fills every glue hole faithfully.
 import os as _os
 
-_IB2_TMPL = "bench-gen/glibc_slist/libs/glibc_slist_iter_back_2_rel_lib.v"
+_IB2_C = "shape-bench/glibc_slist/glibc_slist_iter_back_2.c"
 _IB2_AVC = "bench-gen/glibc_slist/datac/autovc/glibc_slist_iter_back_2_data_autovc.c"
 
 
-@pytest.mark.skipif(not (_os.path.exists(_IB2_TMPL) and _os.path.exists(_IB2_AVC)),
+@pytest.mark.skipif(not (_os.path.exists(_IB2_C) and _os.path.exists(_IB2_AVC)),
                     reason="iter_back_2 bench files not present")
 def test_forest_fill_routes_per_loop_vcs():
-    from GenMonads.absprog.segcodegen import fill_from_paths
-    # the loop holes are `Parameter …_M_loop{k}_…`; once filled in place they are
-    # `Definition`s, so there is nothing to synthesize — skip rather than error
-    if not re.search(r"Parameter\s+\w+_M_loop\d+_", open(_IB2_TMPL).read()):
-        pytest.skip("iter_back_2 lib already filled in place (no holes)")
-    n = _norm(fill_from_paths(_IB2_TMPL, _IB2_AVC))
-    # per-loop result types defined (not the single shared MretTy); the outer
-    # invariant `lseg(x, stop) * listrep(stop)` gives loop1 a two-list carrier
+    from GenMonads.absprog.assemble import generate_rel_lib_skeleton_for_file
+    from GenMonads.absprog.segcodegen import fill_template
+    # Generate the skeleton in-memory (independent of any on-disk filled copy)
+    # and fill it from the autovc, so the per-loop VC routing is exercised.
+    sk = generate_rel_lib_skeleton_for_file(_IB2_C, monad="staterr")
+    n = _norm(fill_template(sk, open(_IB2_AVC).read()))
+    # Per-loop result types (not the single shared MretTy): the outer invariant
+    # `lseg(x, stop) * listrep(stop)` gives loop1 a two-list carrier; the inner
+    # `lseg(x, node) * lseg(nxt, stop) * listrep(stop)` gives loop2 three lists
+    # plus the shared scalar witness `s` and the data witness `v`.
     assert "_M_loop1_MretTy : Type := (list Z * list Z * Z)" in n
-    assert "_M_loop2_MretTy : Type := (list Z * list Z * Z)" in n
-    # to_inner: outer (l1_1, l1_2, s) -> inner (nil, whole list, s)
-    assert "return (nil, l1_1 ++ l1_2, s)" in n
-    # after_inner: with the strengthened outer invariant the continue-path
-    # entailment is closed trivially (no VC), so the resume is the identity —
-    # pass the inner result through as the new outer carrier
-    assert "fun a r => return r." in n
-    # loop1_end projects the list result (witness dropped) — not a tuple
-    assert _norm("return (l1_1 ++ l1_2).") in n
-    # break branches stay the fixed identity
+    assert "_M_loop2_MretTy : Type := (list Z * list Z * list Z * Z * Z)" in n
+    # The outer loop breaks out after the inner loop (`if (prev==0) break;`), so
+    # its `after_inner` is a *branch*: Continue resumes loop1, ReturnNow carries
+    # the break straight to the function result (`s + v`, whole list rebuilt).
+    assert "return Continue ((l2_1 ++ nil, v :: (l2_2 ++ l2_3), s + v))" in n
+    assert "return ReturnNow ((l2_1 ++ (v :: (l2_2 ++ l2_3)), s + v))" in n
+    # loop1_end is the natural (guard-false) exit: project the carrier onto the
+    # Ensure result (concat lists, keep the scalar witness) — a tuple now.
+    assert _norm("return (l1_1 ++ l1_2, s).") in n
+    # the loop MretTy carries an early_result so a ReturnNow rides out the break
+    assert "MONAD (early_result" in n
+    # break branch (M1) stays the fixed identity
     assert "fun r => return r." in n
 
 

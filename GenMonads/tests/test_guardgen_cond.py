@@ -223,11 +223,23 @@ class TestGuardPredicateRegistryConfig:
         assert spec.to_coq_root_null(payload, True) == "l1 = []"
         assert spec.to_coq_root_null(payload, False) == "l1 <> []"
 
-    def test_json_loaded_segment_eq_rule(self):
-        spec = PREDICATES["sllseg"]
-        payload = spec.parse_args(["x", "y", "l1"])
-        assert spec.to_coq_segment_eq(payload, True, False) == "l1 = []"
-        assert spec.to_coq_segment_eq(payload, False, False) == "l1 <> []"
+    def test_sllseg_has_no_ungated_segment_eq_primitive(self):
+        # Segment emptiness is NOT a per-predicate primitive anymore: emitting
+        # ``l = []`` off a bare ``sllseg`` is unsound (a lasso breaks it).  The
+        # rule now lives ONLY as the acyclicity-gated ``_composition_rules
+        # .segment_eq`` (a root must terminate the segment), so ``sllseg`` ships
+        # no direct ``to_coq_segment_eq`` handler.
+        assert PREDICATES["sllseg"].to_coq_segment_eq is None
+
+    def test_json_loaded_segment_eq_composition_rules(self):
+        from GenMonads.guardgen.registry import COMPOSITION_RULES
+        names = {r.name for r in COMPOSITION_RULES.get("segment_eq", [])}
+        # Both endpoint orderings are registered from the JSON, each requiring a
+        # trailing root (role "R") as the acyclicity witness.
+        assert names == {"seg_eq_forward_rooted", "seg_eq_reversed_rooted"}
+        for rule in COMPOSITION_RULES["segment_eq"]:
+            kinds = [clause["kind"] for clause in rule.match]
+            assert kinds == ["segment", "root"]
 
     def test_json_loaded_field_deref_null_rule_for_sll_next(self):
         spec = PREDICATES["sll"]
@@ -261,6 +273,39 @@ class TestGuardPredicateRegistryConfig:
         assert "fun l1 =>" in result
         assert "let '(" not in result
         assert "l1 <> []" in result
+
+
+class TestSegmentEqAcyclicity:
+    """``start = end  <=>  l = []`` for ``sllseg(start, end, l)`` is only sound
+    when a root ``sll(end, _)`` terminates the segment (rules out a lasso).  The
+    guard generator must require that acyclicity witness rather than reading the
+    emptiness off the bare segment predicate."""
+
+    def test_segment_eq_with_trailing_root_emits(self):
+        # ``node->next != stop`` over ``sllseg(nxt, stop, l2) * sll(stop, l3)``
+        # (the iter_back inner-loop shape): the trailing ``sll(stop, _)`` is the
+        # acyclicity witness, so the segment-emptiness guard is emitted.
+        inv = (
+            "exists nxt l2 l3, store(&(node->next), struct list *, nxt) * "
+            "sllseg(nxt, stop, l2) * sll(stop, l3)"
+        )
+        result = gen_coq_guard(inv, "node->next != stop")
+        assert "l2 <> []" in result
+        assert "Parameter" not in result
+
+    def test_segment_eq_endpoints_either_order(self):
+        # Same shape, operands written in the reverse order (``stop != nxt``):
+        # the emitted guard is unchanged (segment emptiness is symmetric).
+        inv = "exists l2 l3, sllseg(nxt, stop, l2) * sll(stop, l3)"
+        assert "l2 <> []" in gen_coq_guard(inv, "nxt != stop")
+        assert "l2 <> []" in gen_coq_guard(inv, "stop != nxt")
+
+    def test_segment_eq_without_trailing_root_refuses(self):
+        # A dangling segment with no root at its end could be circular, so the
+        # naive ``x = y <=> l = []`` rule is unsound — the generator must refuse.
+        inv = "exists l2, sllseg(nxt, stop, l2)"
+        with pytest.raises(ValueError, match="acyclicity witness|rule out a cycle"):
+            gen_coq_guard(inv, "nxt != stop")
 
 
 class TestMemoryStatePredicatesIgnored:

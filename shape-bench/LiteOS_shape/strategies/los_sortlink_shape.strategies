@@ -1,0 +1,339 @@
+//test curent rules
+//max rule id:30
+
+
+#include "los_sortlink_shape.h"
+
+
+
+
+id : 3
+priority : core(2)
+left : store_dll{?A}(?storeA,?p, ?l0) at 0
+right : store_dll{A}(storeA, p, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(l0 == l1);
+
+
+
+id : 6
+priority : core(1)
+left : (?storeA : Z -> ?A -> asrt)(?p, ?x) at 0
+right : storeA(p, ?y) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(x == y);
+
+id : 7
+priority : core(0)
+left : store_dll{?A}(?storeA, ?x, ?l0) at 0
+right : store_dll{A}(storeA, x, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(l0 == l1);
+
+id : 8
+priority : core(2)
+left : dllseg{?A}(?storeA, ?x, ?px, ?y, ?py, ?l0) at 0
+right : dllseg{A}(storeA, x, px, y, py, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(l0 == l1);
+
+//
+
+
+id : 11
+priority : core(2)
+left : store_sorted_dll{?A}(?storeA,?p, ?l0) at 0
+right : store_sorted_dll{A}(storeA, p, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(l0 == l1);
+
+
+id : 14
+priority : core(0)
+left : store_sorted_dll{?A}(?storeA, ?x, ?l0) at 0
+right : store_sorted_dll{A}(storeA, x, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(l0 == l1);
+
+id : 15
+priority : core(0)
+left : dllseg_shift{?A}(?storeA, ?px, ?py, ?l0) at 0
+right : dllseg_shift{A}(storeA, px, py, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(l0 == l1);
+
+id : 16
+priority : core(4)
+left : dllseg_shift{?A}(?storeA, ?px, ?py, cons{DL_Node{A}}(Build_DL_Node{A}(?a, ?x), ?l0)) at 0
+action : left_erase(0);
+         left_add(storeA(x, a));
+         left_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), px));
+         left_add(store(field_addr(px, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), x));
+         left_add(dllseg_shift{A}(storeA, x, py, l0));
+
+id : 17
+priority : post(1)
+left : dllseg_shift{?A}(?storeA, ?x, ?py, ?l0) at 0
+       storeA(x, ?a) at 1
+       store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), ?px) at 2
+       store(field_addr(px, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), x) at 3
+action : left_erase(0);
+         left_erase(1);
+         left_erase(2);
+         left_erase(3);
+         left_add(dllseg_shift{A}(storeA, px, py, cons{DL_Node{A}}(Build_DL_Node{A}(a, x), l0)));
+
+id : 18
+priority : core(0)
+left : storesortedLinkNode{?A}(?storeA, ?x, ?a) at 0
+right : storesortedLinkNode{A}(storeA, x, a) at 1
+action : left_erase(0);
+         right_erase(1);
+
+
+
+id : 19
+priority : core(0)
+right:  cons{DL_Node{sortedLinkNode{?A}}}(?a, ?l) == cons{DL_Node{sortedLinkNode{A}}}(?b, ?l1) at 0
+action: right_erase(0);
+        right_add(a == b);
+        right_add(l == l1);
+
+
+id : 20
+priority : core(1)
+right:  ?a1 == Build_DL_Node{sortedLinkNode{?A1}}(mksortedLinkNode{A1}(?b1, ?t), ?x) at 0
+action: right_erase(0);
+        right_add(x == ptr{sortedLinkNode{A1}}(a1));
+        right_add(b1 == sl_data{A1}(data{sortedLinkNode{A1}}(a1)));
+        right_add(t == responseTime{A1}(data{sortedLinkNode{A1}}(a1)));
+
+
+id : 21
+priority : core(1)
+left:   field_addr(?rt, SortLinkList, sortLinkNode) == ?h at 0
+        store(field_addr(field_addr(rt, SortLinkList, sortLinkNode), LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), ?px) at 1
+right:  store(field_addr(h, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), ?v) at 2
+action: left_erase(0);
+        left_erase(1);
+        right_erase(2);
+        right_add(v == px);
+
+
+
+
+id : 22
+priority : core(1)
+left:   store(?sa, PTR(struct SortLinkAttribute), ?sp) at 0
+        store(?la, PTR(struct SortLinkList), ?re) at 1
+        dllseg_shift_rev{sortedLinkNode{?A}}(storesortedLinkNode{A}(?storeA), ?h, field_addr(sp, SortLinkAttribute, sortLink), ?l) at 2
+right:  dllseg_shift_rev{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), field_addr(re, SortLinkList, sortLinkNode), field_addr(sp, SortLinkAttribute, sortLink), l) at 3
+action: right_add(h == field_addr(re, SortLinkList, sortLinkNode));
+        left_erase(2);
+        right_erase(3);
+
+id : 31
+priority : core(7)
+left : storesortedLinkNode{?A}(?storeA, field_addr(?p, SortLinkList, sortLinkNode), mksortedLinkNode{A}(?a, ?t)) at 0
+action : left_erase(0);
+         left_add(storeA(field_addr(p, SortLinkList, sortLinkNode), a));
+         left_add(store(field_addr(p, SortLinkList, responseTime), unsigned long long, t));
+
+id : 32
+priority : core(7)
+right : storesortedLinkNode{?A}(?storeA, field_addr(?p, SortLinkList, sortLinkNode), mksortedLinkNode{A}(?a, ?t)) at 0
+action : right_erase(0);
+         right_add(storeA(field_addr(p, SortLinkList, sortLinkNode), a));
+         right_add(store(field_addr(p, SortLinkList, responseTime), unsigned long long, t));
+
+id : 33
+priority : core(6)
+left : store_dll{?A}(?storeA, ?x, ?l) at 0
+right : store(field_addr(x, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), ?q) at 1
+action : left_erase(0);
+         left_exist_add(h : Z);
+         left_exist_add(pt : Z);
+         left_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), pt));
+         left_add(store(field_addr(x, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), h));
+         left_add(dllseg{A}(storeA, h, x, x, pt, l));
+
+id : 34
+priority : core(4)
+right : store_dll{?A}(?storeA, ?x, ?l) at 0
+action : right_erase(0);
+         right_exist_add(h : Z);
+         right_exist_add(pt : Z);
+         right_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), pt));
+         right_add(store(field_addr(x, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), h));
+         right_add(dllseg{A}(storeA, h, x, x, pt, l));
+
+id : 35
+priority : core(6)
+left : store_sorted_dll{?A}(?storeA, ?x, ?l) at 0
+action : left_erase(0);
+         left_add(store_dll{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), x, sortedLinkNodeMappingList{A}(l)));
+
+id : 36
+priority : core(4)
+right : store_sorted_dll{?A}(?storeA, ?x, ?l) at 0
+action : right_erase(0);
+         right_add(store_dll{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), x, sortedLinkNodeMappingList{A}(l)));
+
+id : 37
+priority : core(7)
+left : store_dll{?A}(?storeA, ?x, ?l) at 0
+right : store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), ?pt) at 1
+action : left_erase(0);
+         left_exist_add(pt : Z);
+         left_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), pt));
+         left_add(store(field_addr(pt, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), x));
+         left_add(dllseg_shift{A}(storeA, x, pt, l));
+
+id : 38
+priority : core(4)
+left : store_sorted_dll{?A}(?storeA, ?x, app{DL_Node{sortedLinkNode{A}}}(?l1, cons{DL_Node{sortedLinkNode{A}}}(Build_DL_Node{sortedLinkNode{A}}(mksortedLinkNode{A}(?a, ?t), ?sortList), ?l2))) at 0
+right : store(field_addr(sortList, SortLinkList, responseTime), unsigned long long, ?v) at 1
+action : left_erase(0);
+         left_exist_add(h : Z);
+         left_exist_add(pt : Z);
+         left_exist_add(py : Z);
+         left_exist_add(z : Z);
+         left_add(storeA(field_addr(sortList, SortLinkList, sortLinkNode), a));
+         left_add(store(field_addr(sortList, SortLinkList, responseTime), unsigned long long, t));
+         left_add(store(field_addr(field_addr(sortList, SortLinkList, sortLinkNode), LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), py));
+         left_add(store(field_addr(field_addr(sortList, SortLinkList, sortLinkNode), LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), z));
+         left_add(dllseg{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), z, field_addr(sortList, SortLinkList, sortLinkNode), x, pt, sortedLinkNodeMappingList{A}(l2)));
+         left_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), pt));
+         left_add(store(field_addr(x, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), h));
+         left_add(dllseg{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), h, x, field_addr(sortList, SortLinkList, sortLinkNode), py, sortedLinkNodeMappingList{A}(l1)));
+
+id : 39
+priority : core(3)
+right : store_sorted_dll{?A}(?storeA, ?x, app{DL_Node{sortedLinkNode{A}}}(?l1, cons{DL_Node{sortedLinkNode{A}}}(Build_DL_Node{sortedLinkNode{A}}(mksortedLinkNode{A}(?a, ?t), ?sortList), ?l2))) at 0
+action : right_erase(0);
+         right_exist_add(h : Z);
+         right_exist_add(pt : Z);
+         right_exist_add(py : Z);
+         right_exist_add(z : Z);
+         right_add(storeA(field_addr(sortList, SortLinkList, sortLinkNode), a));
+         right_add(store(field_addr(sortList, SortLinkList, responseTime), unsigned long long, t));
+         right_add(store(field_addr(field_addr(sortList, SortLinkList, sortLinkNode), LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), py));
+         right_add(store(field_addr(field_addr(sortList, SortLinkList, sortLinkNode), LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), z));
+         right_add(dllseg{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), z, field_addr(sortList, SortLinkList, sortLinkNode), x, pt, sortedLinkNodeMappingList{A}(l2)));
+         right_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), pt));
+         right_add(store(field_addr(x, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), h));
+         right_add(dllseg{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), h, x, field_addr(sortList, SortLinkList, sortLinkNode), py, sortedLinkNodeMappingList{A}(l1)));
+
+id : 40
+priority : core(4)
+left : store_dll{sortedLinkNode{?A}}(storesortedLinkNode{A}(?storeA), ?x, cons{DL_Node{sortedLinkNode{A}}}(?a, ?l)) at 0
+right : store(field_addr(?p, SortLinkList, responseTime), unsigned long long, ?v) at 1
+action : left_erase(0);
+         left_exist_add(pt : Z);
+         left_exist_add(z : Z);
+         left_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), pt));
+         left_add(store(field_addr(x, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), ptr{sortedLinkNode{A}}(a)));
+         left_add(storesortedLinkNode{A}(storeA, ptr{sortedLinkNode{A}}(a), data{sortedLinkNode{A}}(a)));
+         left_add(store(field_addr(ptr{sortedLinkNode{A}}(a), LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), x));
+         left_add(store(field_addr(ptr{sortedLinkNode{A}}(a), LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), z));
+         left_add(dllseg{sortedLinkNode{A}}(storesortedLinkNode{A}(storeA), z, ptr{sortedLinkNode{A}}(a), x, pt, l));
+
+id : 41
+priority : core(4)
+left : storesortedLinkNode{?A}(?storeA, ?nodeptr, ?sl) at 0
+       field_addr(?p, SortLinkList, sortLinkNode) == nodeptr at 1
+right : store(field_addr(p, SortLinkList, responseTime), unsigned long long, ?v) at 2
+action : left_erase(0);
+         left_add(storeA(nodeptr, sl_data{A}(sl)));
+         left_add(store(field_addr(p, SortLinkList, responseTime), unsigned long long, responseTime{A}(sl)));
+
+id : 42
+priority : core(4)
+left : ?mp == cons{DL_Node{sortedLinkNode{?A}}}(?a, ?l) at 0
+       field_addr(?p, SortLinkList, sortLinkNode) == obtian_first_pointer{A}(?x, ?mp) at 1
+right : store(field_addr(p, SortLinkList, responseTime), unsigned long long, ?v) at 2
+action : left_add(field_addr(p, SortLinkList, sortLinkNode) == ptr{sortedLinkNode{A}}(a));
+
+id : 43
+priority : core(4)
+left : storesortedLinkTaskNode(?task_storeA, ?sg, field_addr(?p, SortLinkList, sortLinkNode), mksortedLinkNode{Z}(?a, ?t)) at 0
+right : store(field_addr(p, SortLinkList, responseTime), unsigned long long, ?v) at 1
+action : left_erase(0);
+         left_add(task_storeA(sg, field_addr(p, SortLinkList, sortLinkNode), a));
+         left_add(store(field_addr(p, SortLinkList, responseTime), unsigned long long, t));
+
+id : 44
+priority : core(3)
+right : storesortedLinkTaskNode(?task_storeA, ?sg, field_addr(?p, SortLinkList, sortLinkNode), mksortedLinkNode{Z}(?a, ?t)) at 0
+action : right_erase(0);
+         right_add(task_storeA(sg, field_addr(p, SortLinkList, sortLinkNode), a));
+         right_add(store(field_addr(p, SortLinkList, responseTime), unsigned long long, t));
+
+id : 45
+priority : core(4)
+left : store_dll{?A}(?storeA, ?x, ?l) at 0
+right : dllseg_shift_rev{A}(storeA, ?xn, x, ?target_l) at 1
+action : left_erase(0);
+         left_exist_add(xn : Z);
+         left_add(store(field_addr(x, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), xn));
+         left_add(store(field_addr(xn, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), x));
+         left_add(dllseg_shift_rev{A}(storeA, xn, x, l));
+
+id : 46
+priority : core(2)
+left : dllseg_shift_rev{?A}(?storeA, ?x, ?y, ?l0) at 0
+right : dllseg_shift_rev{A}(storeA, x, y, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(l0 == l1);
+
+id : 47
+priority : core(2)
+left : dllseg_shift_rev{?A}(?storeA, ?x0, ?y, ?l0) at 0
+right : dllseg_shift_rev{A}(storeA, ?x1, y, ?l1) at 1
+action : left_erase(0);
+         right_erase(1);
+         right_add(x0 == x1);
+         right_add(l0 == l1);
+
+id : 48
+priority : core(8)
+left : dllseg{?A}(?storeA, ?x, ?px, ?y, ?py, nil{DL_Node{A}}) at 0
+action : left_erase(0);
+         left_add(x == y);
+         left_add(px == py);
+
+id : 49
+priority : core(8)
+right : dllseg{?A}(?storeA, ?x, ?px, ?y, ?py, nil{DL_Node{A}}) at 0
+action : right_erase(0);
+         right_add(x == y);
+         right_add(px == py);
+
+id : 50
+priority : core(8)
+left : dllseg_shift{?A}(?storeA, ?px, ?py, nil{DL_Node{A}}) at 0
+action : left_erase(0);
+         left_add(px == py);
+
+id : 51
+priority : core(8)
+right : dllseg_shift{?A}(?storeA, ?px, ?py, nil{DL_Node{A}}) at 0
+action : right_erase(0);
+         right_add(px == py);
+
+id : 52
+priority : core(8)
+right : dllseg_shift{?A}(?storeA, ?px, ?py, cons{DL_Node{A}}(Build_DL_Node{A}(?a, ?x), nil{DL_Node{A}})) at 0
+action : right_erase(0);
+         right_add(x == py);
+         right_add(storeA(x, a));
+         right_add(store(field_addr(x, LOS_DL_LIST, pstPrev), PTR(struct LOS_DL_LIST), px));
+         right_add(store(field_addr(px, LOS_DL_LIST, pstNext), PTR(struct LOS_DL_LIST), x));

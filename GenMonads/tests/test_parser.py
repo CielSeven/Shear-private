@@ -13,9 +13,11 @@ from GenMonads.transshape.parser import (
     BinOp,
     FieldAccess,
     Deref,
-    Predicate,
+    CallExpr,
+    SpatialPred,
     SepConj,
     AndConj,
+    Implies,
     Exists,
 )
 
@@ -23,7 +25,7 @@ from GenMonads.transshape.parser import (
 class TestParse:
     def test_parse_simple_predicate(self):
         ast = parse_assertion("listrep(x)")
-        assert isinstance(ast, Predicate)
+        assert isinstance(ast, SpatialPred)
         assert ast.name == "listrep"
         assert len(ast.args) == 1
         assert isinstance(ast.args[0], Var)
@@ -31,7 +33,7 @@ class TestParse:
 
     def test_parse_predicate_multiple_args(self):
         ast = parse_assertion("lseg(x, y)")
-        assert isinstance(ast, Predicate)
+        assert isinstance(ast, SpatialPred)
         assert ast.name == "lseg"
         assert len(ast.args) == 2
 
@@ -39,21 +41,21 @@ class TestParse:
         ast = parse_assertion("listrep(x) * lseg(y, z)")
         assert isinstance(ast, SepConj)
         assert len(ast.formulas) == 2
-        assert isinstance(ast.formulas[0], Predicate)
-        assert isinstance(ast.formulas[1], Predicate)
+        assert isinstance(ast.formulas[0], SpatialPred)
+        assert isinstance(ast.formulas[1], SpatialPred)
 
     def test_parse_and_conj(self):
         ast = parse_assertion("t != 0 && listrep(x)")
         assert isinstance(ast, AndConj)
         assert len(ast.formulas) == 2
         assert isinstance(ast.formulas[0], BinOp)
-        assert isinstance(ast.formulas[1], Predicate)
+        assert isinstance(ast.formulas[1], SpatialPred)
 
     def test_parse_exists(self):
         ast = parse_assertion("exists u, listrep(u)")
         assert isinstance(ast, Exists)
         assert ast.vars == ["u"]
-        assert isinstance(ast.body, Predicate)
+        assert isinstance(ast.body, SpatialPred)
 
     def test_parse_exists_with_body(self):
         ast = parse_assertion("exists u, listrep(u) * listrep(v)")
@@ -81,14 +83,14 @@ class TestParse:
 
     def test_parse_at_pre(self):
         ast = parse_assertion("lseg(x@pre, p)")
-        assert isinstance(ast, Predicate)
+        assert isinstance(ast, SpatialPred)
         assert ast.name == "lseg"
         assert isinstance(ast.args[0], Var)
         assert ast.args[0].name == "x@pre"
 
     def test_parse_emp(self):
         ast = parse_assertion("emp")
-        assert isinstance(ast, Predicate)
+        assert isinstance(ast, SpatialPred)
         assert ast.name == "emp"
         assert ast.args == []
 
@@ -101,18 +103,80 @@ class TestParse:
         ast = parse_assertion("t != 0 && t -> next == 0 && sllseg(x@pre, p, l1) * sll(p, l2) * sllseg(y, t, l3)")
         assert isinstance(ast, SepConj) or isinstance(ast, AndConj)
 
+    def test_parse_parenthesized_pure_implication(self):
+        ast = parse_assertion("((nxt == 0) => (stop == 0))")
+        assert isinstance(ast, Implies)
+        assert isinstance(ast.left, BinOp)
+        assert ast.left.op == "=="
+        assert isinstance(ast.right, BinOp)
+        assert ast.right.op == "=="
+
+    def test_parse_implication_as_conjunct(self):
+        ast = parse_assertion("node != 0 && ((nxt == 0) => (stop == 0)) && listrep(stop)")
+        assert isinstance(ast, AndConj)
+        assert isinstance(ast.formulas[1], Implies)
+
+    def test_sep_star_after_pure_equality_is_not_multiplication(self):
+        ast = parse_assertion("x -> data == v * listrep(y)")
+        assert isinstance(ast, SepConj)
+        assert len(ast.formulas) == 2
+        assert isinstance(ast.formulas[0], BinOp)
+        assert ast.formulas[0].op == "=="
+        assert isinstance(ast.formulas[0].right, Var)
+        assert ast.formulas[0].right.name == "v"
+        assert isinstance(ast.formulas[1], SpatialPred)
+        assert ast.formulas[1].name == "listrep"
+
+    def test_parse_multiplication_before_non_predicate_operand(self):
+        ast = parse_assertion("v_len == 2 * n@pre + 2")
+        assert isinstance(ast, BinOp)
+        assert ast.op == "=="
+        assert isinstance(ast.right, BinOp)
+        assert ast.right.op == "+"
+        assert isinstance(ast.right.left, BinOp)
+        assert ast.right.left.op == "*"
+
+    def test_unknown_call_after_comparison_rhs_star_is_spatial(self):
+        ast = parse_assertion("n == v * foopred(y)")
+        assert isinstance(ast, SepConj)
+        assert isinstance(ast.formulas[0], BinOp)
+        assert ast.formulas[0].right == Var("v")
+        assert isinstance(ast.formulas[1], SpatialPred)
+        assert ast.formulas[1].name == "foopred"
+
+    def test_qualified_call_after_comparison_rhs_star_is_spatial(self):
+        ast = parse_assertion("n == v * IntArray::full(p, n, l)")
+        assert isinstance(ast, SepConj)
+        assert isinstance(ast.formulas[0], BinOp)
+        assert ast.formulas[0].right == Var("v")
+        assert isinstance(ast.formulas[1], SpatialPred)
+        assert ast.formulas[1].name == "IntArray::full"
+
+    def test_registered_pure_call_after_star_is_multiplication(self):
+        ast = parse_assertion("n == v * Zlength(y)")
+        assert isinstance(ast, BinOp)
+        assert ast.op == "=="
+        assert isinstance(ast.right, BinOp)
+        assert ast.right.op == "*"
+        assert isinstance(ast.right.right, CallExpr)
+        assert ast.right.right.name == "Zlength"
+
+    def test_unknown_pure_call_comparison_is_rejected(self):
+        with pytest.raises(ValueError, match="Unexpected trailing text"):
+            parse_assertion("foofun(y) == n")
+
 
 class TestRecover:
     def test_recover_predicate(self):
-        ast = Predicate("sll", [Var("x"), Var("l1")])
+        ast = SpatialPred("sll", [Var("x"), Var("l1")])
         assert recover_assertion(ast) == "sll(x, l1)"
 
     def test_recover_emp(self):
-        ast = Predicate("emp", [])
+        ast = SpatialPred("emp", [])
         assert recover_assertion(ast) == "emp"
 
     def test_recover_exists(self):
-        body = Predicate("sll", [Var("x"), Var("l1")])
+        body = SpatialPred("sll", [Var("x"), Var("l1")])
         ast = Exists(["l1"], body)
         result = recover_assertion(ast)
         assert "exists l1," in result
@@ -120,8 +184,8 @@ class TestRecover:
 
     def test_recover_sep_conj(self):
         ast = SepConj([
-            Predicate("sll", [Var("x"), Var("l1")]),
-            Predicate("sll", [Var("y"), Var("l2")]),
+            SpatialPred("sll", [Var("x"), Var("l1")]),
+            SpatialPred("sll", [Var("y"), Var("l2")]),
         ])
         assert recover_assertion(ast) == "sll(x, l1) * sll(y, l2)"
 
@@ -137,6 +201,7 @@ class TestRecover:
         "*head == head_node",
         "listrep(x) * lseg(y, z)",
         "t != 0 && listrep(x)",
+        "((nxt == 0) => (stop == 0))",
     ])
     def test_recover_roundtrip(self, text):
         ast = parse_assertion(text)
@@ -152,11 +217,11 @@ class TestRecover:
 
 def test_parse_qualified_predicate_name():
     """Namespaced predicate names like ``IntArray::full_shape`` parse as
-    one Predicate node with the qualified name."""
-    from GenMonads.transshape.parser import parse_assertion, Predicate, Var
+    one SpatialPred node with the qualified name."""
+    from GenMonads.transshape.parser import parse_assertion, SpatialPred, Var
 
     ast = parse_assertion("IntArray::full_shape(height, n)")
-    assert isinstance(ast, Predicate)
+    assert isinstance(ast, SpatialPred)
     assert ast.name == "IntArray::full_shape"
     assert len(ast.args) == 2
     assert isinstance(ast.args[0], Var) and ast.args[0].name == "height"
@@ -165,20 +230,20 @@ def test_parse_qualified_predicate_name():
 def test_parse_multi_level_qualified_predicate():
     """Triple-nested namespaces also parse — keeps the grammar
     forward-compatible for deeper qualifications."""
-    from GenMonads.transshape.parser import parse_assertion, Predicate
+    from GenMonads.transshape.parser import parse_assertion, SpatialPred
 
     ast = parse_assertion("Foo::Bar::Baz(x)")
-    assert isinstance(ast, Predicate)
+    assert isinstance(ast, SpatialPred)
     assert ast.name == "Foo::Bar::Baz"
 
 
 def test_parse_bare_predicate_still_works():
     """Qualified-identifier support must not regress bare predicates
     (``listrep``, ``lseg``)."""
-    from GenMonads.transshape.parser import parse_assertion, Predicate
+    from GenMonads.transshape.parser import parse_assertion, SpatialPred
 
     ast = parse_assertion("listrep(x)")
-    assert isinstance(ast, Predicate)
+    assert isinstance(ast, SpatialPred)
     assert ast.name == "listrep"
 
 
@@ -410,21 +475,21 @@ def test_lc31_end_to_end_all_invariants_translate(tmp_path):
 
 
 def test_parse_function_call_expression():
-    """Function-call expressions inside predicate args parse as Predicate
+    """Function-call expressions inside predicate args parse as CallExpr
     nodes — needed by ``CharArray::full(p, n, app(out, cons(0, nil)))``."""
-    from GenMonads.transshape.parser import parse_assertion, Predicate
+    from GenMonads.transshape.parser import parse_assertion, CallExpr, SpatialPred
 
     ast = parse_assertion("CharArray::full(p, n, app(out, cons(0, nil)))")
-    assert isinstance(ast, Predicate) and ast.name == "CharArray::full"
+    assert isinstance(ast, SpatialPred) and ast.name == "CharArray::full"
     # Third arg is the nested call ``app(out, cons(0, nil))``.
     nested = ast.args[2]
-    assert isinstance(nested, Predicate) and nested.name == "app"
+    assert isinstance(nested, CallExpr) and nested.name == "app"
     inner = nested.args[1]
-    assert isinstance(inner, Predicate) and inner.name == "cons"
+    assert isinstance(inner, CallExpr) and inner.name == "cons"
 
 
 def test_recover_function_call_expression_round_trip():
-    """The ``recover_expr`` function emits Predicate nodes back as
+    """The ``recover_expr`` function emits CallExpr nodes back as
     function-call syntax — needed so translated assertions can be
     re-parsed downstream."""
     from GenMonads.transshape.parser import parse_assertion, recover_assertion
@@ -436,14 +501,14 @@ def test_recover_function_call_expression_round_trip():
 
 
 def test_parse_predicate_args_with_arithmetic():
-    """Predicate arguments may contain ``+``/``-`` arithmetic — e.g.
+    """SpatialPred arguments may contain ``+``/``-`` arithmetic — e.g.
     ``IntArray::seg(p, 0, v_i + 1, l)`` or ``CharArray::undef_seg(output,
     __return + 1, n + 1)``.  These parse as a single arithmetic
     expression per arg."""
-    from GenMonads.transshape.parser import parse_assertion, Predicate, BinOp
+    from GenMonads.transshape.parser import parse_assertion, SpatialPred, BinOp
 
     ast = parse_assertion("IntArray::seg(p, 0, v_i + 1, l)")
-    assert isinstance(ast, Predicate)
+    assert isinstance(ast, SpatialPred)
     assert len(ast.args) == 4
     # Third arg is the ``v_i + 1`` arithmetic expression.
     assert isinstance(ast.args[2], BinOp) and ast.args[2].op == "+"

@@ -10,7 +10,7 @@ import re
 import pytest
 
 from GenMonads.translate_c_file import (
-    translate_c_file, translate_directory,
+    translate_c_file, translate_c_file_data_only, translate_directory,
     insert_safeexec_include, generate_coq_blocks, collect_func_extern_info,
     collect_callee_functions,
 )
@@ -135,6 +135,47 @@ class TestSingleFile:
 
         assert 'safeExec' in content
         assert 'sll_append_M_loop' in content
+
+    def test_data_only_translates_invariant_with_pure_implication(self, tmp_path):
+        src = (
+            '#include "glibc_slist_clean.h"\n'
+            '\n'
+            'long glibc_slist_clean_iter_back_2(struct list *x)\n'
+            '/*@ Require listrep(x)\n'
+            '    Ensure  exists v, __return == v && listrep(x@pre)\n'
+            ' */\n'
+            '{\n'
+            '    struct list *stop;\n'
+            '    struct list *prev;\n'
+            '    struct list *node;\n'
+            '    long sum;\n'
+            '    /*@ Inv exists p s nxt v,\n'
+            '            x == x@pre && x != 0 && node != 0 &&\n'
+            '            ((nxt == 0) => (stop == 0)) &&\n'
+            '            node -> next == nxt && node -> data == v &&\n'
+            '            store(&prev, struct list*, p) *\n'
+            '            store(&sum, long, s) *\n'
+            '            lseg(x, node) * lseg(nxt, stop) * listrep(stop)\n'
+            '     */\n'
+            '    while (node->next != stop && node->next != 0) {\n'
+            '        prev = node;\n'
+            '        node = node->next;\n'
+            '    }\n'
+            '    return sum;\n'
+            '}\n'
+        )
+        input_path = _write_src(tmp_path, 'glibc_slist_iter_back_2.c', src)
+        output_path = str(tmp_path / 'glibc_slist_iter_back_2_data.c')
+
+        assert translate_c_file_data_only(input_path, output_path)
+        content = (tmp_path / 'glibc_slist_iter_back_2_data.c').read_text()
+        assert "=> (stop == 0)" in content
+        assert "sllseg(x, node" in content
+        assert "sllseg(nxt, stop" in content
+        assert "sll(stop" in content
+        assert re.search(r"\blseg\s*\(", content) is None
+        assert re.search(r"\blistrep\s*\(", content) is None
+        assert "safeExec" not in content
 
 
 # ============================================================================

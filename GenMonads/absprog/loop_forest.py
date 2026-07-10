@@ -270,6 +270,50 @@ def _body_has_top_level_return(body: str) -> bool:
     return re.search(r"\breturn\b", "".join(cleaned)) is not None
 
 
+def _body_has_top_level_break(body: str) -> bool:
+    """True when *body* contains a top-level ``break`` statement (one not
+    inside a nested ``while``/``for``).  Same masking discipline as
+    :func:`_body_has_top_level_return`: a nested loop's own ``break`` belongs
+    to that inner loop and is masked out.
+
+    A top-level ``break`` in a *parent* loop's body — one whose landing is the
+    function's post-loop ``return`` — is control-flow the mechanical
+    ``to_inner → aux_c → after_inner`` body cannot model as a plain continue,
+    because at the break point the live state is the *child* loop's frame, not
+    the parent carrier.  Such a break must ride out as an ``early_result``
+    ``ReturnNow`` from a *branched* ``after_inner`` (see
+    ``generate_forest_func_block``).  Leaf loops keep the old story — their
+    break is their own normal termination, modeled by ``M1``.
+    """
+    stripped = body
+    nested = build_loop_forest(stripped)
+    masked = list(stripped)
+    for n in nested:
+        for i in range(n.while_pos, n.body_end + 1):
+            if i < len(masked):
+                masked[i] = " "
+    masked_text = "".join(masked)
+    cleaned: List[str] = []
+    i = 0
+    n = len(masked_text)
+    while i < n:
+        ch = masked_text[i]
+        if ch == '"' or ch == "'":
+            i = _skip_string(masked_text, i, ch)
+            continue
+        if masked_text.startswith("//", i):
+            nl = masked_text.find("\n", i)
+            i = n if nl == -1 else nl + 1
+            continue
+        if masked_text.startswith("/*", i):
+            end = masked_text.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        cleaned.append(ch)
+        i += 1
+    return re.search(r"\bbreak\b", "".join(cleaned)) is not None
+
+
 def build_loop_templates(
     func_name: str,
     c_source: Optional[str],
@@ -330,6 +374,12 @@ def build_loop_templates(
             "data_witnesses": list(inv.get("data_witnesses", []) or []),
             "has_inner_loops": bool(loop.children),
             "has_early_return": _body_has_top_level_return(body_span),
+            # A parent loop whose body has a top-level ``break`` after a nested
+            # child: the break exits the parent from *inside the child's frame*,
+            # so it must ride out as a branched-``after_inner`` ``ReturnNow``
+            # rather than a plain continue (see generate_forest_func_block).
+            "has_post_child_break": bool(loop.children)
+            and _body_has_top_level_break(body_span),
         })
 
     # Propagate the early-return flag upward.  If any loop in a subtree
@@ -348,7 +398,11 @@ def build_loop_templates(
             return by_idx[idx].get("has_early_return_in_subtree", False)
         visited.add(idx)
         t = by_idx[idx]
-        flag = t["has_early_return"]
+        # A post-child break is an early exit of *this* loop straight to the
+        # function return, so it taints the subtree exactly like a direct
+        # ``return`` would (the enclosing scaffold must thread an
+        # ``early_result`` out through this loop's aux/body/tail).
+        flag = t["has_early_return"] or t.get("has_post_child_break", False)
         for c in t["children"]:
             if c in by_idx:
                 flag = flag or _propagate(c)

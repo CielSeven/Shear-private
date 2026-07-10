@@ -26,11 +26,7 @@
       "end": 1,
       "seg_abs": 2
     },
-    "abs_names": ["seg_abs"],
-    "segment_eq": {
-      "eq": "{seg_abs} = []",
-      "ne": "{seg_abs} <> []"
-    }
+    "abs_names": ["seg_abs"]
   },
   "store_tree": {
     "kind": "root",
@@ -90,6 +86,32 @@
         "emit": {
           "eq": "({S.seg_abs} = [] /\\ {R.abs} = [])",
           "ne": "({S.seg_abs} <> [] \\/ {R.abs} <> [])"
+        }
+      }
+    ],
+    "segment_eq": [
+      {
+        "name": "seg_eq_forward_rooted",
+        "description": "Segment-emptiness for `start != end` / `start == end`. `sllseg(x,y,l)` alone does NOT give `x = y <=> l = []` (a lasso — a cycle from x back to y with l <> [] — is satisfiable). A root `sll(y,_)` terminating the segment's END is the acyclicity witness that makes the equivalence sound. This rule matches the queried endpoints as (start=$x, end=$y) and REQUIRES that trailing root; the emit is the segment's emptiness.",
+        "match": [
+          { "role": "S", "kind": "segment", "where": { "start": "$x", "end": "$y" } },
+          { "role": "R", "kind": "root",    "where": { "ptr":   "$S.end" } }
+        ],
+        "emit": {
+          "eq": "{S.seg_abs} = []",
+          "ne": "{S.seg_abs} <> []"
+        }
+      },
+      {
+        "name": "seg_eq_reversed_rooted",
+        "description": "Same as seg_eq_forward_rooted with the comparison operands written in the opposite order (the segment is (start=$y, end=$x)). Segment emptiness is symmetric so the emit is identical; the required acyclicity root still sits at the segment's real END ($S.end).",
+        "match": [
+          { "role": "S", "kind": "segment", "where": { "start": "$y", "end": "$x" } },
+          { "role": "R", "kind": "root",    "where": { "ptr":   "$S.end" } }
+        ],
+        "emit": {
+          "eq": "{S.seg_abs} = []",
+          "ne": "{S.seg_abs} <> []"
         }
       }
     ]

@@ -1,0 +1,5 @@
+From SimpleC.EE.Applications_human Require Import los_sortlink_shape_strategy_goal los_sortlink_shape_strategy_proof.
+
+Module los_sortlink_shape_Strategy_Correctness : los_sortlink_shape_Strategy_Correct.
+  Include los_sortlink_shape_strategy_proof.
+End los_sortlink_shape_Strategy_Correctness.

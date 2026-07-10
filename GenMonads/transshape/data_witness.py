@@ -37,22 +37,27 @@ def extract_data_witnesses(
             eligible.
 
     Returns:
-        Ordered list of matched variable names (preserving first-occurrence
-        order, no duplicates).
+        Matched variable names in **existential-binder order** (the order they
+        appear in ``pre_existing_vars``), no duplicates.  This must match the
+        order the generated lib's carrier uses for its scalar witnesses
+        (``segcodegen.witness.refine`` reads the same ``exists`` binder), so that
+        the ``M_loop(...)`` call emitted into the annotation binds each carrier
+        slot to the program variable the lib body expects.  Ordering by
+        store-appearance instead silently swaps two scalar witnesses (e.g. a
+        loop carrying both a running sum ``s`` and a per-node value ``v``) when
+        they occur in opposite relative order in the SEP vs. the ``exists`` list.
     """
     if not pre_existing_vars:
         return []
 
-    var_set = set(pre_existing_vars)
+    scalar = {var for _addr, c_type, var in parse_store_predicates(translated_inv)
+              if coq_type_of(c_type)}
     seen = set()
     result: List[str] = []
-    for _addr, c_type, var in parse_store_predicates(translated_inv):
-        if var not in var_set or var in seen:
-            continue
-        if not coq_type_of(c_type):
-            continue
-        seen.add(var)
-        result.append(var)
+    for var in pre_existing_vars:
+        if var in scalar and var not in seen:
+            seen.add(var)
+            result.append(var)
     return result
 
 
@@ -62,21 +67,25 @@ def extract_data_witnesses_typed(
 ) -> List[Tuple[str, str]]:
     """Same as :func:`extract_data_witnesses` but also returns the Coq type
     associated with each carrier (``Z`` for integral, ``bool`` for ``_Bool``).
+    Witnesses are returned in **existential-binder order** (see
+    :func:`extract_data_witnesses`).
     """
     if not pre_existing_vars:
         return []
 
-    var_set = set(pre_existing_vars)
-    seen = set()
-    result: List[Tuple[str, str]] = []
+    coq_of: dict = {}
     for _addr, c_type, var in parse_store_predicates(translated_inv):
-        if var not in var_set or var in seen:
+        if var in coq_of:
             continue
         coq_t = coq_type_of(c_type)
-        if not coq_t:
-            continue
-        seen.add(var)
-        result.append((var, coq_t))
+        if coq_t:
+            coq_of[var] = coq_t
+    seen = set()
+    result: List[Tuple[str, str]] = []
+    for var in pre_existing_vars:
+        if var in coq_of and var not in seen:
+            seen.add(var)
+            result.append((var, coq_of[var]))
     return result
 
 

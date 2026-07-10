@@ -238,8 +238,14 @@ These errors are intentional and precise, so users can immediately fix their inv
 
 - `translate.py`  
   Resolves pointer atoms using:
-  - Root lookups (`payload["ptr"]`) for `p ==/!= null` via `spec.to_coq_root_null`.
-  - Segment lookups (`payload["start"], payload["end"]`) for `x==y/x!=y` via `spec.to_coq_segment_eq`.
+  - Root lookups (`payload["ptr"]`) for `p ==/!= null` via `spec.to_coq_root_null`,
+    falling back to the `_composition_rules.root_null` engine (e.g. the peeled-tail
+    `sllseg(p,q) * sll(q)` concat).
+  - Segment emptiness for `x ==/!= y` via the `_composition_rules.segment_eq`
+    engine: it matches the queried endpoints to a segment **and requires a
+    trailing root `sll(end, _)`** — the acyclicity witness that makes
+    `x = y  <=>  seg = []` sound (a bare segment could be a lasso). There is no
+    per-predicate `segment_eq` primitive; the gate lives entirely in the JSON.
   Builds the Coq formula and constructs the lambda pattern using `spec.abs_names`.
 
 ---

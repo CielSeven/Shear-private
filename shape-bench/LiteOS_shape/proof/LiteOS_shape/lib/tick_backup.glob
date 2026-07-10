@@ -1,0 +1,667 @@
+DIGEST fd866f08475f74e51d94e33ac280c09e
+FSimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup
+R15:31 Coq.ZArith.ZArith <> <> lib
+R49:61 Coq.Bool.Bool <> <> lib
+R79:96 Coq.Strings.String <> <> lib
+R114:127 Coq.Lists.List <> <> lib
+R145:171 Coq.Classes.RelationClasses <> <> lib
+R189:209 Coq.Classes.Morphisms <> <> lib
+R227:245 Coq.micromega.Psatz <> <> lib
+R263:285 Coq.Sorting.Permutation <> <> lib
+R315:322 AUXLib.int_auto <> <> lib
+R324:329 AUXLib.Axioms <> <> lib
+R331:333 AUXLib.Feq <> <> lib
+R335:340 AUXLib.Idents <> <> lib
+R342:348 AUXLib.ListLib <> <> lib
+R350:353 AUXLib.VMap <> <> lib
+R371:389 SetsClass.SetsClass <> <> lib
+R399:410 SetsClass.SetsClass_AxiomFree SetsNotation <> mod
+R444:446 SimpleC.SL.Mem <> <> lib
+R448:462 SimpleC.SL.SeparationLogic <> <> lib
+R480:517 Logic.LogicGenerator.demo932.Interface <> <> lib
+R576:588 SimpleC.SL.SeparationLogic naive_C_Rules <> mod
+def 673:683 <> TicksPerSec
+R687:687 Coq.Numbers.BinNums <> Z ind
+def 761:769 <> Sys_Clock
+R772:772 Coq.Numbers.BinNums <> Z ind
+def 841:851 <> Tick_Wtimer
+R855:855 Coq.Numbers.BinNums <> Z ind
+def 950:957 <> MsPerSec
+R961:961 Coq.Numbers.BinNums <> Z ind
+def 983:990 <> UsPerSec
+R994:994 Coq.Numbers.BinNums <> Z ind
+def 1019:1026 <> NsPerSec
+R1030:1030 Coq.Numbers.BinNums <> Z ind
+def 1058:1064 <> NsPerUs
+R1068:1068 Coq.Numbers.BinNums <> Z ind
+def 1090:1096 <> NsPerMs
+R1100:1100 Coq.Numbers.BinNums <> Z ind
+def 1125:1133 <> irqMaxNum
+R1137:1137 Coq.Numbers.BinNums <> Z ind
+rec 1232:1240 <> tickState
+proj 1261:1269 <> ts_period
+proj 1358:1363 <> ts_val
+proj 1444:1450 <> ts_ctrl
+proj 1530:1541 <> ts_startTime
+proj 1589:1599 <> ts_timeBase
+proj 1648:1661 <> ts_oldTimeBase
+proj 1713:1729 <> ts_timeBaseUpdate
+R1273:1273 Coq.Numbers.BinNums <> Z ind
+R1367:1367 Coq.Numbers.BinNums <> Z ind
+R1454:1454 Coq.Numbers.BinNums <> Z ind
+R1545:1545 Coq.Numbers.BinNums <> Z ind
+R1603:1603 Coq.Numbers.BinNums <> Z ind
+R1665:1665 Coq.Numbers.BinNums <> Z ind
+R1733:1733 Coq.Numbers.BinNums <> Z ind
+rec 1852:1864 <> archTickTimer
+proj 1889:1895 <> freqNum
+proj 1904:1909 <> irqNum
+proj 1920:1928 <> periodMax
+R1899:1899 Coq.Numbers.BinNums <> Z ind
+R1913:1913 Coq.Numbers.BinNums <> Z ind
+R1932:1932 Coq.Numbers.BinNums <> Z ind
+def 1949:1963 <> arch_init_timer
+R1967:1979 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+R1988:1994 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> freqNum proj
+R1988:1994 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> freqNum proj
+R1988:1994 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> freqNum proj
+R2010:2015 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> irqNum proj
+R2010:2015 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> irqNum proj
+R2027:2035 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> periodMax proj
+R2027:2035 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> periodMax proj
+rec 2107:2117 <> tickSetting
+proj 2140:2148 <> tickClock
+proj 2157:2166 <> cyclePTick
+proj 2175:2182 <> tickInit
+proj 2191:2199 <> tickTimer
+R2152:2152 Coq.Numbers.BinNums <> Z ind
+R2170:2170 Coq.Numbers.BinNums <> Z ind
+R2186:2186 Coq.Numbers.BinNums <> Z ind
+R2203:2206 SimpleC.SL.CNotation <> addr def
+R2245:2253 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts_period proj
+not 2222:2222 <> :::x_'.(ts_period)'
+R2301:2306 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts_val proj
+not 2281:2281 <> :::x_'.(ts_val)'
+R2355:2361 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts_ctrl proj
+not 2334:2334 <> :::x_'.(ts_ctrl)'
+R2415:2426 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts_startTime proj
+not 2389:2389 <> :::x_'.(ts_startTime)'
+R2479:2489 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts_timeBase proj
+not 2454:2454 <> :::x_'.(ts_timeBase)'
+R2545:2558 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts_oldTimeBase proj
+not 2517:2517 <> :::x_'.(ts_oldTimeBase)'
+R2617:2633 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts_timeBaseUpdate proj
+not 2586:2586 <> :::x_'.(ts_timeBaseUpdate)'
+R2682:2688 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> freqNum proj
+not 2661:2661 <> :::x_'.(freqNum)'
+R2736:2741 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> irqNum proj
+not 2716:2716 <> :::x_'.(irqNum)'
+R2792:2800 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> periodMax proj
+not 2769:2769 <> :::x_'.(periodMax)'
+ind 2876:2883 <> tick_ret
+constr 2898:2918 <> ErrTickPerSecTooSmall
+constr 2935:2949 <> ErrClockInvalid
+constr 2966:2978 <> ErrCfgInvalid
+constr 2995:3004 <> ErrPtrNone
+constr 3021:3037 <> ErrTimerAddrFault
+constr 3054:3064 <> TickRunning
+constr 3081:3086 <> TickOk
+R2922:2929 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_ret:18 ind
+R2953:2960 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_ret:18 ind
+R2982:2989 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_ret:18 ind
+R3008:3015 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_ret:18 ind
+R3041:3048 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_ret:18 ind
+R3068:3075 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_ret:18 ind
+R3090:3097 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_ret:18 ind
+scheme 2876:2883 <> tick_ret_rect
+scheme 2876:2883 <> tick_ret_ind
+scheme 2876:2883 <> tick_ret_rec
+scheme 2876:2883 <> tick_ret_sind
+def 3198:3210 <> storeArchTick
+R3217:3217 Coq.Numbers.BinNums <> Z ind
+binder 3213:3214 <> gt:20
+R3227:3239 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 3221:3223 <> att:21
+R3243:3251 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R3386:3391 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3319:3324 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3294:3305 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R3258:3259 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3293:3293 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3280:3286 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3262:3264 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3260:3261 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:20 var
+R3309:3318 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(freqNum)' not
+R3306:3308 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:21 var
+R3363:3373 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Int'_'|->'_x not
+R3325:3326 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3362:3362 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3347:3353 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3329:3331 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3327:3328 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:20 var
+R3377:3385 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(irqNum)' not
+R3374:3376 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:21 var
+R3433:3446 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->'_x not
+R3392:3393 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3432:3432 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3414:3420 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3396:3398 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3394:3395 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:20 var
+R3450:3461 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(periodMax)' not
+R3447:3449 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:21 var
+def 3574:3591 <> storeUndefArchTick
+R3598:3598 Coq.Numbers.BinNums <> Z ind
+binder 3594:3595 <> gt:22
+R3602:3610 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R3720:3725 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3665:3670 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3653:3664 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R3617:3618 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3652:3652 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3639:3645 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3621:3623 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3619:3620 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:22 var
+R3709:3719 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Int'_'|->_' not
+R3671:3672 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3708:3708 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3693:3699 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3675:3677 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3673:3674 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:22 var
+R3767:3780 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->_' not
+R3726:3727 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3766:3766 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3748:3754 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3730:3732 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3728:3729 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:22 var
+def 3881:3894 <> storeCoreTimer
+R3902:3902 Coq.Numbers.BinNums <> Z ind
+binder 3897:3898 <> ct:23
+R3911:3919 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 3906:3907 <> ts:24
+R3924:3932 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R4067:4072 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3999:4004 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R3975:3986 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R3939:3940 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3974:3974 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R3961:3967 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R3943:3945 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R3941:3942 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:23 var
+R3989:3998 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_ctrl)' not
+R3987:3988 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:24 var
+R4041:4052 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R4005:4006 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4040:4040 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4027:4033 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4009:4011 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4007:4008 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:23 var
+R4055:4066 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R4053:4054 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:24 var
+R4108:4119 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R4073:4074 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4107:4107 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4095:4101 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4077:4079 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4075:4076 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:23 var
+R4122:4130 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R4120:4121 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:24 var
+def 4243:4261 <> storeUndefCoreTimer
+R4269:4269 Coq.Numbers.BinNums <> Z ind
+binder 4264:4265 <> ct:25
+R4274:4282 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R4391:4396 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4337:4342 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4325:4336 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R4289:4290 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4324:4324 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4311:4317 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4293:4295 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4291:4292 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:25 var
+R4379:4390 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R4343:4344 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4378:4378 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4365:4371 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4347:4349 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4345:4346 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:25 var
+R4432:4443 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R4397:4398 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4431:4431 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4419:4425 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'->ₛ'_x not
+R4401:4403 SimpleC.SL.CNotation <> :lvalue_expr_entry::x_'#'_x not
+R4399:4400 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:25 var
+def 4510:4523 <> storeTimerBase
+R4531:4539 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 4526:4527 <> ts:26
+R4544:4552 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R4671:4676 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4609:4614 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4579:4592 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->'_x not
+R4559:4560 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4578:4578 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4595:4608 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R4593:4594 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:26 var
+R4638:4651 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->'_x not
+R4615:4616 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4637:4637 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4654:4670 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_oldTimeBase)' not
+R4652:4653 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:26 var
+R4703:4714 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R4677:4678 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4702:4702 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4717:4736 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBaseUpdate)' not
+R4715:4716 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:26 var
+def 4803:4821 <> storeUndefTimerBase
+R4825:4833 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R4917:4922 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4874:4879 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R4860:4873 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->_' not
+R4840:4841 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4859:4859 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4903:4916 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->_' not
+R4880:4881 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4902:4902 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4949:4960 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R4923:4924 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R4948:4948 SimpleC.SL.CNotation <> :::'&('_x_')' not
+def 5024:5039 <> storeTickSetting
+R5049:5059 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickSetting rec
+binder 5042:5045 <> tset:27
+R5064:5072 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R5231:5236 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5177:5182 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5122:5127 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5094:5105 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R5079:5080 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5093:5093 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5112:5120 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickClock proj
+R5106:5109 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tset:27 var
+R5148:5159 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R5128:5129 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5147:5147 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5166:5175 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> cyclePTick proj
+R5160:5163 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tset:27 var
+R5204:5215 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R5183:5184 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5203:5203 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5222:5229 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickInit proj
+R5216:5219 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tset:27 var
+R5256:5266 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R5237:5238 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5255:5255 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5273:5281 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickTimer proj
+R5267:5270 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tset:27 var
+def 5346:5366 <> storeUndefTickSetting
+R5370:5378 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R5490:5495 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5450:5455 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5412:5417 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5400:5411 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R5385:5386 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5399:5399 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5438:5449 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R5418:5419 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5437:5437 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5477:5488 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R5456:5457 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5476:5476 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5515:5525 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->_' not
+R5496:5497 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5514:5514 SimpleC.SL.CNotation <> :::'&('_x_')' not
+def 5595:5608 <> storeStartTime
+R5616:5624 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 5611:5612 <> ts:28
+R5629:5637 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R5669:5682 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->'_x not
+R5644:5645 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5668:5668 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5685:5699 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_startTime)' not
+R5683:5684 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:28 var
+def 5769:5787 <> storeUndefStartTime
+R5791:5799 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R5831:5844 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt64'_'|->_' not
+R5806:5807 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R5830:5830 SimpleC.SL.CNotation <> :::'&('_x_')' not
+def 5902:5910 <> storeTick
+R5921:5921 Coq.Numbers.BinNums <> Z ind
+binder 5913:5914 <> gt:29
+binder 5916:5917 <> ct:30
+R5930:5938 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 5925:5926 <> ts:31
+R5948:5960 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 5942:5944 <> att:32
+R5964:5972 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R6048:6053 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6025:6030 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5999:6004 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R5979:5991 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeArchTick def
+R5993:5994 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:29 var
+R5996:5998 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:32 var
+R6005:6018 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeCoreTimer def
+R6020:6021 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:30 var
+R6023:6024 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:31 var
+R6031:6044 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeTimerBase def
+R6046:6047 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:31 var
+R6054:6067 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeStartTime def
+R6069:6070 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:31 var
+def 6134:6147 <> storeUndefTick
+R6158:6158 Coq.Numbers.BinNums <> Z ind
+binder 6150:6151 <> gt:33
+binder 6153:6154 <> ct:34
+R6162:6170 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R6251:6256 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6226:6231 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6198:6203 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6177:6194 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeUndefArchTick def
+R6196:6197 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> gt:33 var
+R6204:6222 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeUndefCoreTimer def
+R6224:6225 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ct:34 var
+R6232:6250 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeUndefTimerBase def
+R6257:6275 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeUndefStartTime def
+def 6345:6359 <> timebase_update
+R6367:6375 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 6362:6363 <> ts:35
+R6380:6380 Coq.Numbers.BinNums <> Z ind
+R6390:6397 Coq.ZArith.BinInt Z eq_dec def
+R6401:6420 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBaseUpdate)' not
+R6399:6400 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:35 var
+R6497:6510 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R6495:6496 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:35 var
+R6429:6447 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R6466:6468 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R6452:6465 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R6450:6451 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:35 var
+R6471:6482 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R6469:6470 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:35 var
+def 6586:6598 <> tick_init_ret
+R6607:6619 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 6601:6603 <> att:36
+R6624:6624 Coq.Numbers.BinNums <> Z ind
+R6634:6641 Coq.ZArith.ZArith_dec <> Z_lt_dec def
+R6646:6655 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(freqNum)' not
+R6643:6645 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:36 var
+R6678:6688 Coq.ZArith.ZArith_dec <> Z_le_gt_dec def
+R6693:6701 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(irqNum)' not
+R6690:6692 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:36 var
+def 6804:6817 <> tick_init_tset
+R6826:6838 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 6820:6822 <> att:37
+R6857:6860 SimpleC.SL.CNotation <> addr def
+binder 6842:6853 <> archTickAddr:38
+R6865:6873 SimpleC.SL.CommonAssertion DerivedPredSig :::'Assertion' not
+R6883:6890 Coq.ZArith.ZArith_dec <> Z_lt_dec def
+R6895:6904 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(freqNum)' not
+R6892:6894 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:37 var
+R7090:7100 Coq.ZArith.ZArith_dec <> Z_le_gt_dec def
+R7105:7113 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(irqNum)' not
+R7102:7104 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:37 var
+R7327:7337 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R7282:7292 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R7239:7249 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R7227:7238 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R7212:7213 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7226:7226 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7270:7281 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R7250:7251 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7269:7269 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7314:7325 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R7293:7294 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7313:7313 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7357:7367 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R7338:7339 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7356:7356 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7368:7379 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickAddr:38 var
+R7123:7138 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> storeTickSetting def
+R7141:7153 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> mkTickSetting constr
+R7158:7167 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(freqNum)' not
+R7155:7157 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:37 var
+R7183:7183 Coq.ZArith.BinInt <> ::Z_scope:x_'/'_x not
+R7173:7182 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(freqNum)' not
+R7170:7172 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:37 var
+R7191:7202 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickAddr:38 var
+R7029:7036 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6987:6994 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6947:6954 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'**'_x not
+R6935:6946 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R6920:6921 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6934:6934 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6975:6986 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->_' not
+R6955:6956 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R6974:6974 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7016:7027 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'UInt'_'|->'_x not
+R6995:6996 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7015:7015 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7056:7066 SimpleC.SL.CommonAssertion DerivedPredSig ::sac_scope:x_'#'_'Ptr'_'|->'_x not
+R7037:7038 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7055:7055 SimpleC.SL.CNotation <> :::'&('_x_')' not
+R7067:7078 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickAddr:38 var
+def 7471:7487 <> timebase_turnover
+R7495:7503 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 7490:7491 <> ts:39
+R7508:7516 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+R7526:7533 Coq.ZArith.ZArith_dec <> Z_lt_dec def
+R7610:7626 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_oldTimeBase)' not
+R7608:7609 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7536:7554 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R7573:7574 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R7601:7601 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R7559:7572 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R7557:7558 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7589:7589 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R7577:7588 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R7575:7576 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7592:7600 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R7590:7591 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8017:8027 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> mkTickState constr
+R8032:8043 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R8030:8031 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8070:8078 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R8068:8069 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8105:8114 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_ctrl)' not
+R8103:8104 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8141:8155 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_startTime)' not
+R8139:8140 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8182:8195 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R8180:8181 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8220:8238 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R8257:8258 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8285:8285 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8243:8256 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R8241:8242 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8273:8273 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R8261:8272 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R8259:8260 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8276:8284 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R8274:8275 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R8316:8335 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBaseUpdate)' not
+R8314:8315 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7636:7646 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> mkTickState constr
+R7651:7662 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R7649:7650 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7687:7695 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R7685:7686 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7721:7730 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_ctrl)' not
+R7719:7720 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7756:7770 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_startTime)' not
+R7754:7755 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7794:7812 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R7831:7831 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R7817:7830 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R7815:7816 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7834:7845 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R7832:7833 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7873:7891 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R7894:7894 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R7951:7953 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R7980:7980 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R7895:7913 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R7932:7932 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R7918:7931 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R7916:7917 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7935:7946 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R7933:7934 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7968:7968 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R7956:7967 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R7954:7955 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+R7971:7979 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R7969:7970 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:39 var
+def 8351:8367 <> tick_getcycle_ret
+R8375:8383 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 8370:8371 <> ts:40
+R8388:8388 Coq.Numbers.BinNums <> Z ind
+R8398:8405 Coq.ZArith.ZArith_dec <> Z_lt_dec def
+R8482:8498 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_oldTimeBase)' not
+R8480:8481 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8408:8426 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R8445:8446 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8473:8473 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8431:8444 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R8429:8430 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8461:8461 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R8449:8460 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R8447:8448 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8464:8472 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R8462:8463 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8631:8649 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R8668:8669 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8696:8696 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8654:8667 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R8652:8653 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8684:8684 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R8672:8683 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R8670:8671 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8687:8695 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R8685:8686 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8509:8527 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R8530:8530 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8587:8589 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8616:8616 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8531:8549 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R8568:8568 Coq.ZArith.BinInt <> ::Z_scope:x_'+'_x not
+R8554:8567 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R8552:8553 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8571:8582 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R8569:8570 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8604:8604 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R8592:8603 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R8590:8591 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+R8607:8615 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R8605:8606 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:40 var
+def 8716:8729 <> timercheck_ret
+R8736:8748 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 8731:8733 <> att:41
+R8758:8768 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickSetting rec
+binder 8752:8755 <> tset:42
+R8773:8773 Coq.Numbers.BinNums <> Z ind
+R8783:8790 Coq.ZArith.ZArith_dec <> Z_lt_dec def
+R8795:8804 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(freqNum)' not
+R8792:8794 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:41 var
+R8827:8837 Coq.ZArith.ZArith_dec <> Z_le_gt_dec def
+R8842:8850 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(irqNum)' not
+R8839:8841 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:41 var
+R8871:8878 Coq.ZArith.BinInt Z eq_dec def
+R8883:8894 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(periodMax)' not
+R8880:8882 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:41 var
+R8925:8932 Coq.ZArith.BinInt Z eq_dec def
+R8940:8947 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickInit proj
+R8934:8937 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tset:42 var
+def 9010:9020 <> ms2tick_ret
+R9027:9027 Coq.Numbers.BinNums <> Z ind
+binder 9022:9023 <> ms:43
+R9032:9032 Coq.Numbers.BinNums <> Z ind
+R9042:9049 Coq.ZArith.BinInt Z eq_dec def
+R9051:9052 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ms:43 var
+R9093:9111 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R9114:9114 Coq.ZArith.BinInt <> ::Z_scope:x_'/'_x not
+R9146:9149 Coq.ZArith.BinInt <> ::Z_scope:x_'/'_x not
+R9115:9133 SimpleC.SL.IntLib <> unsigned_last_nbits def
+R9138:9138 Coq.ZArith.BinInt <> ::Z_scope:x_'*'_x not
+R9136:9137 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ms:43 var
+def 9200:9216 <> systickreload_ret
+R9227:9227 Coq.Numbers.BinNums <> Z ind
+binder 9218:9224 <> nextres:44
+R9236:9248 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 9231:9233 <> att:45
+R9253:9253 Coq.Numbers.BinNums <> Z ind
+R9263:9270 Coq.ZArith.ZArith_dec <> Z_lt_dec def
+R9288:9294 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> nextres:44 var
+R9275:9286 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(periodMax)' not
+R9272:9274 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:45 var
+R9324:9330 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> nextres:44 var
+R9304:9315 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(periodMax)' not
+R9301:9303 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:45 var
+def 9345:9360 <> systickreload_ts
+R9371:9371 Coq.Numbers.BinNums <> Z ind
+binder 9362:9368 <> nextres:46
+R9380:9392 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 9375:9377 <> att:47
+R9400:9408 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 9396:9397 <> ts:48
+R9413:9421 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+R9428:9438 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> mkTickState constr
+R9441:9441 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R9471:9472 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R9442:9458 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> systickreload_ret def
+R9460:9466 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> nextres:46 var
+R9468:9470 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:47 var
+R9509:9518 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_ctrl)' not
+R9507:9508 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:48 var
+R9539:9553 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_startTime)' not
+R9537:9538 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:48 var
+R9573:9586 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBase)' not
+R9571:9572 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:48 var
+R9606:9622 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_oldTimeBase)' not
+R9604:9605 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:48 var
+R9642:9661 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBaseUpdate)' not
+R9640:9641 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:48 var
+def 9677:9694 <> update_ts_timebase
+R9700:9708 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 9696:9697 <> ts:49
+R9716:9716 Coq.Numbers.BinNums <> Z ind
+binder 9712:9713 <> tb:50
+R9721:9729 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+R9736:9746 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> mkTickState constr
+R9751:9762 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_period)' not
+R9749:9750 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:49 var
+R9782:9790 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_val)' not
+R9780:9781 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:49 var
+R9811:9820 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_ctrl)' not
+R9809:9810 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:49 var
+R9841:9855 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_startTime)' not
+R9839:9840 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:49 var
+R9872:9873 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tb:50 var
+R9892:9908 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_oldTimeBase)' not
+R9890:9891 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:49 var
+R9928:9947 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBaseUpdate)' not
+R9926:9927 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:49 var
+def 9975:9987 <> tickreload_ts
+R9998:9998 Coq.Numbers.BinNums <> Z ind
+binder 9989:9995 <> nextres:51
+R10007:10019 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> archTickTimer rec
+binder 10002:10004 <> att:52
+R10027:10035 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+binder 10023:10024 <> ts:53
+R10039:10047 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tickState rec
+R10054:10064 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> mkTickState constr
+R10067:10067 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R10097:10098 Coq.ZArith.BinInt <> ::Z_scope:x_'-'_x not
+R10068:10084 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> systickreload_ret def
+R10086:10092 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> nextres:51 var
+R10094:10096 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> att:52 var
+R10134:10134 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_ctrl)' not
+R10155:10165 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_ctrl)' not
+R10135:10151 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> timebase_turnover def
+R10153:10154 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:53 var
+R10184:10184 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_startTime)' not
+R10205:10220 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_startTime)' not
+R10185:10201 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> timebase_turnover def
+R10203:10204 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:53 var
+R10238:10254 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> tick_getcycle_ret def
+R10256:10257 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:53 var
+R10275:10275 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_oldTimeBase)' not
+R10296:10313 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_oldTimeBase)' not
+R10276:10292 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> timebase_turnover def
+R10294:10295 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:53 var
+R10331:10331 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBaseUpdate)' not
+R10352:10372 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> :::x_'.(ts_timeBaseUpdate)' not
+R10332:10348 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> timebase_turnover def
+R10350:10351 SimpleC.EE.Applications_human.LiteOS_shape.lib.tick_backup <> ts:53 var

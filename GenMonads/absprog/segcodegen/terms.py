@@ -193,6 +193,19 @@ def free_vars(t: Term) -> List[str]:
     return out
 
 
+def substitute(t: Term, subst: Dict[str, "Term"]) -> "Term":
+    """Replace every ``Var`` whose name is a key of *subst* with the mapped
+    term, recursively.  Used to inline solver-emitted definitions of
+    intermediate ``_free`` variables (``l0 -> l3``, ``l3 -> l2_2 ++ l2_3``) so
+    the output term is expressed purely over the segment's inputs."""
+    if isinstance(t, Var):
+        return subst.get(t.name, t)
+    if isinstance(t, Op):
+        return Op(op=t.op, type_arg=t.type_arg,
+                  operands=tuple(substitute(o, subst) for o in t.operands))
+    return t
+
+
 def collect_var_types(t: Term) -> List[Tuple[str, str]]:
     """Infer the type of each variable from its position inside operators.
 

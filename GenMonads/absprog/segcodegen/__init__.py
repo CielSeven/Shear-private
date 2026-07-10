@@ -65,6 +65,30 @@ def _definition(hole: Hole, body: str) -> str:
     return f"Definition {hole.name} : {hole.type_str} :=\n{indented}"
 
 
+def _carrier_projection(carrier: List[str], scalar_bases: set) -> str:
+    """The natural-exit projection of a loop carrier onto the Ensure result:
+    concatenate the carrier's list components (``l1_1 ++ l1_2``) and tuple that
+    with its scalar witnesses in order — ``fun '(l1_1, l1_2, s) => return (l1_1
+    ++ l1_2, s)``.
+
+    Used as ``M_loop{k}_end`` for a loop that has no return VC of its own — its
+    guard-false exit just carries the final carrier out, and any in-body break
+    is handled upstream by a branched ``after_inner`` (which produces the result
+    directly via ReturnNow).  Assumes the result is ``(one concatenated list,
+    scalars…)`` — the shape of every list-processing benchmark that reaches
+    this path."""
+    lists = [v for v in carrier if v not in scalar_bases]
+    scalars = [v for v in carrier if v in scalar_bases]
+    if len(carrier) == 1:
+        binder = f"fun {carrier[0]} =>"
+    else:
+        binder = "fun '(" + ", ".join(carrier) + ") =>"
+    list_term = " ++ ".join(lists) if lists else "nil"
+    comps = [list_term] + scalars
+    inner = comps[0] if len(comps) == 1 else "(" + ", ".join(comps) + ")"
+    return f"{binder}\n    return {inner}."
+
+
 def _result_after_arrow(type_str: str) -> str:
     """The result type of ``ARG -> RESULT`` (everything right of the top-level
     ``->``)."""
@@ -324,8 +348,18 @@ def fill_forest(tmpl: Template, blocks: List[VCBlock], spec: Spec,
                 h, synth_branched(entry, spec.with_vars, curried=h.curried))
         elif h.role == "fend":                       # loop k -> result
             al = arms(return_by.get(k, []), ensure_vars)
-            _collect(h, loop_vars[k], al)
-            repl[h.name] = _definition(h, synth_branched(al, loop_vars[k]))
+            if not al:
+                # No loop-k return VC.  The loop's exit is its natural
+                # guard-false break (any post-child break instead rides out via
+                # a branched `after_inner`'s ReturnNow — see below), so `end` is
+                # the mechanical projection of the carrier onto the Ensure
+                # result: concatenate the carrier's list components and tuple
+                # them with its scalar witnesses.
+                repl[h.name] = _definition(
+                    h, _carrier_projection(loop_vars[k], scalar_bases))
+            else:
+                _collect(h, loop_vars[k], al)
+                repl[h.name] = _definition(h, synth_branched(al, loop_vars[k]))
         elif h.role == "to_inner":                   # loop k -> child loop c
             c = _child_index(h.name)
             al = arms(entail_by.get((k, c), []), loop_vars[c], cont)
@@ -334,20 +368,24 @@ def fill_forest(tmpl: Template, blocks: List[VCBlock], spec: Spec,
         elif h.role == "after_inner":                # child loop c -> loop k
             c = _child_index(h.name)
             resume_vcs = entail_by.get((c, k), [])
-            if not resume_vcs:
-                # No resume entailment: a strengthened outer invariant (e.g.
-                # `lseg(x, stop) * listrep(stop)`) makes the child's exit state
-                # *be* the outer carrier, so the solver closed the continue-path
-                # entailment trivially and emitted no proof block.  The resume is
-                # then the identity — pass the inner loop's result through as the
-                # new outer carrier.
+            # `after_inner` consumes ONLY the child's MretTy (its input group is
+            # the child carrier — see gen_rel_lib's Parameter and both call
+            # sites).  It resumes the parent (Continue, from the c→k entail VCs);
+            # when it is *branched* (early_result-typed, because the parent's
+            # body breaks out after this child), it ALSO carries that break
+            # straight to the function result (ReturnNow, from the c→result
+            # return VCs).
+            al = arms(resume_vcs, loop_vars[k], cont)
+            if early:
+                al += arms(return_by.get(c, []), ensure_vars, rnow)
+            if not al:
+                # No resume entailment and nothing to return: a strengthened
+                # outer invariant (e.g. `lseg(x, stop) * listrep(stop)`) makes
+                # the child's exit state *be* the outer carrier, so the solver
+                # closed the continue-path entailment trivially and emitted no
+                # proof block.  The resume is then the identity.
                 repl[h.name] = _definition(h, "fun r => return r.")
             else:
-                # `after_inner` consumes ONLY the child's MretTy (a single
-                # argument — see gen_rel_lib's Parameter and both call sites);
-                # synthesize it straight from the resume entailment's inner-carrier
-                # roots, no extra outer-carrier binder.
-                al = arms(resume_vcs, loop_vars[k], cont)
                 _collect(h, loop_vars[c], al)
                 repl[h.name] = _definition(h, synth_branched(al, loop_vars[c]))
     return repl

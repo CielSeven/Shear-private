@@ -889,6 +889,11 @@ def generate_forest_func_block(
         children = t["children"]
         tainted = bool(t.get("has_early_return_in_subtree"))
         direct = bool(t.get("has_early_return"))
+        # A parent whose OWN body breaks out (to the function return) after a
+        # nested child: its ``after_inner`` is not a plain continue-resume but a
+        # *branch* — Continue (resume the parent) vs ReturnNow (the break, whose
+        # live state is the child's frame, carried straight to the result).
+        branched = bool(t.get("has_post_child_break"))
 
         my_mretty = _mretty_for(t["loop_index"])
         # M1: always returns this loop's own MretTy.  M1 is the loop's
@@ -926,9 +931,15 @@ def generate_forest_func_block(
                 lines.append(
                     f"Parameter {fn}_M_loop{k}_to_inner_{ck} : {Sk} -> MONAD {Sc_arg}."
                 )
+                # A branched resume rebuilds the parent state OR short-circuits
+                # to the function return, so ``after_inner`` itself emits an
+                # ``early_result`` (Continue = resume, ReturnNow = the break).
+                after_inner_ret = (
+                    f"({_early_result_type(Sk, return_type)})" if branched else Sk_arg
+                )
                 lines.append(
                     f"Parameter {fn}_M_loop{k}_after_inner_{ck} : "
-                    f"{child_mretty} -> MONAD {Sk_arg}."
+                    f"{child_mretty} -> MONAD {after_inner_ret}."
                 )
             lines.append(
                 f"Definition {fn}_M_loop{k}_M2 : {Sk} -> MONAD {_m2_ret(t)} :="
@@ -940,7 +951,24 @@ def generate_forest_func_block(
                 c_tainted = bool(by_idx[c_idx].get("has_early_return_in_subtree"))
                 lines.append(f"    s' <- {fn}_M_loop{k}_to_inner_{ck} a;;")
                 lines.append(f"    r  <- {fn}_M_loop{ck}_aux s';;")
-                if c_tainted:
+                if branched:
+                    # Parent breaks out after the child: ``after_inner`` is the
+                    # branch (Continue = resume, ReturnNow = the break), and it
+                    # already yields ``early_result`` — call it straight, no
+                    # Continue wrap.  A tainted child still short-circuits its
+                    # own ReturnNow first.
+                    if c_tainted:
+                        lines.append("    match r with")
+                        lines.append(
+                            f"    | Continue r' => {fn}_M_loop{k}_after_inner_{ck} r'"
+                        )
+                        lines.append("    | ReturnNow r' => return (ReturnNow r')")
+                        lines.append("    end.")
+                    else:
+                        lines.append(
+                            f"    {fn}_M_loop{k}_after_inner_{ck} r."
+                        )
+                elif c_tainted:
                     # Child can ``ReturnNow`` — propagate that outward
                     # so the parent's loop body sees the early return.
                     lines.append("    match r with")
@@ -1137,8 +1165,11 @@ def generate_forest_func_block(
         # First step: run end_{kj} on the supplied mretty value, then
         # proceed through subsequent loops.
         if start_j == len(top_levels) - 1:
-            # Terminal step right here.
-            lines.append(f"{ind}{fn}_M_loop{prev_k_local}_end {mretty_var}.")
+            # Terminal step right here.  Emitted period-free — the caller
+            # appends the single terminating ``.`` (or the enclosing match's
+            # ``end.`` provides it), so a terminal inside a ``match`` arm does
+            # not close the whole Definition prematurely.
+            lines.append(f"{ind}{fn}_M_loop{prev_k_local}_end {mretty_var}")
             return
         lines.append(
             f"{ind}t{prev_k_local} <- {fn}_M_loop{prev_k_local}_end {mretty_var};;"
@@ -1160,11 +1191,11 @@ def generate_forest_func_block(
                 lines.append(f"{ind}| ReturnNow rt => return rt")
                 lines.append(f"{ind}| Continue r' =>")
                 _emit_chain_from(j, "r'", ind + "    ")
-                lines.append(f"{ind}end.")
+                lines.append(f"{ind}end")
                 return
             else:
                 if j == len(top_levels) - 1:
-                    lines.append(f"{ind}{fn}_M_loop{kj}_end r{kj}.")
+                    lines.append(f"{ind}{fn}_M_loop{kj}_end r{kj}")
                     return
                 lines.append(
                     f"{ind}t{kj} <- {fn}_M_loop{kj}_end r{kj};;"
@@ -1214,6 +1245,7 @@ def generate_forest_func_block(
             # Clean tail head — but some downstream loop is tainted
             # (otherwise we'd have taken the alias branch above).
             _emit_chain_from(i, "r", "    ")
+            lines[-1] += "."          # single terminating period (period-free body)
     lines.append("")
 
     # Nested-loop ``_tail`` Definitions.  Each non-top-level loop k
@@ -1269,11 +1301,26 @@ def generate_forest_func_block(
         else:
             ind = "    "
             r_var = "r_k"
-        lines.append(
-            f"{ind}a_p' <- {fn}_M_loop{p_k}_after_inner_{k} {r_var};;"
-        )
-        lines.append(f"{ind}r_p <- {fn}_M_loop{p_k}_aux a_p';;")
-        lines.append(f"{ind}{fn}_M_loop{p_k}_tail r_p.")
+        p_branched = bool(p_node.get("has_post_child_break"))
+        if p_branched:
+            # ``after_inner`` is itself a branch: Continue resumes the parent
+            # (run its aux + tail), ReturnNow is the parent's break straight to
+            # the function return.
+            lines.append(
+                f"{ind}e_p <- {fn}_M_loop{p_k}_after_inner_{k} {r_var};;"
+            )
+            lines.append(f"{ind}match e_p with")
+            lines.append(f"{ind}| ReturnNow rt => return rt")
+            lines.append(f"{ind}| Continue a_p' =>")
+            lines.append(f"{ind}    r_p <- {fn}_M_loop{p_k}_aux a_p';;")
+            lines.append(f"{ind}    {fn}_M_loop{p_k}_tail r_p")
+            lines.append(f"{ind}end.")
+        else:
+            lines.append(
+                f"{ind}a_p' <- {fn}_M_loop{p_k}_after_inner_{k} {r_var};;"
+            )
+            lines.append(f"{ind}r_p <- {fn}_M_loop{p_k}_aux a_p';;")
+            lines.append(f"{ind}{fn}_M_loop{p_k}_tail r_p.")
         if k_tainted:
             lines.append("    end.")
     if any(t["parent"] is not None for t in loop_templates):

@@ -8,8 +8,8 @@ variables according to the predicate mapping schema.
 import re
 from typing import Dict, List, Optional, Tuple
 from .parser import (
-    Formula, Expr, Predicate, SepConj, AndConj, Exists, BinOp,
-    Var, FieldAccess, parse_assertion, recover_assertion
+    Formula, Expr, CallExpr, SpatialPred, SepConj, AndConj, Exists, BinOp,
+    Var, FieldAccess, Implies, RawFormula, parse_assertion, recover_assertion
 )
 from .c_types import resolve_field_type
 import copy
@@ -21,7 +21,7 @@ from GenMonads.predicate_mapping import PredicateMapping, get_predicate_mappings
 # shape-assertion parser can't tokenize their argument syntax (``&var`` and
 # ``struct T*``), so they are extracted verbatim before parsing and spliced
 # back into the translated body so they survive into ``_rel.c`` unchanged.
-_MEMORY_STATE_PREDICATES = ("undef_data_at", "store")
+_MEMORY_STATE_PREDICATES = ("undef_data_at", "store", "store_string")
 
 
 _FIELD_EQ_RE = re.compile(
@@ -237,9 +237,17 @@ class ShapeTranslator:
         return var_name
 
     def translate_expr(self, expr: Expr) -> Expr:
+        if isinstance(expr, BinOp):
+            return BinOp(
+                expr.op,
+                self.translate_expr(expr.left),
+                self.translate_expr(expr.right),
+            )
+        if isinstance(expr, CallExpr):
+            return CallExpr(expr.name, [self.translate_expr(arg) for arg in expr.args])
         return copy.deepcopy(expr)
 
-    def translate_predicate(self, pred: Predicate) -> Predicate:
+    def translate_spatial_predicate(self, pred: SpatialPred) -> SpatialPred:
         if pred.name in self.predicate_mappings:
             mapping = self.predicate_mappings[pred.name]
             if mapping.shape_arity >= 0 and len(pred.args) != mapping.shape_arity:
@@ -251,9 +259,9 @@ class ShapeTranslator:
             for var_type in mapping.data_var_types:
                 list_var = self.generate_list_var(var_type)
                 new_args.append(Var(list_var))
-            return Predicate(mapping.data_name, new_args)
+            return SpatialPred(mapping.data_name, new_args)
         else:
-            return Predicate(pred.name, [self.translate_expr(arg) for arg in pred.args])
+            return SpatialPred(pred.name, [self.translate_expr(arg) for arg in pred.args])
 
     def translate_formula(self, formula: Formula) -> Formula:
         if isinstance(formula, BinOp):
@@ -262,12 +270,19 @@ class ShapeTranslator:
                 self.translate_expr(formula.left),
                 self.translate_expr(formula.right)
             )
-        elif isinstance(formula, Predicate):
-            return self.translate_predicate(formula)
+        elif isinstance(formula, SpatialPred):
+            return self.translate_spatial_predicate(formula)
         elif isinstance(formula, AndConj):
             return AndConj([self.translate_formula(f) for f in formula.formulas])
         elif isinstance(formula, SepConj):
             return SepConj([self.translate_formula(f) for f in formula.formulas])
+        elif isinstance(formula, Implies):
+            return Implies(
+                self.translate_formula(formula.left),
+                self.translate_formula(formula.right),
+            )
+        elif isinstance(formula, RawFormula):
+            return copy.deepcopy(formula)
         elif isinstance(formula, Exists):
             translated_body = self.translate_formula(formula.body)
             return Exists(formula.vars[:], translated_body)

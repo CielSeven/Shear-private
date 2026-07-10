@@ -1,0 +1,20 @@
+{
+  "spatial_predicates": [
+    "emp",
+    "CharArray::full",
+    "CharArray::seg",
+    "CharArray::undef_full",
+    "CharArray::undef_seg",
+    "IntArray::full",
+    "IntArray::seg",
+    "IntArray::undef_full",
+    "IntArray::undef_seg",
+    "IntArray::missing_i"
+  ],
+  "pure_call_exprs": [
+    "Zlength",
+    "app",
+    "cons",
+    "string_length"
+  ]
+}

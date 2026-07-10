@@ -1,0 +1,7 @@
+From SimpleC.EE.Applications_human.LiteOS_shape Require Import OsSortLinkGetNextExpireTime_goal OsSortLinkGetNextExpireTime_proof_auto OsSortLinkGetNextExpireTime_proof_manual.
+
+Module VC_Correctness : VC_Correct.
+  Include los_sortlink_shape_strategy_proof.
+  Include OsSortLinkGetNextExpireTime_proof_auto.
+  Include OsSortLinkGetNextExpireTime_proof_manual.
+End VC_Correctness.

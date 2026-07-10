@@ -187,6 +187,25 @@ def test_extract_data_witness_with_long_typed_store():
     assert extract_data_witnesses_typed(inv, ["s"]) == [("s", "Z")]
 
 
+def test_extract_data_witness_orders_by_exists_binder_not_sep():
+    """Two scalar witnesses must be returned in `exists`-binder order (matching
+    segcodegen's carrier), NOT in SEP store-appearance order.  Here the binder
+    lists `s` before `v` while the SEP stores `v` (node->data) before `s` (sum);
+    ordering by the SEP would swap them and mis-bind the `M_loop(...)` args
+    against the generated lib body (iter_back_2 inner-loop bug)."""
+    inv = (
+        "exists p s nxt v l2_1 l2_2 l2_3, "
+        "store(&(node->next), struct list *, nxt) * "
+        "store(&(node->data), int, v) * "
+        "store(&prev, struct list*, p) * "
+        "store(&sum, long, s) * "
+        "sllseg(x, node, l2_1) * sllseg(nxt, stop, l2_2) * sll(stop, l2_3)"
+    )
+    pre = ["p", "s", "nxt", "v", "l2_1", "l2_2", "l2_3"]
+    assert extract_data_witnesses(inv, pre) == ["s", "v"]
+    assert extract_data_witnesses_typed(inv, pre) == [("s", "Z"), ("v", "Z")]
+
+
 def test_extract_pre_existing_vars_parses_exists_header():
     assert extract_pre_existing_vars(
         "exists v w, v == t -> data && ..."

@@ -188,6 +188,39 @@ class _Names:
         return self._uniquify(base)
 
 
+@dataclass(frozen=True)
+class Bind:
+    """One rendered bind line *plus* the structure it was rendered from.
+
+    ``text`` is the Coq source (the single source of truth for the Definition
+    body); the remaining fields are the structure captured **at emit time**, when
+    the final Coq identifiers (post ``_Names`` allocation / ``known`` resolution)
+    are in hand.  Downstream consumers (:func:`_match_branch`, the lemma emitter
+    in :mod:`.seg_lemmas`) read these fields directly instead of re-parsing
+    ``text`` — so a change to the rendering can never silently desync a reader.
+
+    ``kind`` is one of ``"any" | "assume" | "call"``:
+
+    * ``any``    — ``var <- any (ty);;`` introduces ``var`` at raw type ``ty``.
+    * ``assume`` — ``assume!! (lhs rel rhs);;`` a guard; ``rel`` is ``"="``/``"<>"``.
+    * ``call``   — ``<results> <- callee_M args;;`` binds ``results`` (rendered Coq
+      names, in tuple order) from ``callee`` (base name, no ``_M``).
+    """
+    text: str
+    kind: str
+    var: Optional[str] = None                 # any: introduced name
+    ty: Optional[str] = None                  # any: raw (unparenthesized) type
+    lhs: Optional[str] = None                 # assume: resolved lhs name
+    rel: Optional[str] = None                 # assume: "=" | "<>"
+    rhs: Optional[str] = None                 # assume: rendered term
+    results: Tuple[str, ...] = ()             # call: bound result names
+    callee: Optional[str] = None              # call: callee base (no "_M")
+
+    @property
+    def prop(self) -> str:                    # assume: the full guard proposition
+        return f"{self.lhs} {self.rel} {self.rhs}"
+
+
 @dataclass
 class _Step:
     """One emitted bind (or group of binds) producing some fresh variables."""
@@ -206,7 +239,7 @@ class _Step:
     intro: Tuple[Tuple[str, str], ...] = ()     # (var, type) to introduce via any
 
 
-def synth_parts(
+def synth_arm(
     vc: VCBlock,
     funccalls: List[VCBlock],
     input_group: List[str],
@@ -214,8 +247,11 @@ def synth_parts(
     *,
     curried: bool = False,
     wrap: Optional[str] = None,
-) -> Tuple[str, List[str], str]:
-    """Synthesize one segment as structured parts: (binder, bind lines, return).
+) -> Tuple[str, List[Bind], str]:
+    """Synthesize one segment as structured parts: (binder, :class:`Bind` list,
+    return).  Each :class:`Bind` carries both its rendered ``text`` and the
+    structure it came from, so readers never re-parse the string.
+    :func:`synth_parts` is the string-only view over this.
 
     `funccalls` are the (precomputed) funccall blocks this VC depends on — see
     :func:`referenced_funccalls`; usually empty.  Returning parts (rather than a
@@ -234,6 +270,59 @@ def synth_parts(
             continue
         out_terms[output_group.index(b)] = terms.parse_term(mp.rhs)
     out_terms = [t if t is not None else Var("(* missing *)") for t in out_terms]
+
+    # Inline solver-emitted *definitions* of intermediate ``_free`` variables so
+    # the output is expressed purely over the segment's inputs.  Two sources:
+    #   (a) ``exist_mapping`` entries whose lhs is NOT an output var — the solver
+    #       named an intermediate (``l0_624_free -> l3_620_free``);
+    #   (b) leftover props ``X == term`` where ``X`` is a lone non-input,
+    #       non-output variable (``l3_620_free == l2_2 ++ l2_3``).
+    # Without this, an output like ``l2_1 ++ (v :: l0_624_free)`` keeps an
+    # unbound ``l0_624_free`` and its defining prop becomes a bogus ``assume!!``.
+    # Only the solver's own intermediate existentials (``…_free``) are inlined —
+    # never inputs, outputs, or call results (``res_50``, ``retval_17``), whose
+    # binds must survive as `any`/destructure/call steps.  And only when the
+    # ``_free`` var actually flows into the OUTPUT: a ``…_free == nil`` on a
+    # destructure tail that never reaches the result is a discriminating *guard*
+    # (``assume!! (l1' = nil)``), not a definition, and must stay.
+    subst_cand: Dict[str, Term] = {}
+    prop_lhs: Dict[str, int] = {}      # candidate free-var -> its leftover prop index
+    for mp in vc.exist_mapping:
+        if mp.lhs.endswith("_free") and base_name(mp.lhs) not in output_group:
+            subst_cand.setdefault(mp.lhs, terms.parse_term(mp.rhs))
+    for pi, prop in enumerate(vc.leftover_props):
+        m = re.match(r"(.+?)\s*==\s*(.+)", prop)
+        if not m:
+            continue
+        lhs = m.group(1).strip()
+        lterm = terms.parse_term(lhs)
+        if (isinstance(lterm, Var)
+                and lhs.endswith("_free")
+                and base_name(lhs) not in input_group
+                and base_name(lhs) not in output_group):
+            subst_cand.setdefault(lhs, terms.parse_term(m.group(2)))
+            prop_lhs.setdefault(lhs, pi)
+    # Closure of the output's free vars under the candidate keys — only these
+    # substitutions are actually applied (and their defining props consumed).
+    definitional_props: set[int] = set()
+    if subst_cand:
+        reached: set[str] = set()
+        work = [v for t in out_terms for v in terms.free_vars(t)]
+        while work:
+            v = work.pop()
+            if v in reached or v not in subst_cand:
+                continue
+            reached.add(v)
+            work.extend(terms.free_vars(subst_cand[v]))
+        free_subst = {k: subst_cand[k] for k in reached}
+        for _ in range(len(free_subst) + 1):      # resolve chains to a fixpoint
+            nxt = {k: terms.substitute(v, free_subst) for k, v in free_subst.items()}
+            if all(terms.render(nxt[k], {}) == terms.render(free_subst[k], {})
+                   for k in free_subst):
+                break
+            free_subst = nxt
+        out_terms = [terms.substitute(t, free_subst) for t in out_terms]
+        definitional_props = {prop_lhs[k] for k in reached if k in prop_lhs}
 
     # A variable is *introduced* by a function call iff it is one of that call's
     # *Postcondition existentials*.  Everything else is a **root**: a variable
@@ -264,7 +353,9 @@ def synth_parts(
     changed = True
     while changed:
         changed = False
-        for prop in vc.leftover_props:
+        for pi, prop in enumerate(vc.leftover_props):
+            if pi in definitional_props:      # already inlined into the outputs
+                continue
             m = re.match(r"(.+?)\s*==\s*(.+)", prop)
             if not m:
                 continue
@@ -335,7 +426,9 @@ def synth_parts(
     # never `any`-introduce variables under a disequality (it would be vacuous).
     # The `isinstance(term, Op)` filter keeps only list-constructor RHSs, which
     # excludes pointer (dis)equalities like `x != (Ez_val 0)` (RHS is a bare Var).
-    for prop in vc.leftover_props:
+    for pi, prop in enumerate(vc.leftover_props):
+        if pi in definitional_props:          # inlined into the outputs, not a guard
+            continue
         m = re.match(r"(.+?)\s*([=!]=)\s*(.+)", prop)
         if not m:
             continue
@@ -375,24 +468,30 @@ def synth_parts(
     order = _schedule([s for s in steps if s.idx in included], set(known))
 
     # ---- emit ----
-    binds: List[str] = []
+    binds: List[Bind] = []
     for st in order:
         if st.kind == "constraint":
             for v, ty in st.intro:
                 name = names.for_type(ty, known.get(st.lhs))
                 known[v] = name
-                binds.append(f"{name} <- any {_any_type(ty)};;")
-            binds.append(f"assume!! ({known.get(st.lhs, st.lhs)} {st.rel} {terms.render(st.term, known)});;")
+                binds.append(Bind(f"{name} <- any {_any_type(ty)};;",
+                                  "any", var=name, ty=ty))
+            lhs = known.get(st.lhs, st.lhs)
+            rhs = terms.render(st.term, known)
+            binds.append(Bind(f"assume!! ({lhs} {st.rel} {rhs});;",
+                              "assume", lhs=lhs, rel=st.rel, rhs=rhs))
         else:  # call
             args = [terms.render(t, known, top=False) for t in st.arg_terms]
             if len(st.produces) == 1:
                 name = names.result()
-                binds.append(f"{name} <- {st.callee}_M {' '.join(args)};;")
+                binds.append(Bind(f"{name} <- {st.callee}_M {' '.join(args)};;",
+                                  "call", results=(name,), callee=st.callee))
                 known[st.produces[0]] = name
             else:                            # multi-result callee: destructure
                 comps = [names.result() for _ in st.produces]
                 pat = "'(" + ", ".join(comps) + ")"
-                binds.append(f"{pat} <- {st.callee}_M {' '.join(args)};;")
+                binds.append(Bind(f"{pat} <- {st.callee}_M {' '.join(args)};;",
+                                  "call", results=tuple(comps), callee=st.callee))
                 for rv, nm in zip(st.produces, comps):
                     known[rv] = nm
 
@@ -407,6 +506,22 @@ def synth_parts(
     if wrap:                                  # early_result constructor: Continue / ReturnNow
         inner = f"{wrap} ({inner})"           # parens: the arg may be `a ++ b`, a tuple, …
     return _binder(input_group, curried), binds, f"return {inner}"
+
+
+def synth_parts(
+    vc: VCBlock,
+    funccalls: List[VCBlock],
+    input_group: List[str],
+    output_group: List[str],
+    *,
+    curried: bool = False,
+    wrap: Optional[str] = None,
+) -> Tuple[str, List[str], str]:
+    """String-only view over :func:`synth_arm`: (binder, rendered bind lines,
+    return).  Kept as the stable API for callers that only need the text."""
+    binder, binds, ret = synth_arm(vc, funccalls, input_group, output_group,
+                                   curried=curried, wrap=wrap)
+    return binder, [b.text for b in binds], ret
 
 
 def _step_key(st: "_Step"):
@@ -533,36 +648,30 @@ def synth_branched(
     return _compose_arms(parts)
 
 
-def _match_branch(binds: List[str], ret: str, input_var: str) -> Tuple[str, List[str]]:
+def _match_branch(binds: List[Bind], ret: str, input_var: str) -> Tuple[str, List[str]]:
     """Turn one synthesized arm into a `match` branch on `input_var`.
 
     The arm discriminates the recursion argument with `v <- any T;; … assume!!
     (input_var = <pattern>)`.  In a `match` that destructuring is the branch
-    pattern itself, so we read the pattern off the `assume`, drop it together
-    with the `any` binds of the variables it introduces (now bound by the
+    pattern itself, so we read the pattern off the `assume` :class:`Bind`, drop it
+    together with the `any` binds of the variables it introduces (now bound by the
     pattern), and keep the rest as the branch body.  An arm with no such
     destructuring keeps all its binds under a wildcard."""
-    pattern = "_"
-    any_vars: set = set()
-    destructure_idx = None
-    for i, b in enumerate(binds):
-        am = re.match(r"([A-Za-z_][\w']*) <- any ", b)
-        if am:
-            any_vars.add(am.group(1))
-        dm = re.match(rf"assume!! \(\s*{re.escape(input_var)}\s*=\s*(.+?)\s*\);;\s*$", b)
-        if dm:
-            pattern, destructure_idx = dm.group(1), i
-    if destructure_idx is None:
-        return "_", list(binds) + [ret]
+    destructure = None
+    for b in binds:
+        if b.kind == "assume" and b.lhs == input_var and b.rel == "=":
+            destructure = b
+    if destructure is None:
+        return "_", [b.text for b in binds] + [ret]
+    pattern = destructure.rhs
     pat_vars = set(re.findall(r"[A-Za-z_][\w']*", pattern))
     kept = []
-    for i, b in enumerate(binds):
-        if i == destructure_idx:
+    for b in binds:
+        if b is destructure:
             continue
-        am = re.match(r"([A-Za-z_][\w']*) <- any ", b)
-        if am and am.group(1) in pat_vars:     # the freshes are now match-bound
+        if b.kind == "any" and b.var in pat_vars:   # the freshes are now match-bound
             continue
-        kept.append(b)
+        kept.append(b.text)
     return pattern, kept + [ret]
 
 
@@ -574,7 +683,7 @@ def synth_recursive(arms: List[Arm], input_var: str) -> str:
     `Fixpoint`."""
     lines = [f"match {input_var} with"]
     for vc, fcs, out, wrap in arms:
-        _binder, binds, ret = synth_parts(vc, fcs, [input_var], out, wrap=wrap)
+        _binder, binds, ret = synth_arm(vc, fcs, [input_var], out, wrap=wrap)
         pattern, body = _match_branch(binds, ret, input_var)
         if len(body) == 1:
             lines.append(f"| {pattern} => {body[0]}")

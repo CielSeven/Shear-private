@@ -1441,7 +1441,10 @@ class TestForestFuncBlock:
         assert "t1 <- f_M_loop1_end r';;" in block
         assert "s2 <- f_M_loop2_before t1;;" in block
         assert "r2 <- f_M_loop2_aux s2;;" in block
-        assert "f_M_loop2_end r2." in block
+        # Terminal step of the Continue arm is period-free — the enclosing
+        # match's `end.` terminates the Definition (a trailing `.` here would
+        # close it prematurely, before `end`).
+        assert "f_M_loop2_end r2\n    end." in block
         # _M delegates to _tail rather than inlining the chain.
         assert "f_M_loop1_tail r1." in block
         # Second loop stays clean — no early_result on its body / aux.
@@ -1489,7 +1492,11 @@ class TestForestEndToEnd:
         # Top-level composition.
         assert f"Definition {fn}_M :" in content
         assert f"r1 <- {fn}_M_loop1_aux s1;;" in content
-        assert f"{fn}_M_loop1_end r1." in content
+        # The outer loop breaks out after the inner loop, so it is tainted:
+        # `_M` delegates to the `_tail` (which matches the early_result and
+        # runs `_end` on the Continue branch) rather than calling `_end`
+        # directly.
+        assert f"{fn}_M_loop1_tail r1." in content
 
 
 # ---------------------------------------------------------------------------
